@@ -106,7 +106,7 @@ export function StockBacktest() {
 export interface OptionsPreset { strategyMatch: RegExp; width_pct: number; title: string; description: string }
 
 export const STRADDLE_WING_PRESET: OptionsPreset = {
-  strategyMatch: /iron[-_ ]?(fly|butterfl)/i, width_pct: 5,
+  strategyMatch: /iron[-_ ]?(fly|butterfl)/i, width_pct: 0.05,
   title: "Straddle / wing backtest", description: "Short ATM straddle with protective wings (iron butterfly), rolled on a schedule.",
 };
 
@@ -114,7 +114,7 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
   const r = useRunner(api.backtestOptions);
   const templates = useApi(api.strategyTemplates, []);
   const [req, setReq] = useState<OptionsBacktestRequest>({
-    symbol: "SPY", strategy: "", strike_rule: { type: "atm" }, width_pct: preset?.width_pct ?? 5,
+    symbol: "SPY", strategy: "", strike_rule: { type: "atm" }, width_pct: preset?.width_pct ?? 0.05,
     entry: { type: "monthly" }, target_dte: 30, exit: { type: "expiry" },
     start: addDays(todayNY(), -365 * 2), end: todayNY(), qty: 1,
   });
