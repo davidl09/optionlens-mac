@@ -1,0 +1,143 @@
+{
+ "data": {
+  "priced": {
+   "asOf": null,
+   "headers": {
+    "proposedTickerSymbol": "Symbol",
+    "companyName": "Company Name",
+    "proposedExchange": "Exchange/ Market",
+    "proposedSharePrice": "Price",
+    "sharesOffered": "Shares",
+    "pricedDate": "Date",
+    "dollarValueOfSharesOffered": "Offer Amount",
+    "dealStatus": "Actions"
+   },
+   "rows": [
+    {
+     "dealID": "1212697-115511",
+     "proposedTickerSymbol": "MDRN",
+     "companyName": "Modern Mining Technology Corp.",
+     "proposedExchange": "NYSE MKT",
+     "proposedSharePrice": "4.25",
+     "sharesOffered": "9,411,764",
+     "pricedDate": "11/13/2026",
+     "dollarValueOfSharesOffered": "$39,999,997",
+     "dealStatus": "Priced"
+    },
+    {
+     "dealID": "1235548-119602",
+     "proposedTickerSymbol": "VVVV",
+     "companyName": "vVARDIS Holding AG",
+     "proposedExchange": "NYSE",
+     "proposedSharePrice": "18.00",
+     "sharesOffered": "9,722,223",
+     "pricedDate": "11/13/2026",
+     "dollarValueOfSharesOffered": "$175,000,014",
+     "dealStatus": "Priced"
+    }
+   ]
+  },
+  "upcoming": {
+   "upcomingTable": {
+    "asOf": null,
+    "headers": {
+     "proposedTickerSymbol": "Symbol",
+     "companyName": "Company Name",
+     "proposedExchange": "Exchange/ Market",
+     "proposedSharePrice": "Price",
+     "sharesOffered": "Shares",
+     "expectedPriceDate": "Expected IPO Date",
+     "dollarValueOfSharesOffered": "Offer Amount"
+    },
+    "rows": [
+     {
+      "dealID": "1401430-119311",
+      "proposedTickerSymbol": "FBLLU",
+      "companyName": "Football Manager SPAC Inc.",
+      "proposedExchange": "NASDAQ Global",
+      "proposedSharePrice": "10.00",
+      "sharesOffered": "10,000,000",
+      "expectedPriceDate": "11/20/2026",
+      "dollarValueOfSharesOffered": "$115,000,000"
+     },
+     {
+      "dealID": "1407642-119728",
+      "proposedTickerSymbol": "ANT",
+      "companyName": "Anthropic, PBC",
+      "proposedExchange": "NASDAQ Global Select",
+      "proposedSharePrice": "83.00",
+      "sharesOffered": "980,000,000",
+      "expectedPriceDate": "11/19/2026",
+      "dollarValueOfSharesOffered": "$81,340,000,000"
+     }
+    ]
+   },
+   "lastUpdatedTime": "LAST UPDATED: 11/19/2026* - Source: EDGAR\u00ae Online"
+  },
+  "filed": {
+   "asOf": null,
+   "headers": {
+    "proposedTickerSymbol": "Symbol",
+    "companyName": "Company Name",
+    "filedDate": "Date Filed",
+    "dollarValueOfSharesOffered": "Offer Amount"
+   },
+   "rows": [
+    {
+     "dealID": "1137659-119970",
+     "proposedTickerSymbol": "CORE",
+     "companyName": "Core Specialty Insurance Holdings, Inc.",
+     "filedDate": "11/16/2026",
+     "dollarValueOfSharesOffered": "$100,000,000"
+    },
+    {
+     "dealID": "1410181-119953",
+     "proposedTickerSymbol": null,
+     "companyName": "CloudDepots Holdings Inc.",
+     "filedDate": "11/13/2026",
+     "dollarValueOfSharesOffered": "$20,700,000"
+    },
+    {
+     "dealID": "1410145-119941",
+     "proposedTickerSymbol": "AICPU",
+     "companyName": "Compute AI Acquisition Corp.",
+     "filedDate": "11/13/2026",
+     "dollarValueOfSharesOffered": "$86,250,000"
+    }
+   ]
+  },
+  "withdrawn": {
+   "asOf": null,
+   "headers": {
+    "proposedTickerSymbol": "Symbol",
+    "companyName": "Company Name",
+    "proposedExchange": "Exchange/ Market",
+    "sharesOffered": "Shares",
+    "filedDate": "Date Filed",
+    "dollarValueOfSharesOffered": "Offer Amount",
+    "withdrawDate": "Date Withdrawn"
+   },
+   "rows": [
+    {
+     "dealID": "1368572-117064",
+     "proposedTickerSymbol": null,
+     "companyName": "EIR Biopharma, Inc.",
+     "proposedExchange": null,
+     "sharesOffered": "3,750,000",
+     "filedDate": "2/17/2026",
+     "dollarValueOfSharesOffered": "$21,562,500",
+     "withdrawDate": "11/16/2026"
+    }
+   ]
+  },
+  "month": 11,
+  "year": 2026,
+  "totalResults": 4
+ },
+ "message": null,
+ "status": {
+  "rCode": 200,
+  "bCodeMessage": null,
+  "developerMessage": null
+ }
+}

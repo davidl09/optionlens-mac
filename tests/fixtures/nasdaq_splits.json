@@ -1,0 +1,67 @@
+{
+ "data": {
+  "asOf": "Thu, Nov 19, 2026",
+  "headers": {
+   "symbol": "SYMBOL",
+   "name": "COMPANY",
+   "ratio": "RATIO",
+   "executionDate": "EFFECTIVE DATE"
+  },
+  "rows": [
+   {
+    "symbol": "MYND",
+    "name": "Mynd.ai, Inc.",
+    "ratio": "2 : 15",
+    "executionDate": "12/07/2026"
+   },
+   {
+    "symbol": "SITM",
+    "name": "SiTime Corporation",
+    "ratio": "3:1",
+    "executionDate": "12/07/2026"
+   },
+   {
+    "symbol": "LARK",
+    "name": "Landmark Bancorp Inc.",
+    "ratio": "5%",
+    "executionDate": "12/02/2026"
+   },
+   {
+    "symbol": "SNDK",
+    "name": "Sandisk Corporation",
+    "ratio": "8:1",
+    "executionDate": "11/20/2026"
+   },
+   {
+    "symbol": "BITO",
+    "name": "ProShares Bitcoin ETF",
+    "ratio": "1 : 2",
+    "executionDate": "11/19/2026"
+   },
+   {
+    "symbol": "QID",
+    "name": "ProShares UltraShort QQQ",
+    "ratio": "1 : 4",
+    "executionDate": "11/19/2026"
+   },
+   {
+    "symbol": "SNTI",
+    "name": "Senti Biosciences Holdings, Inc.",
+    "ratio": "1:33",
+    "executionDate": "11/19/2026"
+   },
+   {
+    "symbol": "YFOR",
+    "name": "YYForce Inc.",
+    "ratio": "1:50",
+    "executionDate": "11/19/2026"
+   }
+  ]
+ },
+ "message": null,
+ "status": {
+  "rCode": 200,
+  "bCodeMessage": null,
+  "developerMessage": null
+ }
+}

@@ -239,3 +239,38 @@ def test_parse_chain_keeps_only_standard_roots():
         "SPX261218C07000000", "SPXW261120C07000000", "SPXO261216C07000000")]}}
     assert [c.osi[:4] for c in cboe.parse_chain(spx, "SPX").contracts] == ["SPX2", "SPXW"]
     assert cboe.standard_roots("BRK.B") == {"BRKB"} and cboe.standard_roots("XSP") == {"XSP"}
+
+
+# ----------------------------------------------------------------------------- Nasdaq calendars (splits, IPOs)
+def test_parse_split_ratio_orientation():
+    assert nasdaq.parse_split_ratio("8 : 1") == (8, 1, 8.0)               # forward (SNDK)
+    assert nasdaq.parse_split_ratio("3:1") == (3, 1, 3.0)
+    assert nasdaq.parse_split_ratio("1 : 50") == (1, 50, pytest.approx(0.02))    # reverse
+    assert nasdaq.parse_split_ratio("2 : 15")[2] == pytest.approx(2 / 15)
+    assert nasdaq.parse_split_ratio("5%") == (None, None, pytest.approx(1.05))   # stock dividend
+    for junk in (None, "", "N/A", "0 : 3", "x:y"):
+        assert nasdaq.parse_split_ratio(junk) == (None, None, None)
+
+
+def test_parse_splits():
+    rows = {r["symbol"]: r for r in nasdaq.parse_splits(load("nasdaq_splits.json"))}
+    assert rows["SNDK"]["split_factor"] == 8 and rows["SNDK"]["execution_date"] == "2026-11-20"
+    assert rows["QID"]["split_factor"] == 0.25 and rows["QID"]["ratio"] == "1 : 4"
+    assert rows["YFOR"]["split_factor"] == pytest.approx(0.02) and rows["YFOR"]["new_shares"] == 1
+    assert rows["LARK"]["split_factor"] == pytest.approx(1.05) and rows["LARK"]["new_shares"] is None
+    assert nasdaq.parse_splits({"data": None}) == [] and nasdaq.parse_splits({"data": {"rows": None}}) == []
+
+
+def test_parse_ipos():
+    rows = nasdaq.parse_ipos(load("nasdaq_ipo.json"))
+    by = {s: [r for r in rows if r["status"] == s] for s in ("priced", "upcoming", "filed")}
+    assert [len(v) for v in by.values()] == [2, 2, 3] and len(rows) == 7          # withdrawn dropped
+    mdrn = by["priced"][0]
+    assert (mdrn["symbol"], mdrn["exchange"], mdrn["price_text"], mdrn["shares"], mdrn["offer_amount"],
+            mdrn["date"]) == ("MDRN", "NYSE MKT", "4.25", 9411764, 39999997.0, "2026-11-13")
+    assert by["upcoming"][0]["date"] == "2026-11-20" and by["upcoming"][0]["offer_amount"] == 115_000_000
+    assert any(r["symbol"] is None and r["price_text"] is None for r in by["filed"])
+    assert nasdaq.parse_ipos({"data": {"priced": {"rows": None}, "upcoming": {"upcomingTable": {"rows": None}}}}) == []
+    rng = {"data": {"priced": {"rows": [{"proposedTickerSymbol": "x", "proposedSharePrice": "10.00-12.00",
+                                         "pricedDate": "11/02/2026"}]}}}
+    assert nasdaq.parse_ipos(rng)[0]["price_text"] == "10.00-12.00" and nasdaq.parse_ipos(rng)[0]["symbol"] == "X"

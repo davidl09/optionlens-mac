@@ -147,6 +147,63 @@ def parse_etf_screener(payload: dict) -> list[dict]:
              "price": num(r.get("lastSalePrice"))} for r in rows if r.get("symbol")]
 
 
+_RATIO = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$")
+_PERCENT = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*%\s*$")
+
+
+def parse_split_ratio(text: Any) -> tuple[float | None, float | None, float | None]:
+    """Nasdaq split ratio -> (new shares, old shares, split_factor = new per old).
+
+    Orientation (checked against live rows): "A : B" = A new shares for B old, so "8 : 1" (SNDK) and
+    "3 : 1" are forward splits and "1 : 50" / "1:20" are reverse splits (factor 0.02 / 0.05). A bare
+    "5%" is a stock dividend: factor 1.05, shares None. Anything else -> all None."""
+    s = _text(text) or ""
+    if m := _RATIO.match(s):
+        new, old = float(m.group(1)), float(m.group(2))
+        return (new, old, new / old) if new > 0 and old > 0 else (None, None, None)
+    if m := _PERCENT.match(s):
+        return None, None, 1 + float(m.group(1)) / 100
+    return None, None, None
+
+
+def parse_splits(payload: dict) -> list[dict]:
+    """splits calendar -> [{symbol, name, ratio, new_shares, old_shares, split_factor, execution_date (ISO)}]."""
+    rows = (_data(payload) or {}).get("rows") or []
+    out = []
+    for r in rows:
+        sym, ex = _text(r.get("symbol")), day(r.get("executionDate"))
+        if not sym or ex is None:
+            continue
+        new, old, factor = parse_split_ratio(r.get("ratio"))
+        out.append({"symbol": normalize_symbol(sym), "name": _text(r.get("name")), "ratio": _text(r.get("ratio")),
+                    "new_shares": new, "old_shares": old, "split_factor": factor,
+                    "execution_date": ex.isoformat()})
+    return out
+
+
+_IPO_STATUS = (("priced", "pricedDate"), ("upcoming", "expectedPriceDate"), ("filed", "filedDate"))
+
+
+def parse_ipos(payload: dict) -> list[dict]:
+    """IPO calendar month -> [{symbol (None when not yet assigned), company, exchange, price_text ("4.25" or
+    "10.00-12.00"), shares, offer_amount, date (ISO), status "priced"|"upcoming"|"filed"}]. Withdrawn deals dropped."""
+    d = _data(payload) or {}
+    tables = {"priced": d.get("priced"), "upcoming": (d.get("upcoming") or {}).get("upcomingTable"),
+              "filed": d.get("filed")}
+    out = []
+    for status, date_key in _IPO_STATUS:
+        for r in (tables[status] or {}).get("rows") or []:
+            when = day(r.get(date_key))
+            if when is None:
+                continue
+            sym = _text(r.get("proposedTickerSymbol"))
+            out.append({"symbol": normalize_symbol(sym) if sym else None, "company": _text(r.get("companyName")),
+                        "exchange": _text(r.get("proposedExchange")), "price_text": _text(r.get("proposedSharePrice")),
+                        "shares": integer(r.get("sharesOffered")), "offer_amount": num(r.get("dollarValueOfSharesOffered")),
+                        "date": when.isoformat(), "status": status})
+    return out
+
+
 # ----------------------------------------------------------------------------- parsers -> dicts
 def _labels(d: dict | None) -> dict[str, Any]:
     return {k: (v.get("value") if isinstance(v, dict) else v) for k, v in (d or {}).items()}
@@ -349,3 +406,13 @@ async def fetch_extended(symbol: str, market: Literal["pre", "post"], asset: Ass
 async def fetch_earnings_surprise(symbol: str) -> list[dict]:
     """Last 4 quarters EPS vs consensus."""
     return parse_earnings_surprise(await _get(f"/company/{symbol}/earnings-surprise"))
+
+
+async def fetch_splits(since: date) -> list[dict]:
+    """Stock splits executing on/after `since` (Nasdaq returns everything from that date on, ~3 weeks ahead)."""
+    return parse_splits(await _get("/calendar/splits", date=since.isoformat()))
+
+
+async def fetch_ipos(month: str) -> list[dict]:
+    """IPO calendar rows (priced / upcoming / filed) for month 'YYYY-MM'."""
+    return parse_ipos(await _get("/ipo/calendar", date=month))

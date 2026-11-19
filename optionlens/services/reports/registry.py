@@ -9,12 +9,12 @@ import anyio.to_thread
 
 from ...repo import user as user_repo
 from ..errors import NotFound
-from . import dividends, earnings, options, stocks, strategies, volatility
+from . import calendars, dividends, earnings, options, stocks, strategies, volatility
 from .base import MAX_ROWS, Output, ParamError, ReportDef, RunParams, jsonable, sort_rows
 
 REPORTS: dict[str, ReportDef] = {}
 for _d in (*options.REPORTS, *strategies.REPORTS, *earnings.REPORTS, *volatility.REPORTS, *stocks.REPORTS,
-           *dividends.REPORTS):
+           *dividends.REPORTS, *calendars.REPORTS):
     if _d.id in REPORTS:
         raise RuntimeError(f"duplicate report id {_d.id}")
     REPORTS[_d.id] = _d

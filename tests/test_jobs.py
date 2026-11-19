@@ -330,3 +330,25 @@ async def test_scheduler_start_bootstraps_and_stops(tmpdb, monkeypatch):
     assert ran[0] == "universe" and set(ran) == set(jobs)   # every job missed on a fresh db -> caught up once
     assert len(ran) == len(jobs)
     assert {r["job"] for r in jobs_repo.recent_runs(100)} == set(jobs)
+
+
+async def test_fetch_calendar_caches_6h_and_serves_stale_on_failure(tmpdb, monkeypatch):
+    answers = [[{"symbol": "AAA"}], FetchError("u", 503)]
+    calls = []
+
+    async def ipos(month):
+        calls.append(month)
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    monkeypatch.setattr(nasdaq, "fetch_ipos", ipos)
+    assert await ondemand.fetch_calendar("ipos", month="2026-11") == [{"symbol": "AAA"}]
+    assert await ondemand.fetch_calendar("ipos", month="2026-11") == [{"symbol": "AAA"}]
+    assert calls == ["2026-11"]                                   # second call served from http_cache
+    monkeypatch.setattr(ondemand, "CALENDAR_TTL_S", 0)
+    assert await ondemand.fetch_calendar("ipos", month="2026-11") == [{"symbol": "AAA"}]   # refetch failed -> stale
+    assert calls == ["2026-11", "2026-11"]
+    with pytest.raises(KeyError):
+        await ondemand.fetch_calendar("nope")

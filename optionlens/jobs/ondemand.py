@@ -3,7 +3,7 @@ fundamentals. Concurrent requests for the same symbol share one fetch (per-symbo
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from ..analytics.calendar import now_ny
@@ -18,7 +18,7 @@ from ._util import final_since, session_date
 from .universe import UnknownSymbol, ensure_symbol
 
 __all__ = ["ensure_fresh", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "UnknownSymbol",
-           "CACHE_TTL_S", "NEGATIVE_TTL_S"]
+           "fetch_calendar", "CACHE_TTL_S", "NEGATIVE_TTL_S"]
 
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -75,6 +75,8 @@ CACHE_TTL_S: dict[str, int] = {
     "info": 24 * H, "summary": 24 * H, "financials": 24 * H, "earnings_surprise": 24 * H,
     "profile": 7 * 24 * H, "insiders": 12 * H, "news": 30 * 60, "extended": 5 * 60,
 }
+SPLITS_LOOKBACK_DAYS = 30
+CALENDAR_TTL_S = 6 * H     # universe-wide Nasdaq calendars (splits, IPOs)
 
 
 def _fetcher(kind: str, symbol: str, asset: str, params: dict) -> Callable[[], Awaitable[Any]]:
@@ -110,14 +112,8 @@ def _fresh(hit: tuple[Any, datetime] | None, ttl: float) -> bool:
     return (datetime.now(timezone.utc) - hit[1]).total_seconds() <= max_age
 
 
-async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
-    """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL.
-    A None answer (Nasdaq has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
-    params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
-    cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
-    ttl = CACHE_TTL_S[kind]
-    symbol = normalize_symbol(symbol)
-    key = cache_key(kind, symbol, **params)
+async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> Any:
+    """http_cache read-through with TTL, a per-key lock and stale-on-FetchError fallback."""
     hit = await asyncio.to_thread(cache_repo.cache_get_any, key)
     if _fresh(hit, ttl):
         return hit[0]
@@ -125,10 +121,8 @@ async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
         hit = await asyncio.to_thread(cache_repo.cache_get_any, key)
         if _fresh(hit, ttl):
             return hit[0]
-        row = await ensure_symbol(symbol)
-        asset = "etf" if row["kind"] == "etf" else "stocks"
         try:
-            payload = await _fetcher(kind, symbol, asset, params)()
+            payload = await fetch()
         except FetchError:
             if hit is None:
                 raise
@@ -137,3 +131,30 @@ async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
             return hit[0]           # keep serving older real data over a "no data" answer
         await asyncio.to_thread(cache_repo.cache_put, key, payload)
         return payload
+
+
+async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
+    """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL.
+    A None answer (Nasdaq has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
+    params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
+    cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
+    ttl = CACHE_TTL_S[kind]
+    symbol = normalize_symbol(symbol)
+
+    async def fetch() -> Any:
+        row = await ensure_symbol(symbol)
+        asset = "etf" if row["kind"] == "etf" else "stocks"
+        return await _fetcher(kind, symbol, asset, params)()
+
+    return await _cached(cache_key(kind, symbol, **params), ttl, fetch)
+
+
+async def fetch_calendar(kind: str, **params: Any) -> list[dict]:
+    """Universe-wide Nasdaq calendar rows via http_cache (6 h TTL, stale fallback on FetchError).
+    kind 'splits' (no params; window starts 30 days ago) or 'ipos' (month='YYYY-MM'). Unknown kind -> KeyError."""
+    fetch = {
+        "splits": lambda: nasdaq.fetch_splits(now_ny().date() - timedelta(days=SPLITS_LOOKBACK_DAYS)),
+        "ipos": lambda: nasdaq.fetch_ipos(params["month"]),
+    }[kind]
+    return await _cached(":".join(["calendar", kind, *(f"{k}={params[k]}" for k in sorted(params))]),
+                         CALENDAR_TTL_S, fetch)

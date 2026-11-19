@@ -24,7 +24,7 @@ from optionlens.models import Bar, ChainSnapshot, Dividend, EarningsEvent
 from optionlens.repo import bars, dividends, earnings, market, metrics, options, report_snapshots, symbols, user
 from optionlens.services import context, market as market_svc
 from optionlens.services.reports import universe
-from optionlens.sources import cboe
+from optionlens.sources import cboe, nasdaq
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures"
 FIX_DAY = date(2026, 11, 19)
@@ -161,8 +161,18 @@ def seeded(tmp_path_factory):
                     "updated": "08:30 ET"}
         raise net.FetchError(kind, None, "network disabled in tests")
 
+    async def fake_calendar(kind, **params):
+        if kind == "splits":
+            aapl = {"symbol": "AAPL", "name": "Apple Inc.", "ratio": "4 : 1", "new_shares": 4.0, "old_shares": 1.0,
+                    "split_factor": 4.0, "execution_date": (now_ny().date() + timedelta(days=3)).isoformat()}
+            return [aapl, *nasdaq.parse_splits(json.loads((FIX / "nasdaq_splits.json").read_text()))]
+        if kind == "ipos":
+            return nasdaq.parse_ipos(json.loads((FIX / "nasdaq_ipo.json").read_text()))
+        raise net.FetchError(kind, None, "network disabled in tests")
+
     mp.setattr(net, "get", offline)
     mp.setattr(ondemand, "fetch_cached", fake_cached)
+    mp.setattr(ondemand, "fetch_calendar", fake_calendar)
     db.close()
     db.connect(tmp_path_factory.mktemp("reports") / "optionlens.duckdb")
     _clear_caches()
