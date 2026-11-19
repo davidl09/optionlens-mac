@@ -93,7 +93,7 @@ def seed() -> dict:
     from optionlens.repo import quotes
     quotes.upsert_quotes([Quote("SPY", now, 707.0, 7.0, 0.01, 701.0, 708.0, 699.0, 700.0, 9e7, 706.9, 707.1, 0.18)])
     for snap in (aapl, xyz):
-        chains.store_chain(snap, now)
+        chains.store_chain(snap, now, final=True)  # seeded session data is final whatever the wall clock
     # metrics history: IV30 drifting 0.20 -> 0.35 and low option volume -> today's rank / rel volume defined
     for sym in ("AAPL", "XYZ"):
         today_row = metrics.get_metrics(sym, day)

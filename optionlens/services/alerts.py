@@ -190,15 +190,29 @@ def _fmt_rows(rows: list[dict], fn: Callable[[dict], str], n: int) -> str:
     return ", ".join(fn(r) for r in rows[:n]) or "none"
 
 
+def _uov_label(r: dict) -> str:
+    """Relative option volume when an average exists, else the interim volume/OI criterion."""
+    if r.get("rel_volume") is not None:
+        return f"{r['symbol']} {r['rel_volume']:.1f}×"
+    if r.get("vol_oi") is not None:
+        return f"{r['symbol']} {r['vol_oi']:.2f}× OI"
+    return r["symbol"]
+
+
+def _iv_chg_label(r: dict) -> str:
+    chg = r.get("iv30_chg_1d")
+    return r["symbol"] if chg is None else f"{r['symbol']} {chg * 100:+.1f}"
+
+
 def evening_digest(day: date, _symbols: list[str] | None = None) -> int:
     """16:45-style digest notification: unusual volume top 10, IV movers, watchlist summary."""
     uov = registry.run_sync(UOV_ID)["rows"]
     up = registry.run_sync("iv-movers", {"side": "up"})["rows"]
     down = registry.run_sync("iv-movers", {"side": "down"})["rows"]
     lines = [
-        "Unusual option volume: " + _fmt_rows(uov, lambda r: f"{r['symbol']} {r['rel_volume']:.1f}×", 10),
-        "IV up: " + _fmt_rows(up, lambda r: f"{r['symbol']} {r['iv30_chg_1d'] * 100:+.1f}", 5),
-        "IV down: " + _fmt_rows(down, lambda r: f"{r['symbol']} {r['iv30_chg_1d'] * 100:+.1f}", 5),
+        "Unusual option volume: " + _fmt_rows(uov, _uov_label, 10),
+        "IV up: " + _fmt_rows(up, _iv_chg_label, 5),
+        "IV down: " + _fmt_rows(down, _iv_chg_label, 5),
     ]
     f = universe.get_frame()
     pos = f.index()
@@ -241,7 +255,8 @@ async def morning_digest() -> str:
     if wl:
         pre = await registry.run_report("premarket-movers", {"symbols": ",".join(wl)})
         lines.append("Pre-market (watchlists): " + _fmt_rows(
-            pre["rows"], lambda r: f"{r['symbol']} {(r.get('ext_change_pct') or 0) * 100:+.1f}%", 8))
+            [r for r in pre["rows"] if r.get("ext_change_pct") is not None],
+            lambda r: f"{r['symbol']} {r['ext_change_pct'] * 100:+.1f}%", 8))
     await asyncio.to_thread(deliver, f"Morning digest {today.isoformat()}", "\n".join(lines),
                             "/reports/earnings-calendar")
     return f"{len(cal['rows'])} earnings, {len(wl)} watchlist symbols"

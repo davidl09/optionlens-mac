@@ -170,3 +170,14 @@ def test_register_hooks_is_idempotent():
         scheduler.JOBS.clear()
         scheduler.JOBS.update(before[2])
         alerts._registered = False
+
+
+def test_digest_labels_tolerate_missing_history():
+    """Day-1 rows have no relative volume / IV change yet: labels fall back, never crash."""
+    from optionlens.services.alerts import _iv_chg_label, _uov_label
+
+    assert _uov_label({"symbol": "AAA", "rel_volume": 3.04, "vol_oi": 0.5}) == "AAA 3.0×"
+    assert _uov_label({"symbol": "AAA", "rel_volume": None, "vol_oi": 1.234}) == "AAA 1.23× OI"
+    assert _uov_label({"symbol": "AAA", "rel_volume": None, "vol_oi": None}) == "AAA"
+    assert _iv_chg_label({"symbol": "AAA", "iv30_chg_1d": None}) == "AAA"
+    assert _iv_chg_label({"symbol": "AAA", "iv30_chg_1d": 0.021}) == "AAA +2.1"
