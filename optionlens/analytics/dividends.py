@@ -5,11 +5,13 @@ capital". Pure functions.
 """
 from __future__ import annotations
 
+import math
 from datetime import date, timedelta
 from typing import Sequence
 
 import numpy as np
 
+from optionlens.analytics.chain import ChainArrays
 from optionlens.analytics.stats import bar_arrays
 from optionlens.models import Bar, Dividend
 
@@ -149,3 +151,55 @@ def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
         "capture": cap,
         "capture_stats": capture_stats(cap),
     }
+
+
+PARITY_DTE = (60, 400)     # expiries used; short ones are dominated by spot/quote timing noise
+PARITY_BAND = 0.05        # |K/S − 1| for "near-ATM"
+PARITY_MAX_SPREAD = 0.25  # (ask − bid)/mid per leg
+PARITY_MIN_SPAN_DAYS = 90  # forward-curve fit needs expiries at least this far apart
+PARITY_Q_CAP = 0.15
+
+
+def _parity_forwards(ca: ChainArrays, r: float, dte: tuple[int, int], band: float,
+                     max_spread: float) -> list[tuple[float, float]]:
+    """[(T, median forward)] per expiry from liquid near-ATM call/put pairs: F = K + e^{rT}(C − P)."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        spread = (ca.ask - ca.bid) / ca.mid
+    ok = ((ca.dte >= dte[0]) & (ca.dte <= dte[1]) & (np.abs(ca.strike / ca.spot - 1.0) <= band)
+          & (ca.bid > 0) & (ca.ask > 0) & (spread <= max_spread))
+    c, p = ok & ca.is_call, ok & ~ca.is_call
+    call_mid = dict(zip(zip(ca.exp_idx[c], ca.strike[c]), ca.mid[c]))
+    fwd: dict[int, list[float]] = {}
+    t_of: dict[int, float] = {}
+    for e, k, m_put, t in zip(ca.exp_idx[p], ca.strike[p], ca.mid[p], ca.t[p]):
+        m_call = call_mid.get((e, k))
+        if m_call is None or t <= 0:
+            continue
+        f = k + math.exp(r * t) * (m_call - m_put)
+        if f > 0:
+            fwd.setdefault(int(e), []).append(f)
+            t_of[int(e)] = float(t)
+    return [(t_of[e], float(np.median(fs))) for e, fs in sorted(fwd.items())]
+
+
+def implied_yield_from_chain(ca: ChainArrays, r: float, dte: tuple[int, int] = PARITY_DTE,
+                             band: float = PARITY_BAND, max_spread: float = PARITY_MAX_SPREAD,
+                             min_span_days: int = PARITY_MIN_SPAN_DAYS, cap: float = PARITY_Q_CAP) -> float | None:
+    """Continuous dividend yield implied by put-call parity (for symbols without dividend history).
+
+    Per expiry with DTE in ``dte``: median forward F over liquid near-ATM pairs (|K/S − 1| ≤ band,
+    bid > 0, spread ≤ max_spread of mid). With expiries spanning ≥ ``min_span_days``, fit
+    ln F = a + (r − q)·T by least squares (independent of the spot quote's timing); otherwise
+    q = median of r − ln(F/S)/T. Clamped to [0, cap]; None without observations."""
+    if len(ca) == 0 or not ca.spot or ca.spot <= 0:
+        return None
+    pts = _parity_forwards(ca, r, dte, band, max_spread)
+    if not pts:
+        return None
+    t = np.array([p[0] for p in pts])
+    lf = np.log([p[1] for p in pts])
+    if len(pts) >= 2 and (t.max() - t.min()) * 365.0 >= min_span_days:
+        q = r - float(np.polyfit(t, lf, 1)[0])
+    else:
+        q = float(np.median(r - (lf - math.log(ca.spot)) / t))
+    return float(min(max(q, 0.0), cap))

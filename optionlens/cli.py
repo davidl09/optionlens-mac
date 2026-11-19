@@ -53,6 +53,18 @@ def _status() -> int:
     return 0
 
 
+def _serve() -> int:
+    """uvicorn on HOST:PORT, one worker (DuckDB single process; the app lifespan opens the DB)."""
+    import uvicorn
+
+    from .api.app import create_app
+    from .config import get_settings
+
+    s = get_settings()
+    uvicorn.run(create_app(), host=s.host, port=s.port, workers=1, log_level="info")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="optionlens.cli")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -76,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("eod").add_argument("--symbols")
     sub.add_parser("prune")
     sub.add_parser("status")
+    sub.add_parser("serve", help="run the API + scheduler (uvicorn, single worker)")
     r = sub.add_parser("run-job")
     r.add_argument("name", choices=sorted(scheduler.JOBS))
     a = p.parse_args(argv)
@@ -83,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if a.cmd == "serve":
+        return _serve()
     db.connect()
     try:
         match a.cmd:

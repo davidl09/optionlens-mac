@@ -385,3 +385,5 @@ def test_rank_trade_ideas(ca):
     assert ideas["by_edge"][-1]["family"] == "seasonality" and ideas["by_edge"][-1]["pop"] == 0.7
     only = st.rank_trade_ideas(ca, P, n=3, families=["vertical"])
     assert {i["family"] for i in only["by_edge"]} == {"vertical"}
+    risks = [i["max_loss"] for i in ideas["by_edge"] + ideas["by_win_rate"] if i["family"] != "seasonality"]
+    assert all(r >= st.MIN_IDEA_RISK for r in risks)            # no near-zero-risk (locked quote) ideas

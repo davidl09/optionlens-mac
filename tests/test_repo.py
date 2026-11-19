@@ -52,6 +52,11 @@ def test_symbols_upsert_universe_search(tmpdb):
         {"symbol": "AAP", "name": "Advance Auto Parts", "kind": "stock", "market_cap": 3e9},
     ])
     symbols.upsert_symbols([{"symbol": "AAPL", "kind": "stock", "name": None, "market_cap": 5.1e12}])
+    symbols.upsert_symbols([{"symbol": "DELL", "name": "Dell", "kind": "stock", "industry": "Computers",
+                             "market_cap": 1e11}])
+    symbols.upsert_symbols([{"symbol": "AAPL", "kind": "stock", "industry": "Computers"}])
+    assert [r["symbol"] for r in symbols.by_industry("Computers")] == ["AAPL", "DELL"]
+    assert [r["symbol"] for r in symbols.by_industry("Computers", limit=1)] == ["AAPL"]
     a = symbols.get_symbol("AAPL")
     assert a["name"] == "Apple Inc." and a["sector"] == "Technology" and a["market_cap"] == 5.1e12
     assert a["optionable"] is None and a["in_universe"] is False and a["updated_at"].tzinfo is not None
@@ -63,7 +68,7 @@ def test_symbols_upsert_universe_search(tmpdb):
     symbols.reprobe_not_optionable(["SPY"])
     assert symbols.get_symbol("SPY")["optionable"] is None
     symbols.set_optionable("AAPL", True)
-    assert symbols.counts() == {"universe_size": 2, "optionable_count": 1, "total": 4}
+    assert symbols.counts() == {"universe_size": 2, "optionable_count": 1, "total": 5}
     assert [r["symbol"] for r in symbols.search_symbols("aap")] == ["AAP", "AAPL"]  # exact match first
     assert [r["symbol"] for r in symbols.search_symbols("aa")] == ["AAPL", "AAP"]   # then universe
     assert symbols.search_symbols("AAPL")[0]["symbol"] == "AAPL"
@@ -306,3 +311,16 @@ def test_earnings_keep_known_timing_and_estimates(tmpdb):
     earnings.upsert_earnings([EarningsEvent("PANW", d, "bmo", None, None, None, None, None)])
     e = earnings.for_symbol("PANW")[0]
     assert (e.timing, e.eps_actual, e.surprise_pct) == ("bmo", 0.55, 0.0577)
+
+
+def test_option_latest_per_symbol_bulk_reads(tmpdb, aapl):
+    quotes.upsert_quotes([aapl.quote])
+    options.replace_option_latest(aapl)
+    by = options.latest_by_symbol(right="C", min_oi=10)
+    assert list(by) == ["AAPL"] and "symbol" not in by["AAPL"]
+    assert set(by["AAPL"]["right"]) == {"C"} and (by["AAPL"]["oi"] >= 10).all()
+    near = options.near_atm_by_symbol(date(2026, 12, 1), date(2027, 6, 30), 0.05)["AAPL"]
+    spot = aapl.quote.price
+    assert len(near["osi"]) > 0 and np.all(np.abs(near["strike"] / spot - 1) <= 0.05)
+    assert near["expiry"].min() >= np.datetime64("2026-12-01") and set(near["right"]) == {"C", "P"}
+    assert options.near_atm_by_symbol(date(2026, 12, 1), date(2027, 6, 30), 0.05, symbols=["X"]) == {}

@@ -214,3 +214,27 @@ def skew_30(ca: ChainArrays, atm30: float | None) -> dict:
         "skew25_30": p - c if p is not None and c is not None else None,
         "put_skew_30": p - atm30 if p is not None and atm30 is not None else None,
     }
+
+
+IV_HV_DEFAULT_RATIO = 1.15
+
+
+def iv_hv_ratio(iv30, hv30, default: float = IV_HV_DEFAULT_RATIO) -> float:
+    """k = median(IV30/HV30) over dates where both are known and positive (SPEC §0.3 IV proxy);
+    ``default`` when there is no such date."""
+    iv, hv = np.asarray(iv30, dtype=float), np.asarray(hv30, dtype=float)
+    ok = np.isfinite(iv) & np.isfinite(hv) & (iv > 0) & (hv > 0)
+    return float(np.median(iv[ok] / hv[ok])) if ok.any() else default
+
+
+SMILE_DELTAS = (-0.05, -0.10, -0.15, -0.20, -0.25, -0.30, -0.35, -0.40, -0.45, -0.50,
+                0.50, 0.45, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15, 0.10, 0.05)
+
+
+def iv_by_delta(ca: ChainArrays, expiry_index: int, deltas: Sequence[float] = SMILE_DELTAS) -> list[dict]:
+    """Skew.by_delta for one expiry: [{delta, iv}] with x = signed feed delta (puts < 0, calls > 0);
+    IV interpolated linearly in delta within each side, None when not bracketed."""
+    sl = ca.expiry_slices()[expiry_index]
+    c, d, iv = ca.is_call[sl], ca.delta[sl], ca.iv[sl]
+    return [{"delta": float(x), "iv": _iv_at_delta(d[c], iv[c], x) if x > 0 else _iv_at_delta(d[~c], iv[~c], x)}
+            for x in deltas]

@@ -8,7 +8,7 @@ import numpy as np
 
 from .. import db
 from ..models import ChainSnapshot, OptionContract
-from ._sql import aware, columns, insert_arrow, query, scalar, to_columns, utc_naive
+from ._sql import aware, columns, insert_arrow, query, scalar, split_by, to_columns, utc_naive
 from .quotes import get_quote
 
 _CONTRACT_FIELDS = ("symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "change",
@@ -72,6 +72,26 @@ def latest_columns(symbols: Sequence[str] | None = None, right: str | None = Non
           AND o.oi >= COALESCE(?::BIGINT, 0) AND o.volume >= COALESCE(?::BIGINT, 0)
         ORDER BY o.symbol, o.expiry, o.strike, o."right" """,
         [_syms(symbols), _syms(symbols), right, right, expiry_min, expiry_max, min_oi, min_volume])
+
+
+def latest_by_symbol(symbols: Sequence[str] | None = None, right: str | None = None,
+                     expiry_min: date | None = None, expiry_max: date | None = None,
+                     min_oi: int | None = None, min_volume: int | None = None) -> dict[str, dict[str, np.ndarray]]:
+    """latest_columns (one query) split per symbol -> {symbol: columns without 'symbol'}."""
+    return split_by(latest_columns(symbols, right, expiry_min, expiry_max, min_oi, min_volume), "symbol")
+
+
+def near_atm_by_symbol(expiry_min: date, expiry_max: date, band: float,
+                       symbols: Sequence[str] | None = None) -> dict[str, dict[str, np.ndarray]]:
+    """option_latest rows with expiry in [expiry_min, expiry_max] and |strike/underlying − 1| <= band
+    (one query) -> {symbol: {osi, expiry, strike, right, bid, ask, last, ts, underlying}}."""
+    return split_by(columns("""
+        SELECT o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.ts, q.price AS underlying
+        FROM option_latest o JOIN quotes_latest q ON q.symbol = o.symbol
+        WHERE q.price > 0 AND abs(o.strike / q.price - 1) <= ? AND o.expiry BETWEEN ? AND ?
+          AND (?::VARCHAR[] IS NULL OR o.symbol IN (SELECT unnest(?::VARCHAR[])))
+        ORDER BY o.symbol, o.expiry, o.strike, o."right" """,
+        [band, expiry_min, expiry_max, _syms(symbols), _syms(symbols)]), "symbol")
 
 
 # ----------------------------------------------------------------------------- option_eod
@@ -151,3 +171,22 @@ def prune_option_eod(before: date) -> int:
     with db.write() as cur:
         cur.execute("DELETE FROM option_eod WHERE date < ?", [before])
         return int(cur.fetchone()[0])
+
+
+def latest_vs_eod_oi(prior_date: date, symbols: Sequence[str] | None = None, min_abs_change: int = 0,
+                     expiry_min: date | None = None, expiry_max: date | None = None,
+                     limit: int | None = None) -> dict[str, np.ndarray]:
+    """option_latest contracts joined to their option_eod row of prior_date (contracts absent that day
+    are skipped) with |oi − oi_prev| >= min_abs_change -> columns (symbol, osi, expiry, strike, right, bid,
+    ask, last, volume, oi, oi_prev, iv, delta, underlying), ordered by |change| desc (top `limit`)."""
+    return columns("""
+        SELECT o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.volume, o.oi,
+               e.oi AS oi_prev, o.iv, o.delta, q.price AS underlying
+        FROM option_latest o JOIN option_eod e ON e.date = ? AND e.osi = o.osi
+        LEFT JOIN quotes_latest q ON q.symbol = o.symbol
+        WHERE abs(COALESCE(o.oi, 0) - COALESCE(e.oi, 0)) >= ?
+          AND (?::VARCHAR[] IS NULL OR o.symbol IN (SELECT unnest(?::VARCHAR[])))
+          AND o.expiry >= COALESCE(?::DATE, DATE '1900-01-01') AND o.expiry <= COALESCE(?::DATE, DATE '2999-12-31')
+        ORDER BY abs(COALESCE(o.oi, 0) - COALESCE(e.oi, 0)) DESC, o.osi
+        LIMIT COALESCE(?::BIGINT, 9223372036854775807)""",
+        [prior_date, min_abs_change, _syms(symbols), _syms(symbols), expiry_min, expiry_max, limit])

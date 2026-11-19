@@ -1,7 +1,9 @@
 """Shared async HTTP client with per-host rate limiting and retries.
 
-Nasdaq: token bucket (NASDAQ_RPS). CBOE: concurrency semaphore (CBOE_CONCURRENCY).
-Retries 3x with exponential backoff on 429/5xx/timeouts/connection errors. Raises FetchError.
+Each rate-limited host has a gate: token bucket (NASDAQ_RPS / CBOE_RPS), an optional concurrency cap
+(CBOE_CONCURRENCY) and a host-wide cooldown that a 429 triggers (Retry-After, else escalating 30 s ->
+240 s) so every pending request to that host pauses instead of hammering it.
+Retries with exponential backoff on 5xx/timeouts/connection errors (3x) and on 429 (6x). Raises FetchError.
 """
 from __future__ import annotations
 
@@ -22,7 +24,10 @@ USER_AGENT = (
     "Chrome/130.0.0.0 Safari/537.36"
 )
 RETRIES = 3
+RETRIES_429 = 6
 BACKOFF_S = 0.5
+COOLDOWN_MIN_S = 30.0
+COOLDOWN_MAX_S = 240.0
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
@@ -54,8 +59,49 @@ class _TokenBucket:
                 await asyncio.sleep((1 - self.tokens) / self.rate)
 
 
+class _Gate:
+    """Rate limit + concurrency cap + 429 cooldown for one host family."""
+
+    def __init__(self, rps: float, concurrency: int | None = None):
+        self.bucket = _TokenBucket(rps)
+        self.sem = asyncio.Semaphore(concurrency) if concurrency else None
+        self.cooldown_until = 0.0
+        self.cooldown_s = COOLDOWN_MIN_S
+
+    async def _wait_cooldown(self) -> None:
+        while (delay := self.cooldown_until - time.monotonic()) > 0:
+            await asyncio.sleep(delay)
+
+    @asynccontextmanager
+    async def slot(self) -> AsyncIterator[None]:
+        await self._wait_cooldown()
+        if self.sem is None:
+            await self.bucket.acquire()
+            yield
+            return
+        async with self.sem:
+            await self._wait_cooldown()
+            await self.bucket.acquire()
+            yield
+
+    def throttled(self, retry_after: str | None) -> None:
+        try:
+            delay = float(retry_after) if retry_after else self.cooldown_s
+        except ValueError:
+            delay = self.cooldown_s
+        until = time.monotonic() + min(max(delay, 1.0), COOLDOWN_MAX_S)
+        if until > self.cooldown_until:
+            self.cooldown_until = until
+            log.warning("rate limited; pausing host for %.0fs", until - time.monotonic())
+        self.cooldown_s = min(self.cooldown_s * 2, COOLDOWN_MAX_S)
+
+    def succeeded(self) -> None:
+        if time.monotonic() > self.cooldown_until:
+            self.cooldown_s = COOLDOWN_MIN_S
+
+
 class _Net:
-    """Client + limiters bound to one event loop."""
+    """Client + per-host gates bound to one event loop."""
 
     def __init__(self) -> None:
         s = get_settings()
@@ -65,19 +111,20 @@ class _Net:
             follow_redirects=True, timeout=TIMEOUT,
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
-        self.nasdaq = _TokenBucket(s.nasdaq_rps)
-        self.cboe = asyncio.Semaphore(s.cboe_concurrency)
+        self.gates = {"nasdaq.com": _Gate(s.nasdaq_rps),
+                      "cboe.com": _Gate(s.cboe_rps, s.cboe_concurrency)}
+
+    def gate(self, host: str) -> _Gate | None:
+        return next((g for suffix, g in self.gates.items() if host.endswith(suffix)), None)
 
     @asynccontextmanager
     async def slot(self, host: str) -> AsyncIterator[None]:
-        if host.endswith("nasdaq.com"):
-            await self.nasdaq.acquire()
+        g = self.gate(host)
+        if g is None:
             yield
-        elif host.endswith("cboe.com"):
-            async with self.cboe:
-                yield
         else:
-            yield
+            async with g.slot():
+                yield
 
 
 _nets: dict[asyncio.AbstractEventLoop, _Net] = {}
@@ -108,8 +155,10 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
     """GET with rate limiting + retries; returns a 2xx response or raises FetchError."""
     net = _net()
     host = httpx.URL(url).host
+    gate = net.gate(host)
     last: FetchError | None = None
-    for attempt in range(RETRIES + 1):
+    attempt = throttles = 0
+    while attempt <= RETRIES and throttles <= RETRIES_429:
         if attempt:
             await asyncio.sleep(BACKOFF_S * 2 ** (attempt - 1))
         try:
@@ -119,12 +168,23 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
         except (httpx.TimeoutException, httpx.TransportError) as e:
             last = FetchError(url, None, type(e).__name__)
             log.debug("fetch retry %s: %s", url, e)
+            attempt += 1
             continue
         if r.is_success:
+            if gate:
+                gate.succeeded()
             return r
         last = FetchError(str(r.url), r.status_code)
+        if r.status_code == 429:
+            throttles += 1
+            if gate:
+                gate.throttled(r.headers.get("Retry-After"))  # next slot() waits out the cooldown
+            else:
+                await asyncio.sleep(BACKOFF_S * 2 ** throttles)
+            continue
         if not _retryable(r.status_code):
             break
+        attempt += 1
     assert last is not None
     raise last
 

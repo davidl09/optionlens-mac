@@ -80,6 +80,9 @@ async def sweep(symbols: list[str] | None = None) -> str:
             await report_progress(f"{len(done)}/{len(syms)} chains")
 
     ok, failed = await run_bounded(syms, one, get_settings().cboe_concurrency, "sweep")
+    if failed:  # second pass for transient failures (e.g. a rate-limit burst)
+        ok2, failed = await run_bounded(failed, one, get_settings().cboe_concurrency, "sweep-retry")
+        ok += ok2
     detail = (f"{len(done)} chains, {ok - len(done)} not optionable, {len(failed)} failed, "
               f"{_time.monotonic() - t0:.0f}s")
     if failed:

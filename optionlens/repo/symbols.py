@@ -108,3 +108,9 @@ def counts() -> dict[str, int]:
                         count(*) FILTER (WHERE in_universe AND optionable) AS optionable_count,
                         count(*) AS total FROM symbols""")[0]
     return {k: int(v) for k, v in r.items()}
+
+
+def by_industry(industry: str, limit: int = 10) -> list[dict]:
+    """Symbols rows of one industry, largest market cap first (peer comps)."""
+    return query("""SELECT * FROM symbols WHERE industry = ? ORDER BY market_cap DESC NULLS LAST, symbol
+                    LIMIT ?""", [industry, limit])

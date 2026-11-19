@@ -909,9 +909,12 @@ _IDEA_FAMILY = {"single": "single", "vertical": "vertical", "condor_fly": "condo
                 "straddle": "straddle", "calendar": "calendar"}
 
 
+MIN_IDEA_RISK = 1.0  # $ per unit: below this, edge = EV/risk is meaningless (locked/stale quotes)
+
+
 def _idea(row: dict) -> dict:
     ml = row["max_loss"]
-    edge = row["ev_hv"] / ml if row["ev_hv"] is not None and ml is not None and ml > 0 else None
+    edge = row["ev_hv"] / ml if row["ev_hv"] is not None and ml is not None and ml >= MIN_IDEA_RISK else None
     tid = SCREENERS[row["strategy"]]
     return {"strategy": row["strategy"], "label": TEMPLATES[tid].label,
             "family": _IDEA_FAMILY.get(FAMILY_OF[row["strategy"]], "single"), "legs": row["legs"],
@@ -938,7 +941,7 @@ def rank_trade_ideas(ca: ChainArrays, params: ScreenParams = ScreenParams(), n: 
         if res is None:
             continue
         ml = res.cols["max_loss"]
-        risk_ok = np.isfinite(ml) & (ml > 0)
+        risk_ok = np.isfinite(ml) & (ml >= MIN_IDEA_RISK)
         e = np.where(risk_ok, res.cols["ev_hv"] / np.where(risk_ok, ml, 1.0), np.nan)
         res.cols["_edge"] = e
         res.cols["_pop"] = np.where(risk_ok, res.cols["pop"], np.nan)

@@ -25,6 +25,7 @@ class Settings:
     option_eod_retention_days: int
     risk_free_rate: float
     cboe_concurrency: int
+    cboe_rps: float
     nasdaq_rps: float
     ntfy_url: str | None
     smtp_host: str | None
@@ -45,13 +46,14 @@ def load_settings() -> Settings:
     return Settings(
         data_dir=Path(_env("DATA_DIR", "~/.local/share/optionlens")).expanduser(),
         host=_env("HOST", "127.0.0.1"),
-        port=int(_env("PORT", "8765")),
+        port=int(_env("PORT", "8473")),
         universe_stocks=int(_env("UNIVERSE_STOCKS", "1000")),
         etf_file=Path(_env("ETF_FILE", str(PACKAGE_DIR / "etfs.txt"))).expanduser(),
         sweep_interval_min=int(_env("SWEEP_INTERVAL_MIN", "30")),
         option_eod_retention_days=int(_env("OPTION_EOD_RETENTION_DAYS", "730")),
         risk_free_rate=float(_env("RISK_FREE_RATE", "0.04")),
-        cboe_concurrency=int(_env("CBOE_CONCURRENCY", "8")),
+        cboe_concurrency=int(_env("CBOE_CONCURRENCY", "3")),
+        cboe_rps=float(_env("CBOE_RPS", "3")),
         nasdaq_rps=float(_env("NASDAQ_RPS", "4")),
         ntfy_url=_env("NTFY_URL"),
         smtp_host=_env("SMTP_HOST"),

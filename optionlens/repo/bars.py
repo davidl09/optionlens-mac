@@ -71,3 +71,13 @@ def bars_on(day: date) -> dict[str, Bar]:
 
 def _list(symbols: Sequence[str] | None) -> list[str] | None:
     return None if symbols is None else list(symbols)
+
+
+def month_end_closes(start: date, symbols: Sequence[str] | None = None) -> dict[str, np.ndarray]:
+    """Last close of every (symbol, calendar month) since start -> columns (symbol, year, month, close)
+    ordered by symbol, year, month."""
+    return columns("""
+        SELECT symbol, year(date) AS year, month(date) AS month, arg_max(close, date) AS close
+        FROM daily_bars WHERE date >= ? AND (?::VARCHAR[] IS NULL OR list_contains(?::VARCHAR[], symbol))
+        GROUP BY symbol, year(date), month(date) ORDER BY symbol, year, month""",
+        [start, _list(symbols), _list(symbols)])
