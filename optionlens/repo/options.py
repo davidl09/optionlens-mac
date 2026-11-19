@@ -1,0 +1,153 @@
+"""option_latest (current chain per symbol) and option_eod (daily end-of-day archive)."""
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Sequence
+
+import numpy as np
+
+from .. import db
+from ..models import ChainSnapshot, OptionContract
+from ._sql import aware, columns, insert_arrow, query, scalar, to_columns, utc_naive
+from .quotes import get_quote
+
+_CONTRACT_FIELDS = ("symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "change",
+                    "volume", "oi", "iv", "delta", "gamma", "theta", "vega", "rho", "theo")
+_LATEST_COLS = ('o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.change, '
+                'o.volume, o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, o.rho, o.theo, o.ts, '
+                'q.price AS underlying')
+_EOD_COLS = ('date, symbol, osi, expiry, strike, "right", bid, ask, last, volume, oi, iv, delta, '
+             'gamma, theta, vega, underlying')
+
+
+def _syms(symbols: Sequence[str] | None) -> list[str] | None:
+    return None if symbols is None else list(symbols)
+
+
+# ----------------------------------------------------------------------------- option_latest
+def replace_option_latest(snap: ChainSnapshot) -> int:
+    """Replace all option_latest rows of snap.quote.symbol with snap.contracts. Returns rows written."""
+    symbol = snap.quote.symbol
+    uniq = list({c.osi: c for c in snap.contracts}.values())
+    data = to_columns(uniq, _CONTRACT_FIELDS)
+    data["ts"] = [utc_naive(snap.fetched_at)] * len(uniq)
+    with db.write() as cur:
+        cur.execute("DELETE FROM option_latest WHERE symbol = ?", [symbol])
+        return insert_arrow(cur, "option_latest", data)
+
+
+def latest_fetched_at(symbol: str) -> datetime | None:
+    """Fetch time (aware UTC) of the stored chain, or None if none stored."""
+    return aware(scalar("SELECT max(ts) FROM option_latest WHERE symbol = ?", [symbol]))
+
+
+def get_chain(symbol: str, expiry: date | None = None) -> ChainSnapshot | None:
+    """Stored chain (optionally one expiry) + stored quote as a ChainSnapshot, or None."""
+    quote = get_quote(symbol)
+    rows = query(f"""SELECT {", ".join(f'"{c}"' for c in _CONTRACT_FIELDS)}, ts FROM option_latest
+                     WHERE symbol = ? AND (?::DATE IS NULL OR expiry = ?) ORDER BY expiry, strike, "right" """,
+                 [symbol, expiry, expiry])
+    if quote is None or not rows:
+        return None
+    fetched = max(r.pop("ts") for r in rows)
+    return ChainSnapshot(quote, tuple(OptionContract(**r) for r in rows), fetched)
+
+
+def expiries(symbol: str) -> list[date]:
+    """Distinct stored expiries for a symbol, ascending."""
+    return [r["expiry"] for r in query(
+        "SELECT DISTINCT expiry FROM option_latest WHERE symbol = ? ORDER BY expiry", [symbol])]
+
+
+def latest_columns(symbols: Sequence[str] | None = None, right: str | None = None,
+                   expiry_min: date | None = None, expiry_max: date | None = None,
+                   min_oi: int | None = None, min_volume: int | None = None) -> dict[str, np.ndarray]:
+    """Universe-wide option_latest filter -> columns (symbol, osi, expiry, strike, right, bid, ask, last,
+    change, volume, oi, iv, delta, gamma, theta, vega, rho, theo, ts, underlying), ordered by symbol, expiry, strike."""
+    return columns(f"""
+        SELECT {_LATEST_COLS} FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
+        WHERE (?::VARCHAR[] IS NULL OR o.symbol IN (SELECT unnest(?::VARCHAR[])))
+          AND (?::VARCHAR IS NULL OR o."right" = ?)
+          AND o.expiry >= COALESCE(?::DATE, DATE '1900-01-01') AND o.expiry <= COALESCE(?::DATE, DATE '2999-12-31')
+          AND o.oi >= COALESCE(?::BIGINT, 0) AND o.volume >= COALESCE(?::BIGINT, 0)
+        ORDER BY o.symbol, o.expiry, o.strike, o."right" """,
+        [_syms(symbols), _syms(symbols), right, right, expiry_min, expiry_max, min_oi, min_volume])
+
+
+# ----------------------------------------------------------------------------- option_eod
+def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | None = None) -> int:
+    """Archive option_latest rows fetched at/after fresh_since as EOD rows for day (skipping rows with
+    bid=0 AND oi=0 AND volume=0). Replaces existing rows of (day, symbol). Returns rows written."""
+    syms = _syms(symbols)
+    since = utc_naive(fresh_since)
+    with db.write() as cur:
+        cur.execute("""DELETE FROM option_eod WHERE date = ? AND symbol IN (
+                         SELECT DISTINCT symbol FROM option_latest WHERE ts >= ?
+                         AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[]))))""",
+                    [day, since, syms, syms])
+        cur.execute(f"""
+            INSERT INTO option_eod ({_EOD_COLS})
+            SELECT ?::DATE, o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.volume,
+                   o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price
+            FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
+            WHERE o.ts >= ? AND (?::VARCHAR[] IS NULL OR o.symbol IN (SELECT unnest(?::VARCHAR[])))
+              AND NOT (COALESCE(o.bid, 0) = 0 AND COALESCE(o.oi, 0) = 0 AND COALESCE(o.volume, 0) = 0)
+            ORDER BY o.symbol, o.osi""", [day, since, syms, syms])
+        return int(cur.fetchone()[0])
+
+
+def eod_for_date(day: date, symbols: Sequence[str] | None = None, right: str | None = None,
+                 expiry_min: date | None = None, expiry_max: date | None = None) -> dict[str, np.ndarray]:
+    """option_eod rows of one date (filtered) -> columns (date, symbol, osi, expiry, strike, right, bid, ask,
+    last, volume, oi, iv, delta, gamma, theta, vega, underlying) ordered by symbol, osi."""
+    return columns(f"""
+        SELECT {_EOD_COLS} FROM option_eod WHERE date = ?
+          AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))
+          AND (?::VARCHAR IS NULL OR "right" = ?)
+          AND expiry >= COALESCE(?::DATE, DATE '1900-01-01') AND expiry <= COALESCE(?::DATE, DATE '2999-12-31')
+        ORDER BY symbol, osi""", [day, _syms(symbols), _syms(symbols), right, right, expiry_min, expiry_max])
+
+
+def eod_for_symbol(symbol: str, start: date | None = None, end: date | None = None,
+                   expiry: date | None = None) -> dict[str, np.ndarray]:
+    """option_eod rows of a symbol over [start, end] (optionally one expiry) -> columns ordered by date, osi."""
+    return columns(f"""
+        SELECT {_EOD_COLS} FROM option_eod WHERE symbol = ?
+          AND date >= COALESCE(?::DATE, DATE '1900-01-01') AND date <= COALESCE(?::DATE, DATE '2999-12-31')
+          AND (?::DATE IS NULL OR expiry = ?)
+        ORDER BY date, osi""", [symbol, start, end, expiry, expiry])
+
+
+def eod_for_osi(osi: str) -> dict[str, np.ndarray]:
+    """option_eod history of one contract -> columns ordered by date."""
+    return columns(f"SELECT {_EOD_COLS} FROM option_eod WHERE osi = ? ORDER BY date", [osi])
+
+
+def prior_eod_date(before: date) -> date | None:
+    """Latest option_eod date strictly before `before`, or None."""
+    return scalar("SELECT max(date) FROM option_eod WHERE date < ?", [before])
+
+
+def prior_oi(before: date, symbol: str | None = None) -> dict[str, int]:
+    """{osi: oi} from the latest option_eod date < before (one symbol, or all when symbol is None)."""
+    d = prior_eod_date(before)
+    if d is None:
+        return {}
+    rows = db.cursor().execute(
+        "SELECT osi, oi FROM option_eod WHERE date = ? AND (?::VARCHAR IS NULL OR symbol = ?)",
+        [d, symbol, symbol]).fetchall()
+    return {osi: int(oi or 0) for osi, oi in rows}
+
+
+def eod_dates(symbol: str | None = None) -> list[date]:
+    """Distinct option_eod dates (optionally for one symbol), ascending."""
+    return [r["date"] for r in query(
+        "SELECT DISTINCT date FROM option_eod WHERE (?::VARCHAR IS NULL OR symbol = ?) ORDER BY date",
+        [symbol, symbol])]
+
+
+def prune_option_eod(before: date) -> int:
+    """Delete option_eod rows dated before `before`. Returns rows deleted."""
+    with db.write() as cur:
+        cur.execute("DELETE FROM option_eod WHERE date < ?", [before])
+        return int(cur.fetchone()[0])
