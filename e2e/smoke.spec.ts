@@ -181,6 +181,7 @@ test("screenshots: dashboard, summary (dark + light), phone", async ({ page }) =
   const p = await setup(page);
   await page.goto("/");
   await expect(page.getByText("Sector ETFs")).toBeVisible();
+  await expect(page.getByText("No tracked company reports on the next session")).toBeVisible();   // explained empty panel
   await page.waitForLoadState("networkidle");
   await page.screenshot({ path: `${SHOTS}/dashboard.png`, fullPage: true });
   await page.goto("/s/AAPL/summary");

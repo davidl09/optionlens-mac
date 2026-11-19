@@ -15,6 +15,13 @@ export interface ParamFormProps {
   extra?: ReactNode;
 }
 
+/** Fractional report params (0.05 = 5%) are shown and typed in percent; the stored/URL value stays the server's fraction. */
+const PERCENT_KEYS = new Set(["min_change", "min_gap", "min_yield", "min_outperformance", "moneyness_min", "moneyness_max"]);
+const isPercent = (d: ParamDef) => (d.type === "number") && (d.key.endsWith("_pct") || PERCENT_KEYS.has(d.key));
+const scale = (n: number, by: number) => +(n * by).toFixed(8);
+const toPercent = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? v : String(scale(Number(v), 100)));
+const fromPercent = (v: string) => (v.trim() === "" || !Number.isFinite(Number(v)) ? v : String(scale(Number(v), 0.01)));
+
 export function ParamForm({ defs, values, onChange, onSubmit, submitLabel = "Run", busy = false, extra }: ParamFormProps) {
   const needsWatchlists = defs.some((d) => d.type === "watchlist");
   const wl = useApi(needsWatchlists ? api.watchlists : null, [needsWatchlists]);
@@ -45,9 +52,17 @@ export function ParamForm({ defs, values, onChange, onSubmit, submitLabel = "Run
           onChange={(e) => set(d.key, e.target.value.toUpperCase())} />;
       case "date":
         return <input id={id} type="date" value={v} onChange={(e) => set(d.key, e.target.value)} />;
-      case "int": case "number":
-        return <input id={id} type="number" value={v} min={d.min} max={d.max} step={d.step ?? (d.type === "int" ? 1 : "any")} className="w-num"
-          onChange={(e) => set(d.key, e.target.value)} />;
+      case "int": case "number": {
+        const pct = isPercent(d);
+        const sc = (n: number | undefined) => (pct && n !== undefined ? scale(n, 100) : n);
+        return (
+          <>
+            <input id={id} type="number" value={pct ? toPercent(v) : v} min={sc(d.min)} max={sc(d.max)} step={sc(d.step) ?? (d.type === "int" ? 1 : "any")} className="w-num"
+              onChange={(e) => set(d.key, pct ? fromPercent(e.target.value) : e.target.value)} />
+            {pct && <span className="muted"> %</span>}
+          </>
+        );
+      }
       default:
         return <input id={id} type="text" value={v} onChange={(e) => set(d.key, e.target.value)} />;
     }

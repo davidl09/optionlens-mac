@@ -8,7 +8,7 @@ import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
 import { Async, Card } from "../../components/ui";
-import { fmt } from "../../lib/format";
+import { fmt, plural } from "../../lib/format";
 import { IDEA_COLUMNS, ideasAsRows, useSym } from "./shared";
 
 export const MIN_IV_HISTORY = 20;
@@ -19,7 +19,10 @@ export function ivHistoryHint(days: number): string {
 }
 
 export function unlimitedCell(col: ColumnDef, row: ReportRow) {
-  if ((col.key === "max_profit" || col.key === "max_loss") && row[col.key] === null) return <span className="muted">Unlimited</span>;
+  if ((col.key === "max_profit" || col.key === "max_loss") && row[col.key] === null) {
+    // null = not applicable for seasonal (stock) ideas, unlimited for option strategies
+    return <span className="muted">{row.family === "seasonality" ? "—" : "Unlimited"}</span>;
+  }
   return undefined;
 }
 
@@ -70,7 +73,7 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
             { label: "HV20", value: s.hv20, fmt: "vol" },
             { label: "IV / HV", value: s.iv_hv_ratio, fmt: "ratio" },
             { label: "Call / put vol", node: <span><StatValue value={s.call_volume} kind="int" /> / <StatValue value={s.put_volume} kind="int" /></span> },
-            { label: "Opt vol vs 20d", value: s.rel_option_volume, fmt: "ratio", sub: s.avg_option_volume_20d !== null ? `avg ${fmt(s.avg_option_volume_20d, "int")}` : undefined, hint: "Needs 20 days of collected option volume." },
+            { label: "Opt vol vs 20d", value: s.rel_option_volume, fmt: "ratio", sub: s.avg_option_volume_20d !== null ? `avg ${fmt(s.avg_option_volume_20d, "int")} · ${s.avg_option_volume_days}d` : undefined, hint: "Needs at least one prior day of collected option volume.", title: s.avg_option_volume_days < 20 ? `Average over ${s.avg_option_volume_days} prior collected day(s) (target 20)` : undefined },
             { label: "P/C volume", value: s.pc_volume_ratio, fmt: "ratio" },
             { label: "Total OI", value: s.total_oi, fmt: "int" },
             { label: "RSI 14", value: s.rsi14, fmt: "num" },
@@ -112,7 +115,7 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
       </Card>
       <div className="grid-2">
         <Card title="Price, 1 year"><LineChart series={price} yFmt="money" height={220} /></Card>
-        <Card title="IV30 vs HV20, 1 year" subtitle={`IV history: ${s.iv_history_days} days`}><LineChart series={vol} yFmt="vol" height={220} /></Card>
+        <Card title="IV30 vs HV20, 1 year" subtitle={`IV history: ${s.iv_history_days} ${plural(s.iv_history_days, "day")}`}><LineChart series={vol} yFmt="vol" height={220} /></Card>
       </div>
       <Card title="Top trade ideas" actions={<Link to={`/s/${s.symbol}/ideas`} className="small">All ideas →</Link>}>
         <DataTable columns={IDEA_COLUMNS} rows={ideasAsRows(s.ideas)} minimal rowLink={false} renderCell={unlimitedCell} emptyText="No ideas" />

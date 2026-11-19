@@ -47,7 +47,7 @@ function AlertForm({ lists, initialSymbol, editing, onDone }: { lists: Watchlist
     if (scope === "watchlist" && !wl) { setErr("Create a watchlist first."); return; }
     if (meta.unit && (value.trim() === "" || !Number.isFinite(Number(value)))) { setErr("Enter a threshold value."); return; }
     const body: AlertInput = {
-      kind, enabled, cooldown_min: Number(cooldown) || 240,
+      kind, enabled, cooldown_min: cooldown.trim() !== "" && Number.isFinite(Number(cooldown)) ? Number(cooldown) : 240,
       symbol: scope === "symbol" ? symbol.trim().toUpperCase() : null,
       params: { ...(meta.unit ? { value: Number(value) / meta.scale } : {}), ...(scope === "watchlist" ? { watchlist_id: Number(wl) } : {}) },
     };

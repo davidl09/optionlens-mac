@@ -42,8 +42,9 @@ export function overview(): MarketOverview {
     sectors: ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"].map((s, i) => ({ symbol: s, name: ["Technology", "Financials", "Energy", "Health Care", "Cons. Discretionary", "Cons. Staples", "Industrials", "Materials", "Utilities", "Real Estate", "Communication"][i], change_pct: round((rnd() - 0.5) * 0.03, 4), change_5d: round((rnd() - 0.5) * 0.06, 4), change_1m: i === 9 ? null : round((rnd() - 0.5) * 0.1, 4) })),
     gainers: rowsFor(def("market-movers").columns, 8, 1), losers: rowsFor(def("market-movers").columns, 8, 2),
     unusual_options: rowsFor(def("unusual-option-volume").columns, 10, 3), iv_movers: rowsFor(def("iv-movers").columns, 8, 4),
-    earnings_today: rowsFor(def("earnings-calendar").columns, 5, 5), earnings_tomorrow: rowsFor(def("earnings-calendar").columns, 4, 6),
+    earnings_today: rowsFor(def("earnings-calendar").columns, 5, 5), earnings_tomorrow: [],
     watchlist: watchlistTable(1).rows,
+    empty_notes: { earnings_tomorrow: "No tracked company reports on the next session (2026-11-20)." },
   };
 }
 

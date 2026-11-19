@@ -38,6 +38,15 @@ const ENTRY_TYPES: { value: EntryType; label: string }[] = [
   { value: "rsi", label: "RSI(14) below / above x" }, { value: "sma_cross", label: "Close crosses SMA(n)" }, { value: "new_52w", label: "New 52-week high / low" },
 ];
 
+const DEFAULT_N: Partial<Record<EntryType, number>> = { rsi: 14, sma_cross: 50 };
+/** Entry defaults per rule type, including every key the server requires for it. */
+function defaultEntry(ty: EntryType): StockBacktestRequest["entry"] {
+  return {
+    type: ty, n: DEFAULT_N[ty] ?? 5, value: ty === "gap" ? 0.02 : 30, month: 1, day: 1,
+    direction: ty === "gap" ? "up" : ty === "new_52w" ? "high" : "below",
+  };
+}
+
 export function StockBacktest() {
   const r = useRunner(api.backtestStock);
   const [symbols, setSymbols] = useState("SPY");
@@ -68,12 +77,12 @@ export function StockBacktest() {
         <form className="param-form" onSubmit={submit}>
           <Field label="Symbols"><input className="w-wide" value={symbols} onChange={(e) => setSymbols(e.target.value.toUpperCase())} placeholder="AAPL, MSFT" /></Field>
           <Field label="Entry rule">
-            <select value={t} onChange={(e) => { const ty = e.target.value as EntryType; setEntry({ type: ty, n: ty === "sma_cross" ? 50 : 5, value: ty === "gap" ? 0.02 : 30, direction: ty === "gap" ? "up" : ty === "new_52w" ? "high" : "below" }); }}>
+            <select value={t} onChange={(e) => { const ty = e.target.value as EntryType; setEntry(defaultEntry(ty)); }}>
               {ENTRY_TYPES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
             </select>
           </Field>
-          {["every_n_days", "days_before_earnings", "days_after_earnings", "sma_cross"].includes(t) && (
-            <Field label={t === "sma_cross" ? "SMA length" : "N (days)"}><input type="number" className="w-num" value={entry.n ?? ""} onChange={(e) => setE({ n: Number(e.target.value) })} /></Field>
+          {["every_n_days", "days_before_earnings", "days_after_earnings", "rsi", "sma_cross"].includes(t) && (
+            <Field label={t === "sma_cross" ? "SMA length" : t === "rsi" ? "RSI length" : "N (days)"}><input type="number" className="w-num" value={entry.n ?? ""} onChange={(e) => setE({ n: Number(e.target.value) })} /></Field>
           )}
           {t === "day_of_month" && <Field label="Day"><input type="number" min={1} max={31} className="w-num" value={entry.day ?? 1} onChange={(e) => setE({ day: Number(e.target.value) })} /></Field>}
           {t === "month_of_year" && (

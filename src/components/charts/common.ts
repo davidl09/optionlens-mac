@@ -6,7 +6,7 @@ import type { Palette } from "./EChart";
 /** Compact axis labels (fewer decimals than table cells). */
 export function axisLabelFmt(v: number, kind: ColumnFmt): string {
   if (kind === "pct" || kind === "pct_signed") return `${+(v * 100).toFixed(1)}%`;
-  if (kind === "vol") return `${+(v * 100).toFixed(0)}`;
+  if (kind === "vol") return `${+(v * 100).toFixed(1)}`;
   if (kind === "money") return `$${+v.toFixed(2)}`;
   if (kind === "int" || kind === "bigmoney") return Math.abs(v) >= 1000 ? fmt(v, "bigmoney") : String(+v.toFixed(2));
   return fmt(v, kind);

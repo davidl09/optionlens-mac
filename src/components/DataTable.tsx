@@ -375,7 +375,7 @@ function guessFmt(key: string, v: unknown): ColumnDef["fmt"] {
   if (/date$|^date|expiry/.test(k)) return "date";
   if (typeof v === "boolean") return "bool";
   if (typeof v !== "number") return "text";
-  if (/^iv|^hv|_iv$|_hv$|vol30|^atm_iv/.test(k) && !/rank|ratio|volume/.test(k)) return "vol";
+  if (/^iv|^hv|_iv$|_hv$|vol30|^atm_iv/.test(k) && !/rank|ratio|volume|percentile/.test(k)) return "vol";
   if (/chg|change|ret|return|move|drift|perf/.test(k)) return "pct_signed";
   if (/pct|rank|percentile|yield|_pct$/.test(k)) return "pct";
   if (/ratio/.test(k)) return "ratio";

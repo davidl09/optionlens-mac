@@ -130,7 +130,7 @@ export function summary(sym: string): SymbolSummary {
     sector: "Technology", industry: "Consumer Electronics", market_cap: 3.48e12, optionable: true, in_universe: true, quote: quote(sym),
     avg_volume_30d: 52_100_000, rel_volume: 0.93, high_52w: 248.1, low_52w: 168.3, high_3y: 248.1, low_3y: 124.2, beta_1y: 1.12, corr_spy_1y: 0.71,
     iv30: 0.274, iv_rank: null, iv_percentile: null, iv_history_days: 12, hv20: 0.221, iv_hv_ratio: 1.24,
-    call_volume: 412_300, put_volume: 288_100, avg_option_volume_20d: null, rel_option_volume: null, pc_volume_ratio: 0.7, total_oi: 5_500_000,
+    call_volume: 412_300, put_volume: 288_100, avg_option_volume_20d: null, avg_option_volume_days: 0, rel_option_volume: null, pc_volume_ratio: 0.7, total_oi: 5_500_000,
     returns: { d1: 0.0126, d5: -0.018, m1: 0.041, m3: 0.083, m6: 0.12, ytd: 0.19, y1: 0.24, y3: null },
     next_earnings: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: null, avg_abs_move_pct: 0.038 },
     next_dividend: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045 },
@@ -222,6 +222,7 @@ export function earningsStrategies(sym: string, lookback: number, entry: number,
   const names = ["long_straddle", "short_straddle", "long_strangle_5", "short_strangle_5", "long_call_atm", "long_put_atm", "short_iron_condor_5", "long_iron_fly", "call_calendar", "long_stock"];
   return {
     symbol: sym, lookback, entry, exit,
+    notes: ["Model-priced legs whose expiry spans the reaction day use total variance base_iv²·T + event_var."],
     rows: names.map((n) => ({ strategy: n, label: n.replace(/_/g, " ").replace(/^\w/, (m) => m.toUpperCase()), trades: lookback, win_rate: round(rnd(), 3), avg_return: round((rnd() - 0.5) * 0.4, 4), median_return: round((rnd() - 0.5) * 0.3, 4), best: round(rnd() * 1.2, 4), worst: round(-rnd(), 4), avg_pnl: round((rnd() - 0.5) * 300), real_count: 1, model_count: lookback - 1 })),
   };
 }

@@ -26,7 +26,7 @@ export function IdeasTab() {
     <Async state={st}>{(t) => (
       <div className="stack">
         <div className="toolbar"><Segmented label="Strategy family" value={family} onChange={setFamily} options={FAMILIES} /></div>
-        <InfoBox>Ideas are drawn from the strategy screeners for {sym}. “Edge” = expected value under 30-day historical volatility ÷ max loss; “win rate” = probability of profit under implied volatility. These are model estimates, not recommendations.</InfoBox>
+        <InfoBox>Ideas are drawn from the strategy screeners for {sym}. “Edge” = expected value under 30-day historical volatility ÷ max loss; “win rate” = probability of profit under implied volatility. Edge ideas need a probability of profit of at least 20%; win-rate ideas need a non-negative edge. These are model estimates, not recommendations.</InfoBox>
         <Card title="Ranked by edge (EV under HV ÷ risk)">
           <DataTable columns={IDEA_COLUMNS} rows={pick(t.by_edge)} rowLink={false} renderCell={unlimitedCell} csvName={`${sym}-ideas-edge`} />
         </Card>

@@ -138,7 +138,7 @@ export function DividendsTab() {
   return (
     <Async state={st}>{(d) => (
       <div className="stack">
-        {!d.history.length && <InfoBox>No dividend history for {sym}.</InfoBox>}
+        {!d.history.length && <InfoBox>No dividend history for {sym}. The free source (Nasdaq) has dividend history for Nasdaq-listed securities only, so NYSE / NYSE Arca listings show none here even when they pay dividends.</InfoBox>}
         <Card title="Dividend profile">
           <StatGrid items={[
             { label: "Annual rate", value: d.annual_rate, fmt: "money" },

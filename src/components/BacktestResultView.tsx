@@ -47,7 +47,7 @@ export function BacktestResultView({ result, csvName = "backtest-trades" }: { re
           { label: "Win rate", value: s.win_rate, fmt: "pct" },
           { label: "Avg return", value: s.avg_return, fmt: "pct_signed" },
           { label: "Median return", value: s.median_return, fmt: "pct_signed" },
-          { label: "Total (compounded)", value: s.total_return, fmt: "pct_signed" },
+          { label: "Total return", value: s.total_return, fmt: "pct_signed", title: "Stock backtests compound trade returns; option backtests do not (see notes)" },
           { label: "CAGR", value: s.cagr, fmt: "pct_signed" },
           { label: "Sharpe", value: s.sharpe, fmt: "num2" },
           { label: "Max drawdown", value: s.max_drawdown, fmt: "pct_signed" },

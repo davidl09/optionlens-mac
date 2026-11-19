@@ -4,6 +4,7 @@ import type { ColumnFmt } from "../../api/types";
 import { fmt } from "../../lib/format";
 import { EChart, Palette, usePalette } from "./EChart";
 import { axisStyle, axisTooltip, GRID, legendStyle, tooltipStyle } from "./common";
+import { Empty } from "../ui";
 
 export type XY = [string | number, number | null];
 
@@ -17,6 +18,12 @@ export interface LineSeries {
 }
 
 export interface RefLine { x?: string | number; y?: number; label?: string; color?: string }
+
+/** yyyy-mm-dd of a local-midnight timestamp (toISOString would shift the day in UTC+ zones). */
+const localDate = (x: unknown) => {
+  const d = new Date(Number(x));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
 
 function markLines(p: Palette, refs: RefLine[] | undefined) {
   if (!refs?.length) return undefined;
@@ -49,7 +56,7 @@ export function LineChart({ series, xType = "time", yFmt = "num", xFmt, height =
     color: p.series,
     grid: { ...GRID, top: series.length > 1 ? 30 : 14, bottom: zoom ? 30 : 6 },
     legend: series.length > 1 ? { ...legendStyle(p), data: series.map((s) => s.name) } : undefined,
-    tooltip: axisTooltip(p, yFmt, xFmt ? (x) => fmt(x, xFmt) : xType === "time" ? (x) => new Date(Number(x)).toISOString().slice(0, 10) : undefined),
+    tooltip: axisTooltip(p, yFmt, xFmt ? (x) => fmt(x, xFmt) : xType === "time" ? localDate : undefined),
     xAxis: { type: xType, scale: xType === "value", ...axisStyle(p, xFmt), splitLine: { show: false } },
     yAxis: { type: "value", scale: !yZero, ...axisStyle(p, yFmt) },
     dataZoom: zoom ? [{ type: "inside" }, { type: "slider", height: 16, bottom: 4, borderColor: p.axis, textStyle: { color: p.muted } }] : undefined,
@@ -61,6 +68,8 @@ export function LineChart({ series, xType = "time", yFmt = "num", xFmt, height =
       markLine: i === 0 ? markLines(p, refLines) : undefined,
     })),
   }), [p, series, xType, yFmt, xFmt, refLines, zoom, yZero]);
+  const points = Math.max(0, ...series.map((s) => s.data.filter((d) => d[1] !== null && d[1] !== undefined).length));
+  if (points < 2) return <Empty>Not enough collected history to chart yet ({points} {points === 1 ? "point" : "points"}).</Empty>;
   return <EChart option={option} height={height} ariaLabel={ariaLabel} />;
 }
 
@@ -141,7 +150,7 @@ export function Heatmap({ xLabels, yLabels, data, valueFmt = "pct_signed", heigh
 }
 
 export interface SmileProps {
-  /** x = strike (money) or signed delta (num2). */
+  /** x = strike (money) or call-equivalent delta (num2). */
   xFmt: ColumnFmt;
   series: LineSeries[];
   spot?: number | null;

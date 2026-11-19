@@ -125,8 +125,11 @@ function StrategyPanel({ sym }: { sym: string }) {
         <span className="muted small">Click a strategy to list its trades.</span>
       </div>
       <Async state={res}>{(r) => (
-        <DataTable columns={STRAT_COLUMNS} rows={r.rows as unknown as ReportRow[]} csvName={`${sym}-earnings-strategies`} defaultSort={{ key: "avg_return", dir: "desc" }}
-          onRowClick={(row) => setStrategy(String(row.strategy))} rowClass={(row) => (row.strategy === strategy ? "row-selected" : undefined)} maxHeight={420} />
+        <>
+          <DataTable columns={STRAT_COLUMNS} rows={r.rows as unknown as ReportRow[]} csvName={`${sym}-earnings-strategies`} defaultSort={{ key: "avg_return", dir: "desc" }}
+            onRowClick={(row) => setStrategy(String(row.strategy))} rowClass={(row) => (row.strategy === strategy ? "row-selected" : undefined)} maxHeight={420} />
+          {r.notes.length > 0 && <div className="top-gap"><InfoBox title="Model pricing:">{r.notes.join(" ")}</InfoBox></div>}
+        </>
       )}</Async>
       {strategy && (
         <div className="top-gap">

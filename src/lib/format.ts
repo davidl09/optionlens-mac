@@ -114,3 +114,8 @@ export function badgeTone(v: unknown): "pos" | "neg" | "warn" | "neutral" {
 
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+
+/** "1 day" / "3 days" (count rendered by the caller). */
+export function plural(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`;
+}

@@ -46,6 +46,7 @@ export interface MarketOverview {
   iv_movers: ReportRow[];                              // top 10 of iv-movers
   earnings_today: ReportRow[]; earnings_tomorrow: ReportRow[];  // earnings-calendar rows
   watchlist: ReportRow[];                              // first watchlist table rows
+  empty_notes: Partial<Record<"gainers" | "losers" | "unusual_options" | "iv_movers" | "earnings_today" | "earnings_tomorrow" | "watchlist", string>>;  // why a panel is empty (only empty panels)
 }
 
 // ---------------- symbol summary ----------------
@@ -61,7 +62,8 @@ export interface SymbolSummary {
   beta_1y: number | null; corr_spy_1y: number | null;
   iv30: number | null; iv_rank: number | null; iv_percentile: number | null; iv_history_days: number;
   hv20: number | null; iv_hv_ratio: number | null;
-  call_volume: number | null; put_volume: number | null; avg_option_volume_20d: number | null;
+  call_volume: number | null; put_volume: number | null;
+  avg_option_volume_20d: number | null; avg_option_volume_days: number;   // average over up to 20 prior stored days (days used; 0 = none)
   rel_option_volume: number | null; pc_volume_ratio: number | null; total_oi: number | null;
   returns: ReturnsRow;
   next_earnings: NextEarnings | null; next_dividend: NextDividend | null;
@@ -176,7 +178,7 @@ export interface StrategyBacktestSummary {
   strategy: string; label: string; trades: number; win_rate: number | null; avg_return: number | null; median_return: number | null;
   best: number | null; worst: number | null; avg_pnl: number | null; real_count: number; model_count: number;
 }
-export interface EarningsStrategyResult { symbol: string; lookback: number; entry: number; exit: number; rows: StrategyBacktestSummary[] }
+export interface EarningsStrategyResult { symbol: string; lookback: number; entry: number; exit: number; rows: StrategyBacktestSummary[]; notes: string[] }  // notes: model pricing method (event variance)
 
 // ---------------- dividends / seasonality / events ----------------
 export interface Dividends {

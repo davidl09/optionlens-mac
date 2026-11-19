@@ -1,7 +1,7 @@
 // Strategy payout calculator: legs editor, templates, eval-date & IV-shift sliders, payoff chart, metrics.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
-import type { CalcResult, Chain, ColumnDef, ExpiryInfo, Leg, ReportRow, StrategyTemplate } from "../../api/types";
+import type { CalcRequest, CalcResult, Chain, ColumnDef, ExpiryInfo, Leg, ReportRow, StrategyTemplate } from "../../api/types";
 import { useApi, useDebounced } from "../../api/useApi";
 import { Payoff } from "../../components/charts/Payoff";
 import { DataTable } from "../../components/DataTable";
@@ -18,21 +18,55 @@ function defaultBase(expiries: ExpiryInfo[]): string | null {
   return (expiries.find((e) => e.dte >= 21) ?? expiries[expiries.length - 1])?.expiry ?? null;
 }
 
-export function instantiateTemplate(t: StrategyTemplate, spot: number, expiries: ExpiryInfo[], base: string, strikes: number[]): Leg[] {
-  const baseIdx = Math.max(0, expiries.findIndex((e) => e.expiry === base));
-  return t.legs.map((l) => {
+/**
+ * Template legs on the listed strikes of the base chain. Mirrors the server's push-outward rule: legs with
+ * different offsets land on distinct strikes in the direction of their offset (nearest strike to spot is the anchor).
+ * Calendar legs keep distinct expiries (base shifts earlier if needed). Returns null when that is impossible.
+ */
+export function instantiateTemplate(t: StrategyTemplate, spot: number, expiries: ExpiryInfo[], base: string, strikes: number[]): Leg[] | null {
+  const maxIdx = Math.max(0, ...t.legs.map((l) => l.expiry_index ?? 0));
+  const baseIdx = Math.min(Math.max(0, expiries.findIndex((e) => e.expiry === base)), expiries.length - 1 - maxIdx);
+  if (baseIdx < 0) return null;
+  const grid = [...strikes].sort((x, y) => x - y);
+  if (t.legs.some((l) => l.kind === "option") && !grid.length) return null;
+  const anchor = Math.max(0, grid.indexOf(nearest(grid, spot) ?? 0));
+  // strike index per (right, offset): walk outward from the anchor so each further offset takes a further strike
+  const idxFor = new Map<string, number>();
+  for (const right of ["C", "P"]) {
+    const offs = [...new Set(t.legs.filter((l) => l.kind === "option" && (l.right ?? "C") === right).map((l) => l.strike_offset_pct ?? 0))];
+    for (const dir of [1, -1]) {
+      let prev = anchor;
+      for (const off of offs.filter((o) => o * dir > 0).sort((x, y) => dir * (x - y))) {
+        let i = grid.indexOf(nearest(grid, spot * (1 + off)) ?? 0);
+        i = dir > 0 ? Math.max(i, prev + 1) : Math.min(i, prev - 1);
+        if (i < 0 || i >= grid.length) return null;
+        idxFor.set(`${right}${off}`, i);
+        prev = i;
+      }
+    }
+    idxFor.set(`${right}0`, anchor);
+  }
+  return t.legs.map((l): Leg => {
     if (l.kind === "stock") return { kind: "stock", qty: l.qty };
-    const e = expiries[Math.min(expiries.length - 1, baseIdx + (l.expiry_index ?? 0))];
-    return { kind: "option", right: l.right ?? "C", qty: l.qty, expiry: e?.expiry ?? base, strike: nearest(strikes, spot * (1 + (l.strike_offset_pct ?? 0))) ?? spot };
+    const right = l.right ?? "C";
+    return { kind: "option", right, qty: l.qty, expiry: expiries[baseIdx + (l.expiry_index ?? 0)].expiry, strike: grid[idxFor.get(`${right}${l.strike_offset_pct ?? 0}`) as number] };
   });
 }
 
-function LegEditor({ sym, leg, index, expiries, result, onChange, onRemove }: {
-  sym: string; leg: Leg; index: number; expiries: ExpiryInfo[]; result: CalcResult | null; onChange: (l: Leg) => void; onRemove: () => void;
+function LegEditor({ sym, leg, index, expiries, spot, result, onChange, onRemove }: {
+  sym: string; leg: Leg; index: number; expiries: ExpiryInfo[]; spot: number; result: CalcResult | null; onChange: (l: Leg) => void; onRemove: () => void;
 }) {
   const chain = useApi(leg.kind === "option" ? () => api.chain(sym, leg.expiry) : null, [sym, leg.kind, leg.expiry]);
   const strikes = chain.data?.strikes ?? (leg.strike !== undefined ? [leg.strike] : []);
   const used = result?.legs[index];
+  // the strike to keep when the expiry/type changes (the select then snaps to the nearest strike listed there)
+  const wantStrike = useRef(leg.strike);
+  if (leg.strike !== undefined) wantStrike.current = leg.strike;
+  const listed = chain.data && chain.data.expiry === leg.expiry ? chain.data.strikes : null;
+  useEffect(() => {
+    if (leg.kind !== "option" || !listed?.length || (leg.strike !== undefined && listed.includes(leg.strike))) return;
+    onChange({ ...leg, strike: nearest(listed, wantStrike.current ?? spot) ?? undefined, price: null, iv: null });
+  });
   const step = (d: number) => {
     let q = leg.qty + d * (leg.kind === "stock" ? 100 : 1);
     if (q === 0) q += d * (leg.kind === "stock" ? 100 : 1);
@@ -43,7 +77,7 @@ function LegEditor({ sym, leg, index, expiries, result, onChange, onRemove }: {
   return (
     <tr>
       <td>
-        <select value={leg.kind} aria-label="Leg type" onChange={(e) => reset(e.target.value === "stock" ? { kind: "stock", qty: 100, right: undefined, strike: undefined, expiry: undefined } : { kind: "option", qty: 1, right: "C", expiry: expiries[0]?.expiry, strike: nearest(strikes, result?.spot ?? 0) ?? undefined })}>
+        <select value={leg.kind} aria-label="Leg type" onChange={(e) => reset(e.target.value === "stock" ? { kind: "stock", qty: 100, right: undefined, strike: undefined, expiry: undefined } : { kind: "option", qty: 1, right: "C", expiry: expiries[0]?.expiry, strike: undefined })}>
           <option value="option">Option</option><option value="stock">Stock</option>
         </select>
       </td>
@@ -56,14 +90,14 @@ function LegEditor({ sym, leg, index, expiries, result, onChange, onRemove }: {
       </td>
       <td>
         {leg.kind === "option" && (
-          <select value={leg.expiry} aria-label="Expiry" onChange={(e) => reset({ expiry: e.target.value })}>
+          <select value={leg.expiry} aria-label="Expiry" onChange={(e) => reset({ expiry: e.target.value, strike: undefined })}>
             {expiries.map((e) => <option key={e.expiry} value={e.expiry}>{e.expiry} ({e.dte}d)</option>)}
           </select>
         )}
       </td>
       <td>
         {leg.kind === "option" && (
-          <select value={leg.strike} aria-label="Strike" onChange={(e) => reset({ strike: Number(e.target.value) })}>
+          <select value={leg.strike ?? ""} aria-label="Strike" onChange={(e) => reset({ strike: Number(e.target.value) })}>
             {strikes.map((k) => <option key={k} value={k}>{fmt(k, "num")}</option>)}
           </select>
         )}
@@ -132,13 +166,21 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   const days = Math.min(evalDays, maxDays);
   const evalDate = addDays(today, days);
 
-  const reqKey = useDebounced(JSON.stringify({ symbol: sym, legs, iv_shift: ivShift / 100, eval_date: evalDate }), 300);
-  const calc = useApi(legs.length ? () => api.calcStrategy(JSON.parse(reqKey)) : null, [reqKey, legs.length > 0]);
+  const liveKey = JSON.stringify({ symbol: sym, legs, iv_shift: ivShift / 100, eval_date: evalDate });
+  const reqKey = useDebounced(liveKey, 300);
+  const req = useMemo(() => JSON.parse(reqKey) as CalcRequest, [reqKey]);   // the debounced request decides (not the live legs)
+  // price only a settled, complete position (debounced == live, every option leg has a strike)
+  const ready = reqKey === liveKey && legs.length > 0 && legs.every((l) => l.kind === "stock" || l.strike !== undefined);
+  const calc = useApi(ready ? () => api.calcStrategy(req) : null, [req, ready]);
+  const [templateMsg, setTemplateMsg] = useState<string | null>(null);
 
   const applyTemplate = (id: string) => {
     setTemplateId(id);
     const t = templates.data?.find((x) => x.id === id);
-    if (t) setLegs(instantiateTemplate(t, spot, chain.expiries, base, chain.strikes));
+    if (!t) return;
+    const built = instantiateTemplate(t, spot, chain.expiries, base, chain.strikes);
+    setTemplateMsg(built ? null : `${t.label} can't be built here: not enough listed strikes or expiries around ${fmt(spot, "money")}.`);
+    if (built) setLegs(built);
   };
   const addLeg = (kind: "C" | "P" | "stock") => {
     const atm = nearest(chain.strikes, spot) ?? spot;
@@ -168,13 +210,14 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
           </label>
         </div>
       }>
+        {templateMsg && <ErrorBox error={new Error(templateMsg)} />}
         {legs.length > 0 ? (
           <div className="dt-scroll">
             <table className="dt legs-table">
               <thead><tr><th>Type</th><th>Right</th><th>Expiry</th><th>Strike</th><th>Qty</th><th>Price</th><th>IV</th><th /></tr></thead>
               <tbody>
                 {legs.map((l, i) => (
-                  <LegEditor key={i} sym={sym} leg={l} index={i} expiries={chain.expiries} result={result}
+                  <LegEditor key={i} sym={sym} leg={l} index={i} expiries={chain.expiries} spot={spot} result={result}
                     onChange={(nl) => setLegs(legs.map((x, j) => (j === i ? nl : x)))} onRemove={() => setLegs(legs.filter((_, j) => j !== i))} />
                 ))}
               </tbody>
@@ -204,7 +247,7 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
             </div>
           </Card>
           {calc.error && <ErrorBox error={calc.error} />}
-          {!result && calc.loading && <Spinner label="Pricing…" />}
+          {!result && !calc.error && <Spinner label="Pricing…" />}
           {result && (
             <div className={calc.loading ? "refetching" : undefined}>
               <div className="grid-main-side">

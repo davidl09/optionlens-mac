@@ -9,7 +9,7 @@ import { usePalette } from "../components/charts/EChart";
 import { DataTable, inferColumns } from "../components/DataTable";
 import { StatValue } from "../components/StatGrid";
 import { AsOf, Async, Card, Empty, Segmented } from "../components/ui";
-import { fmt, signClass } from "../lib/format";
+import { fmt, plural, signClass } from "../lib/format";
 
 function Sparkline({ values, width = 96, height = 30 }: { values: number[]; width?: number; height?: number }) {
   if (values.length < 2) return <svg width={width} height={height} aria-hidden="true" />;
@@ -35,11 +35,11 @@ function compactColumns(rows: ReportRow[], def: ReportDef | undefined, preferred
   return out;
 }
 
-function MiniTable({ title, rows, def, preferred, link, max }: { title: string; rows: ReportRow[]; def?: ReportDef; preferred: string[]; link?: string; max?: number }) {
+function MiniTable({ title, rows, def, preferred, link, max, empty }: { title: string; rows: ReportRow[]; def?: ReportDef; preferred: string[]; link?: string; max?: number; empty?: string }) {
   const cols = useMemo(() => compactColumns(rows, def, preferred, max), [rows, def, preferred, max]);
   return (
     <Card title={title} actions={link ? <Link to={link} className="small">Full report →</Link> : undefined} className="mini-table">
-      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <Empty>Nothing yet.</Empty>}
+      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <Empty>{empty ?? "Nothing to show right now."}</Empty>}
     </Card>
   );
 }
@@ -116,7 +116,7 @@ function Freshness({ m, status }: { m: MarketOverview; status: Status | null }) 
         {status && <>
           <div><span className="muted">Market</span> <span className={`badge ${status.market_open ? "pos" : "neutral"}`}>{status.market_open ? "open" : "closed"}</span></div>
           <div><span className="muted">Last sweep</span> <AsOf ts={status.last_sweep_at} label="" /></div>
-          <div><span className="muted">IV history</span> <b>{status.iv_history_days}</b> days · <span className="muted">EOD chains</span> <b>{status.option_eod_days}</b> days</div>
+          <div><span className="muted">IV history</span> <b>{status.iv_history_days}</b> {plural(status.iv_history_days, "day")} · <span className="muted">EOD chains</span> <b>{status.option_eod_days}</b> {plural(status.option_eod_days, "day")}</div>
         </>}
       </div>
     </Card>
@@ -130,21 +130,21 @@ function DashboardBody({ m, defs, status }: { m: MarketOverview; defs: ReportDef
       <IndexCards m={m} />
       <SectorStrip m={m} />
       <div className="grid-main-side">
-        <MiniTable title="Unusual option volume" rows={m.unusual_options} def={d("unusual-option-volume")} max={7}
-          preferred={["symbol", "option_volume", "rel_volume", "pct_call", "sentiment", "change_pct", "iv30"]} link="/reports/unusual-option-volume" />
+        <MiniTable title="Unusual option volume" rows={m.unusual_options} empty={m.empty_notes.unusual_options} def={d("unusual-option-volume")} max={7}
+          preferred={["symbol", "option_volume", "rel_volume", "vol_oi", "pct_call", "sentiment", "iv30"]} link="/reports/unusual-option-volume" />
         <VixCard m={m} />
       </div>
       <div className="grid-3">
-        <MiniTable title="Top gainers" rows={m.gainers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=gainers" />
-        <MiniTable title="Top losers" rows={m.losers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=losers" />
-        <MiniTable title="IV movers" rows={m.iv_movers} def={d("iv-movers")} preferred={["symbol", "iv30", "iv30_chg_1d", "iv30_chg_pct", "iv_rank"]} link="/reports/iv-movers" />
+        <MiniTable title="Top gainers" rows={m.gainers} empty={m.empty_notes.gainers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=gainers" />
+        <MiniTable title="Top losers" rows={m.losers} empty={m.empty_notes.losers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=losers" />
+        <MiniTable title="IV movers" rows={m.iv_movers} empty={m.empty_notes.iv_movers} def={d("iv-movers")} preferred={["symbol", "iv30", "iv30_chg_1d", "iv30_chg_pct", "iv_rank"]} link="/reports/iv-movers" />
       </div>
       <div className="grid-3">
-        <MiniTable title="Earnings today" rows={m.earnings_today} def={d("earnings-calendar")} preferred={["symbol", "time", "implied_move", "avg_abs_move", "iv_rank"]} link="/reports/earnings-calendar" />
-        <MiniTable title="Earnings tomorrow" rows={m.earnings_tomorrow} def={d("earnings-calendar")} preferred={["symbol", "time", "implied_move", "avg_abs_move", "iv_rank"]} />
+        <MiniTable title="Earnings today" rows={m.earnings_today} empty={m.empty_notes.earnings_today} def={d("earnings-calendar")} preferred={["symbol", "time", "implied_move", "avg_abs_move", "iv_rank"]} link="/reports/earnings-calendar" />
+        <MiniTable title="Earnings next session" rows={m.earnings_tomorrow} empty={m.empty_notes.earnings_tomorrow} def={d("earnings-calendar")} preferred={["symbol", "time", "implied_move", "avg_abs_move", "iv_rank"]} />
         <Freshness m={m} status={status} />
       </div>
-      <MiniTable title="Watchlist" rows={m.watchlist} preferred={["symbol", "name", "price", "change_pct", "iv30", "iv_rank", "next_earnings"]} max={8} link="/watchlists" />
+      <MiniTable title="Watchlist" rows={m.watchlist} empty={m.empty_notes.watchlist} preferred={["symbol", "name", "price", "change_pct", "iv30", "iv_rank", "next_earnings"]} max={8} link="/watchlists" />
     </div>
   );
 }

@@ -108,7 +108,7 @@ function SkewBody({ s, setExpiry }: { s: Skew; setExpiry: (e: string) => void })
       { name: "Call IV", data: s.points.map((x) => [x.strike, x.call_iv]), color: p.series[0] },
       { name: "Put IV", data: s.points.map((x) => [x.strike, x.put_iv]), color: p.series[1] },
     ]
-    : [{ name: "IV by delta", data: s.by_delta.map((x) => [x.delta, x.iv]), color: p.series[0] }], [s, mode, p]);
+    : [{ name: "IV by delta", data: s.by_delta.map((x) => [x.delta < 0 ? 1 + x.delta : x.delta, x.iv] as [number, number | null]).sort((a, b) => a[0] - b[0]), color: p.series[0] }], [s, mode, p]);
   const hist = useMemo<LineSeries[]>(() => [
     { name: "25Δ skew (put − call)", data: s.history.map((h) => [h.date, h.skew25_30]), color: p.series[0] },
     { name: "Put skew (put25 − ATM)", data: s.history.map((h) => [h.date, h.put_skew_30]), color: p.series[1] },
@@ -118,7 +118,7 @@ function SkewBody({ s, setExpiry }: { s: Skew; setExpiry: (e: string) => void })
       <Card><ExpiryPills expiries={s.expiries} value={s.expiry} onChange={setExpiry} /></Card>
       <Card title={`IV smile · ${s.expiry} (${s.dte} DTE)`} actions={
         <Segmented label="Smile axis" value={mode} onChange={setMode} options={[{ value: "strike", label: "By strike" }, { value: "delta", label: "By delta" }]} />
-      } subtitle={mode === "delta" ? "x = signed delta: puts negative, calls positive" : undefined}>
+      } subtitle={mode === "delta" ? "x = call delta; puts shown as 1 + Δ (put −0.25 → 0.75)" : undefined}>
         <Smile xFmt={mode === "strike" ? "num" : "num2"} series={smile} spot={mode === "strike" ? s.spot : null} />
       </Card>
       <Card title="30-day skew history" subtitle="vol points">
