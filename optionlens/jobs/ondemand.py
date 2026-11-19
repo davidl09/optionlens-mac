@@ -3,10 +3,10 @@ fundamentals. Concurrent requests for the same symbol share one fetch (per-symbo
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from ..analytics.calendar import NY, close_time, is_market_open, last_completed_session, now_ny
+from ..analytics.calendar import now_ny
 from ..models import normalize_symbol
 from ..net import FetchError
 from ..repo import bars as bars_repo
@@ -14,9 +14,11 @@ from ..repo import cache as cache_repo
 from ..repo import options as options_repo
 from ..sources import nasdaq
 from . import chains, prices
+from ._util import final_since, session_date
 from .universe import UnknownSymbol, ensure_symbol
 
-__all__ = ["ensure_fresh", "ensure_history", "fetch_cached", "UnknownSymbol", "CACHE_TTL_S"]
+__all__ = ["ensure_fresh", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "UnknownSymbol",
+           "CACHE_TTL_S", "NEGATIVE_TTL_S"]
 
 _locks: dict[str, asyncio.Lock] = {}
 
@@ -29,13 +31,14 @@ def _lock(key: str) -> asyncio.Lock:
 
 
 def is_stale(fetched_at: datetime | None, now: datetime, max_age_s: float) -> bool:
-    """Missing; or older than max_age_s while the market is open; or older than the last close otherwise."""
+    """Missing; or, until the current session's closing data has arrived (open, or close..final_since),
+    older than max_age_s; afterwards, fetched before final_since (i.e. not the closing snapshot)."""
     if fetched_at is None:
         return True
-    if is_market_open(now):
+    final = final_since(session_date(now))
+    if now < final:
         return (now - fetched_at).total_seconds() > max_age_s
-    last = last_completed_session(now)
-    return fetched_at < datetime.combine(last, close_time(last), NY)
+    return fetched_at < final
 
 
 async def ensure_fresh(symbol: str, max_age_s: float = 120) -> bool:
@@ -87,29 +90,50 @@ def _fetcher(kind: str, symbol: str, asset: str, params: dict) -> Callable[[], A
     }[kind]
 
 
+NEGATIVE_TTL_S = 6 * H     # "no data" answers (None, e.g. ETF financials/profile) are re-asked after 6 h
+
+
+def cache_key(kind: str, symbol: str, **params: Any) -> str:
+    """http_cache key of a `fetch_cached` payload (the one place that knows the key format)."""
+    return ":".join([kind, normalize_symbol(symbol), *(f"{k}={params[k]}" for k in sorted(params))])
+
+
+def peek_cached(kind: str, symbol: str, **params: Any) -> tuple[Any, datetime] | None:
+    """(payload, fetched_at) stored for kind/symbol regardless of age, without fetching (sync)."""
+    return cache_repo.cache_get_any(cache_key(kind, symbol, **params))
+
+
+def _fresh(hit: tuple[Any, datetime] | None, ttl: float) -> bool:
+    if hit is None:
+        return False
+    max_age = NEGATIVE_TTL_S if hit[0] is None else ttl
+    return (datetime.now(timezone.utc) - hit[1]).total_seconds() <= max_age
+
+
 async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
     """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL.
+    A None answer (Nasdaq has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
     params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
     cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
     ttl = CACHE_TTL_S[kind]
     symbol = normalize_symbol(symbol)
-    key = ":".join([kind, symbol, *(f"{k}={params[k]}" for k in sorted(params))])
-    hit = await asyncio.to_thread(cache_repo.cache_get, key, ttl)
-    if hit is not None:
-        return hit
+    key = cache_key(kind, symbol, **params)
+    hit = await asyncio.to_thread(cache_repo.cache_get_any, key)
+    if _fresh(hit, ttl):
+        return hit[0]
     async with _lock(f"cache:{key}"):
-        hit = await asyncio.to_thread(cache_repo.cache_get, key, ttl)
-        if hit is not None:
-            return hit
+        hit = await asyncio.to_thread(cache_repo.cache_get_any, key)
+        if _fresh(hit, ttl):
+            return hit[0]
         row = await ensure_symbol(symbol)
         asset = "etf" if row["kind"] == "etf" else "stocks"
         try:
             payload = await _fetcher(kind, symbol, asset, params)()
         except FetchError:
-            stale = await asyncio.to_thread(cache_repo.cache_get_any, key)
-            if stale is None:
+            if hit is None:
                 raise
-            return stale[0]
-        if payload is not None:
-            await asyncio.to_thread(cache_repo.cache_put, key, payload)
+            return hit[0]
+        if payload is None and hit is not None and hit[0] is not None:
+            return hit[0]           # keep serving older real data over a "no data" answer
+        await asyncio.to_thread(cache_repo.cache_put, key, payload)
         return payload

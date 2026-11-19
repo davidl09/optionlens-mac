@@ -387,3 +387,21 @@ def test_rank_trade_ideas(ca):
     assert {i["family"] for i in only["by_edge"]} == {"vertical"}
     risks = [i["max_loss"] for i in ideas["by_edge"] + ideas["by_win_rate"] if i["family"] != "seasonality"]
     assert all(r >= st.MIN_IDEA_RISK for r in risks)            # no near-zero-risk (locked quote) ideas
+    real = [i for i in ideas["by_edge"] if i["family"] != "seasonality"]
+    assert all(i["pop"] >= st.MIN_EDGE_POP for i in real)           # no far-OTM lottery tickets ranked by edge
+    wins = [i for i in ideas["by_win_rate"] if i["family"] != "seasonality"]
+    assert all(i["edge"] >= st.MIN_WIN_EDGE for i in wins)          # no negative-EV tiny-credit spreads by PoP
+
+
+def test_earnings_before_expiry_compares_the_reaction_day():
+    from datetime import datetime, timezone
+    from optionlens.analytics.chain import ChainArrays
+    fri, mon = date(2026, 11, 20), date(2026, 11, 27)
+    kw = dict(expiry=[fri, mon], strike=[100, 100], right=["C", "C"], bid=[1, 2], ask=[1.1, 2.1], last=[1, 2],
+              volume=[1, 1], oi=[1, 1], iv=[0.3, 0.3], delta=[0.5, 0.5], gamma=[0, 0], theta=[0, 0], vega=[0, 0],
+              spot=100.0, asof=datetime(2026, 11, 18, 18, tzinfo=timezone.utc))
+    # amc on expiry Friday: reacts the next session, after the Friday expiry
+    amc = ChainArrays.from_columns(**kw, next_earnings=fri, next_reaction=date(2026, 11, 23))
+    assert amc.earnings_before_expiry().tolist() == [False, True]
+    bmo = ChainArrays.from_columns(**kw, next_earnings=fri, next_reaction=fri)
+    assert bmo.earnings_before_expiry().tolist() == [True, True]

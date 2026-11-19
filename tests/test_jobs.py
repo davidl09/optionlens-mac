@@ -71,8 +71,10 @@ def test_eod_and_daily_schedules():
 
 
 def test_all_spec_jobs_defined():
-    assert set(scheduler.JOBS) == {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
-                                   "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune"}
+    spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
+            "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune"}
+    # services.alerts.install() may add its own digest job when it has been imported by other tests
+    assert set(scheduler.JOBS) - {"digest_morning"} == spec
     assert scheduler.next_run_at("eod", ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
 
 
@@ -129,8 +131,9 @@ def _seed_symbols_and_bars():
     bars_repo.upsert_bars(hist)          # through 2026-11-18
 
 
-async def test_sweep_pipeline(tmpdb, mocked_cboe):
+async def test_sweep_pipeline(tmpdb, mocked_cboe, monkeypatch):
     _seed_symbols_and_bars()
+    monkeypatch.setattr(chains, "now_ny", lambda: ny(2026, 11, 19, 15, 50))   # intraday sweep writes metrics
     seen = []
     hooks.on_sweep_complete.append(lambda day, syms: seen.append((day, syms)))
     try:
@@ -170,7 +173,7 @@ async def test_eod_writes_archive_and_bars(tmpdb, mocked_cboe, monkeypatch):
         hooks.on_eod.clear()
     day = date(2026, 11, 19)
     assert detail.startswith("2026-11-19:")
-    assert got == [(day, ["AAPL", "EMPTY"])]   # bars from every quote of the day (EMPTY has no options)
+    assert got == [(day, ["AAPL"])]   # bars from final chain fetches only (EMPTY: quote without a chain)
     n = status_repo.row_counts()["option_eod"]
     assert 0 < n <= 3386 and options_repo.eod_dates() == [day]
     b = bars_repo.bars_on(day)["AAPL"]
@@ -218,6 +221,46 @@ async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_cboe, monke
     assert all(res) and calls == ["AAPL"]
     row = symbols_repo.get_symbol("AAPL")
     assert row["kind"] == "stock" and row["in_universe"] is False and row["optionable"] is True
+
+
+async def test_fetch_cached_caches_no_data_answers_for_negative_ttl(tmpdb, monkeypatch):
+    symbols_repo.upsert_symbols([{"symbol": "SPY", "name": "SPDR S&P 500", "kind": "etf"}])
+    calls = []
+
+    async def no_profile(symbol):
+        calls.append(symbol)
+        return None
+
+    monkeypatch.setattr(nasdaq, "fetch_profile", no_profile)
+    assert await ondemand.fetch_cached("profile", "SPY") is None
+    assert await ondemand.fetch_cached("profile", "spy") is None
+    assert calls == ["SPY"]                                       # the None answer was cached
+    payload, fetched = ondemand.peek_cached("profile", "SPY")
+    assert payload is None and fetched.tzinfo
+    real_now = datetime.now(timezone.utc)
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real_now + timedelta(seconds=ondemand.NEGATIVE_TTL_S + 60)
+
+    monkeypatch.setattr(ondemand, "datetime", Later)
+    assert await ondemand.fetch_cached("profile", "SPY") is None
+    assert calls == ["SPY", "SPY"]                                # re-asked after the negative TTL
+
+
+async def test_fetch_cached_keeps_older_real_payload_over_no_data(tmpdb, monkeypatch):
+    symbols_repo.upsert_symbols([{"symbol": "AAPL", "name": "Apple", "kind": "stock"}])
+    answers = [{"CompanyName": "Apple Inc."}, None]
+
+    async def profile(symbol):
+        return answers.pop(0)
+
+    monkeypatch.setattr(nasdaq, "fetch_profile", profile)
+    monkeypatch.setitem(ondemand.CACHE_TTL_S, "profile", 0)      # always stale -> always refetch
+    assert await ondemand.fetch_cached("profile", "AAPL") == {"CompanyName": "Apple Inc."}
+    assert await ondemand.fetch_cached("profile", "AAPL") == {"CompanyName": "Apple Inc."}
+    assert ondemand.peek_cached("profile", "AAPL")[0] == {"CompanyName": "Apple Inc."}
 
 
 # ----------------------------------------------------------------------------- prices
@@ -275,8 +318,8 @@ async def test_scheduler_start_bootstraps_and_stops(tmpdb, monkeypatch):
             return name
         return fn
 
-    jobs = {n: scheduler.Job(n, fake(n), j.schedule, j.catch_up) for n, j in scheduler.JOBS.items()}
-    monkeypatch.setattr(scheduler, "JOBS", jobs)
+    jobs = {n: scheduler.Job(n, fake(n), j.schedule, j.catch_up) for n, j in scheduler.JOBS.items() if j.catch_up}
+    monkeypatch.setattr(scheduler, "JOBS", jobs)   # (non-catch-up jobs such as digests never run at start)
     await scheduler.start()
     await scheduler.start()                      # idempotent
     for _ in range(100):

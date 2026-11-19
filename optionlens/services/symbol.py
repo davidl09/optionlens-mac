@@ -20,7 +20,6 @@ from .errors import BadRequest
 RANGES = {"1m": 31, "3m": 92, "6m": 183, "1y": 366, "3y": 365 * 3 + 1, "5y": 365 * 5 + 2,
           "10y": 365 * 10 + 3, "max": None}
 SPY = "SPY"
-MIN_OPTION_VOLUME_DAYS = 5   # prior stored days needed for the 20d average option volume
 
 
 def range_start(rng: str) -> date | None:
@@ -88,17 +87,14 @@ def events(symbol: str) -> dict:
 # ----------------------------------------------------------------------------- summary
 def _option_volume(symbol: str) -> dict:
     h = metrics_repo.history(symbol, cols=["call_volume", "put_volume", "call_oi", "put_oi"])
-    out = {"call_volume": None, "put_volume": None, "avg_option_volume_20d": None, "rel_option_volume": None,
-           "pc_volume_ratio": None, "total_oi": None}
+    out = {"call_volume": None, "put_volume": None, "avg_option_volume_20d": None, "avg_option_volume_days": 0,
+           "rel_option_volume": None, "pc_volume_ratio": None, "total_oi": None}
     if not len(h["date"]):
         return out
     cv, pv = h["call_volume"][-1], h["put_volume"][-1]
-    tot = h["call_volume"] + h["put_volume"]
-    prior = tot[:-1][-20:]
-    prior = prior[np.isfinite(prior)]
-    avg = float(prior.mean()) if len(prior) >= MIN_OPTION_VOLUME_DAYS else None
+    avg, days = stats.prior_option_volume_avg(h["call_volume"][:-1], h["put_volume"][:-1])
     today_tot = cv + pv
-    out.update(call_volume=ctx.num(cv), put_volume=ctx.num(pv), avg_option_volume_20d=avg,
+    out.update(call_volume=ctx.num(cv), put_volume=ctx.num(pv), avg_option_volume_20d=avg, avg_option_volume_days=days,
                rel_option_volume=float(today_tot / avg) if avg and np.isfinite(today_tot) else None,
                pc_volume_ratio=float(pv / cv) if cv and np.isfinite(pv) and cv > 0 else None,
                total_oi=ctx.num(h["call_oi"][-1] + h["put_oi"][-1]))

@@ -1,10 +1,14 @@
-"""Settings from environment variables `OPTIONLENS_*` (read once, immutable)."""
+"""Settings from environment variables `OPTIONLENS_*` (read once, immutable, validated: a bad value
+raises ValueError naming the variable at startup)."""
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Callable, TypeVar
+
+T = TypeVar("T")
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -12,6 +16,19 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 def _env(name: str, default: str | None = None) -> str | None:
     v = os.environ.get(f"OPTIONLENS_{name}")
     return v if v not in (None, "") else default
+
+
+def _num(name: str, default: str, cast: Callable[[str], T]) -> T:
+    raw = _env(name, default)
+    try:
+        return cast(raw)
+    except ValueError:
+        raise ValueError(f"OPTIONLENS_{name}={raw!r} is not a valid {cast.__name__}") from None
+
+
+# numeric settings that schedules/limiters divide by or loop on: must be > 0
+_POSITIVE = ("port", "sweep_interval_min", "option_eod_retention_days", "cboe_concurrency", "cboe_rps",
+             "nasdaq_rps", "smtp_port")
 
 
 @dataclass(frozen=True)
@@ -36,6 +53,13 @@ class Settings:
     smtp_to: str | None
     tz: str = "America/New_York"
 
+    def __post_init__(self) -> None:
+        bad = [f"OPTIONLENS_{n.upper()}={getattr(self, n)} must be > 0" for n in _POSITIVE if getattr(self, n) <= 0]
+        if self.universe_stocks < 0:
+            bad.append(f"OPTIONLENS_UNIVERSE_STOCKS={self.universe_stocks} must be >= 0")
+        if bad:
+            raise ValueError("invalid settings: " + "; ".join(bad))
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "optionlens.duckdb"
@@ -46,18 +70,18 @@ def load_settings() -> Settings:
     return Settings(
         data_dir=Path(_env("DATA_DIR", "~/.local/share/optionlens")).expanduser(),
         host=_env("HOST", "127.0.0.1"),
-        port=int(_env("PORT", "8473")),
-        universe_stocks=int(_env("UNIVERSE_STOCKS", "1000")),
+        port=_num("PORT", "8473", int),
+        universe_stocks=_num("UNIVERSE_STOCKS", "1000", int),
         etf_file=Path(_env("ETF_FILE", str(PACKAGE_DIR / "etfs.txt"))).expanduser(),
-        sweep_interval_min=int(_env("SWEEP_INTERVAL_MIN", "30")),
-        option_eod_retention_days=int(_env("OPTION_EOD_RETENTION_DAYS", "730")),
-        risk_free_rate=float(_env("RISK_FREE_RATE", "0.04")),
-        cboe_concurrency=int(_env("CBOE_CONCURRENCY", "3")),
-        cboe_rps=float(_env("CBOE_RPS", "3")),
-        nasdaq_rps=float(_env("NASDAQ_RPS", "4")),
+        sweep_interval_min=_num("SWEEP_INTERVAL_MIN", "30", int),
+        option_eod_retention_days=_num("OPTION_EOD_RETENTION_DAYS", "730", int),
+        risk_free_rate=_num("RISK_FREE_RATE", "0.04", float),
+        cboe_concurrency=_num("CBOE_CONCURRENCY", "3", int),
+        cboe_rps=_num("CBOE_RPS", "3", float),
+        nasdaq_rps=_num("NASDAQ_RPS", "4", float),
         ntfy_url=_env("NTFY_URL"),
         smtp_host=_env("SMTP_HOST"),
-        smtp_port=int(_env("SMTP_PORT", "587")),
+        smtp_port=_num("SMTP_PORT", "587", int),
         smtp_user=_env("SMTP_USER"),
         smtp_password=_env("SMTP_PASSWORD"),
         smtp_from=_env("SMTP_FROM"),

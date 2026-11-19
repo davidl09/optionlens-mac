@@ -23,11 +23,14 @@ from typing import Any, Awaitable, Callable, Mapping, Sequence
 import anyio.from_thread
 import numpy as np
 
+from ..analytics import earnings as earn_a
 from ..analytics import vol
 from ..analytics.calendar import NY, is_trading_day, now_ny
 from ..analytics.chain import ChainArrays
+from ..analytics.stats import bar_arrays_from_columns
 from ..analytics.strategies import close_dt
-from ..analytics.dividends import PARITY_BAND, PARITY_DTE, implied_yield_from_chain, trailing_yield
+from ..analytics.dividends import (PARITY_BAND, PARITY_DTE, TRAILING_COVERAGE_DAYS, covers_trailing_year,
+                                   implied_yield_from_chain, trailing_yield)
 from ..config import get_settings
 from ..jobs import hooks, ondemand
 from ..models import Bar, Dividend, EarningsEvent, OptionContract, normalize_symbol
@@ -167,16 +170,16 @@ def _index_q(symbol: str, kind: str | None) -> float | None:
 
 def dividend_yield(symbol: str, spot: float | None, chain_arrays: ChainArrays | None = None,
                    day: date | None = None) -> float:
-    """Continuous q: indices by default table; symbols with dividend history: trailing-12m / spot;
-    otherwise (Nasdaq has no history for NYSE/ARCA listings) implied by put-call parity on the
-    chain (0 when not estimable)."""
+    """Continuous q: indices by default table; symbols whose stored dividend history covers the
+    trailing year: trailing-12m / spot; otherwise (Nasdaq has no history for NYSE/ARCA listings; a
+    calendar-only row is not a history) implied by put-call parity on the chain (0 when not estimable)."""
     sym = normalize_symbol(symbol)
     row = symbols_repo.get_symbol(sym)
     q = _index_q(sym, row and row["kind"])
     if q is not None:
         return q
     divs = div_repo.for_symbol(sym)
-    if divs:
+    if covers_trailing_year(divs, day or today()):
         return trailing_yield(divs, spot, day or today())
     ca = chain_arrays if chain_arrays is not None else load_chain_arrays(sym, ensure_fresh=False)
     if ca is None:
@@ -202,7 +205,8 @@ def dividend_yield_map(spots: Mapping[str, float]) -> dict[str, float]:
     """Bulk dividend_yield for {symbol: spot} (no per-symbol queries)."""
     def build():
         kinds = {r["symbol"]: r["kind"] for r in symbols_repo.list_symbols()}
-        return kinds, div_repo.symbols_with_history(), div_repo.trailing_sum(today())
+        return (kinds, div_repo.symbols_with_history(covering=today() - timedelta(days=TRAILING_COVERAGE_DAYS)),
+                div_repo.trailing_sum(today()))
     kinds, with_hist, ttm = _memoized("div_inputs", build)
     implied = None
     out = {}
@@ -269,16 +273,18 @@ def metrics_series(symbol: str, cols: list[str]) -> dict[str, dict[date, float |
 
 # ============================================================================ IV rank / calendars
 def iv_rank_info(symbol: str) -> dict:
-    """{iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from stored iv30 history."""
+    """{iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from stored iv30 history
+    (vol.iv_rank_current: last 252 rows, rank only when current)."""
     h = metrics_repo.history(normalize_symbol(symbol), cols=["iv30"])
-    return vol.iv_rank_percentile(h["iv30"].tolist())
+    return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), metrics_repo.latest_date())
 
 
 def iv_rank_all() -> dict[str, dict]:
     """iv_rank_info for every symbol with stored metrics (one query; cached per sweep)."""
     def build():
-        return {s: vol.iv_rank_percentile(c["iv30"].tolist())
-                for s, c in metrics_repo.history_bulk(["iv30"], last_n=252).items()}
+        session = metrics_repo.latest_date()
+        return {s: vol.iv_rank_current(_dates(c["date"]), c["iv30"].tolist(), session)
+                for s, c in metrics_repo.history_bulk(["iv30"], last_n=vol.IV_RANK_ROWS).items()}
     return _memoized("iv_rank_all", build)
 
 
@@ -290,6 +296,33 @@ def next_earnings_map() -> dict[str, EarningsEvent]:
 def next_exdiv_map() -> dict[str, Dividend]:
     """{symbol: first ex-dividend on/after today} (cached per sweep)."""
     return _memoized("next_exdiv", lambda: div_repo.next_ex(today()))
+
+
+EVENT_VAR_YEARS = 4
+
+
+def universe_event_variance() -> float | None:
+    """Median one-day earnings event variance across universe symbols with enough stored events
+    (analytics.earnings.universe_event_variance; the model fallback for symbols with too few prior
+    events). Uses all stored past events, not only those before a given trade (cached per sweep)."""
+    def build():
+        t = today()
+        start = t - timedelta(days=round(365.25 * EVENT_VAR_YEARS))
+        by: dict[str, list[EarningsEvent]] = {}
+        for e in earn_repo.between(start, t - timedelta(days=1), symbols_repo.universe_symbols()):
+            by.setdefault(e.symbol, []).append(e)
+        syms = [s for s, evs in by.items() if len(evs) >= earn_a.MIN_EVENTS_FOR_VAR]
+        bars = bars_repo.bars_since(start - timedelta(days=14), syms) if syms else {}
+        return earn_a.universe_event_variance(
+            [m for _, m in earn_a.reaction_log_moves(bar_arrays_from_columns(bars[s]), by[s])]
+            for s in syms if s in bars)
+    return _memoized("universe_event_var", build)
+
+
+def expected_reaction_day(ev: EarningsEvent) -> date:
+    """Reaction session of a future event as known today: bmo -> event day, amc/unknown -> next
+    session (unknown counts as amc, so windows include the event)."""
+    return earn_a.reaction_window(ev.date, ev.timing)[1]
 
 
 def next_earnings_date(symbol: str) -> date | None:
@@ -349,7 +382,7 @@ def _contracts(symbol: str, cols: dict[str, np.ndarray], expiries: list[date]) -
 
 def _arrays(symbol: str, cols: dict[str, np.ndarray], *, r: float, asof: datetime | None = None, q: float = 0.0,
             hv30: float | None = None,
-            iv_rank: float | None = None, next_earnings: date | None = None,
+            iv_rank: float | None = None, next_event: EarningsEvent | None = None,
             with_src: bool = False) -> ChainArrays | None:
     """ChainArrays from option_latest / option_eod columns (+ underlying; as-of = max ts unless
     given); None without a usable spot."""
@@ -368,7 +401,8 @@ def _arrays(symbol: str, cols: dict[str, np.ndarray], *, r: float, asof: datetim
         gamma=col("gamma"), theta=col("theta"), vega=col("vega"), spot=spot,
         asof=asof or as_utc(cols["ts"].max()),
         symbol=symbol, osi=cols["osi"], src=_contracts(symbol, cols, expiries) if with_src else None,
-        r=r, q=q, hv30=hv30, iv_rank=iv_rank, next_earnings=next_earnings)
+        r=r, q=q, hv30=hv30, iv_rank=iv_rank, next_earnings=next_event.date if next_event else None,
+        next_reaction=expected_reaction_day(next_event) if next_event else None)
 
 
 _derived: "weakref.WeakKeyDictionary[ChainArrays, dict]" = weakref.WeakKeyDictionary()
@@ -415,7 +449,7 @@ def load_chain_arrays(symbol: str, *, ensure_fresh: bool = True) -> ChainArrays 
         return None
     r = risk_free_rate()
     ca = _arrays(sym, cols, r=r, hv30=_hv30(sym), iv_rank=iv_rank_info(sym)["iv_rank"],
-                 next_earnings=next_earnings_date(sym), with_src=True)
+                 next_event=next_earnings_map().get(sym), with_src=True)
     if ca is None:
         return None
     ca = replace(ca, q=dividend_yield(sym, ca.spot, ca))
@@ -455,7 +489,7 @@ def load_universe_chain_arrays(symbols: Sequence[str] | None = None, right: str 
     for sym, cols in by.items():
         ev = earn.get(sym)
         ca = _arrays(sym, cols, r=r, q=qs.get(sym, 0.0), hv30=num((mets.get(sym) or {}).get("hv30")),
-                     iv_rank=(ranks.get(sym) or {}).get("iv_rank"), next_earnings=ev.date if ev else None)
+                     iv_rank=(ranks.get(sym) or {}).get("iv_rank"), next_event=ev)
         if ca is not None:
             out.append(ca)
     return out
@@ -508,6 +542,11 @@ class _SymbolEod:
         return self.days.get(d)
 
 
+def _dates(a: np.ndarray) -> list[date]:
+    """datetime64 column -> list[date] (vectorized as_date)."""
+    return np.asarray(a).astype("datetime64[D]").astype(object).tolist()
+
+
 class _SymbolIv:
     """Inputs of the SPEC §0.3 IV proxy for one symbol."""
 
@@ -515,11 +554,11 @@ class _SymbolIv:
 
     def __init__(self, symbol: str):
         m = metrics_repo.history(symbol, cols=[f"iv{t}" for t in self.TENORS] + ["hv30"])
-        self.by_date = {as_date(d): i for i, d in enumerate(m["date"])}
+        self.by_date = {d: i for i, d in enumerate(_dates(m["date"]))}
         self.iv = np.stack([m[f"iv{t}"] for t in self.TENORS], axis=1) if len(m["date"]) else np.zeros((0, 6))
         self.k = vol.iv_hv_ratio(m["iv30"], m["hv30"]) if len(m["date"]) else vol.IV_HV_DEFAULT_RATIO
         b = bars_repo.get_bars(symbol)
-        self.bar_pos = {as_date(d): i for i, d in enumerate(b["date"])}
+        self.bar_pos = {d: i for i, d in enumerate(_dates(b["date"]))}
         self.hv30 = vol.hv_series(b["close"], 30)
 
     def proxy(self, d: date, tenor_days: int) -> float | None:

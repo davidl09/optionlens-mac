@@ -46,6 +46,7 @@ class ChainArrays:
     dte: np.ndarray                 # int calendar days
     osi: np.ndarray                 # object: OSI codes (None when not supplied)
     src: np.ndarray                 # object: the source contract rows (None when not supplied)
+    next_reaction: date | None = None   # expected reaction session of the next earnings (timing-aware)
 
     def __len__(self) -> int:
         return len(self.strike)
@@ -67,6 +68,13 @@ class ChainArrays:
         out[self.exp_idx] = self.dte
         return out
 
+    def earnings_before_expiry(self) -> np.ndarray:
+        """bool per unique expiry: the next earnings REACTION session falls between the as-of date
+        and that expiry (an amc report on expiry day reacts after it, so it does not count). Falls
+        back to the event date when no reaction day is known."""
+        ev = self.next_reaction or self.next_earnings
+        return np.array([ev is not None and self.asof_date <= ev <= e for e in self.expiries], dtype=bool)
+
     def expiry_slices(self) -> list[slice]:
         """Contiguous row slice per unique expiry (rows are expiry-sorted)."""
         bounds = np.searchsorted(self.exp_idx, np.arange(len(self.expiries) + 1))
@@ -77,7 +85,8 @@ class ChainArrays:
                      delta, gamma, theta, vega, spot: float, asof: datetime, symbol: str = "",
                      osi: Sequence[str] | None = None, src: Sequence[Any] | None = None,
                      r: float = 0.0, q: float = 0.0, hv30: float | None = None,
-                     iv_rank: float | None = None, next_earnings: date | None = None) -> "ChainArrays":
+                     iv_rank: float | None = None, next_earnings: date | None = None,
+                     next_reaction: date | None = None) -> "ChainArrays":
         """Build from column sequences (e.g. a DB result). ``right`` holds "C"/"P"; None entries
         become NaN (volume/oi: 0); iv <= 0 means unknown. ``src`` (optional) are the source rows used
         by OptionRow outputs (chainmetrics.top_contracts / oi_changes)."""
@@ -118,7 +127,7 @@ class ChainArrays:
             iv=np.where(iv_a > 0, iv_a, np.nan),
             delta=col(delta)[order], gamma=col(gamma)[order], theta=col(theta)[order], vega=col(vega)[order],
             t=exp_t[ei] if n else np.zeros(0), dte=exp_dte[ei] if n else np.zeros(0, int),
-            osi=osi_a[order], src=src_a[order],
+            osi=osi_a[order], src=src_a[order], next_reaction=next_reaction,
         )
 
     @classmethod

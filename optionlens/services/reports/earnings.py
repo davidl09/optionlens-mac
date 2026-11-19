@@ -341,7 +341,8 @@ STRATEGY_SCREENER = ReportDef(
     STRAT_COLS, run_strategy_screener, ("avg_return", "desc"),
     ("Real stored EOD option mids are used when available (spread ≤ 25%); otherwise Black-Scholes with the "
      "SPEC IV proxy — see the pricing mix. Option history starts with the collector, so most trades are model-priced.",
-     "Expiry = first listed expiry on/after the exit date (≥ 2 days after for short premium)."))
+     "Expiry = first listed expiry on/after the exit date (≥ 2 days after for short premium).",
+     optbacktest.EVENT_VOL_NOTE))
 
 
 # ============================================================================ today's opportunities

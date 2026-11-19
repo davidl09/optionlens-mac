@@ -41,6 +41,15 @@ def latest_fetched_at(symbol: str) -> datetime | None:
     return aware(scalar("SELECT max(ts) FROM option_latest WHERE symbol = ?", [symbol]))
 
 
+def fetched_since(since: datetime, symbols: Sequence[str] | None = None) -> set[str]:
+    """Symbols (all, or among `symbols`) whose stored chain was fetched at/after `since`."""
+    syms = _syms(symbols)
+    return {r["symbol"] for r in query(
+        """SELECT DISTINCT symbol FROM option_latest WHERE ts >= ?
+           AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))""",
+        [utc_naive(since), syms, syms])}
+
+
 def get_chain(symbol: str, expiry: date | None = None) -> ChainSnapshot | None:
     """Stored chain (optionally one expiry) + stored quote as a ChainSnapshot, or None."""
     quote = get_quote(symbol)
@@ -143,14 +152,16 @@ def eod_for_osi(osi: str) -> dict[str, np.ndarray]:
     return columns(f"SELECT {_EOD_COLS} FROM option_eod WHERE osi = ? ORDER BY date", [osi])
 
 
-def prior_eod_date(before: date) -> date | None:
-    """Latest option_eod date strictly before `before`, or None."""
-    return scalar("SELECT max(date) FROM option_eod WHERE date < ?", [before])
+def prior_eod_date(before: date, symbol: str | None = None) -> date | None:
+    """Latest option_eod date strictly before `before` (that symbol's own latest when given), or None."""
+    return scalar("SELECT max(date) FROM option_eod WHERE date < ? AND (?::VARCHAR IS NULL OR symbol = ?)",
+                  [before, symbol, symbol])
 
 
 def prior_oi(before: date, symbol: str | None = None) -> dict[str, int]:
-    """{osi: oi} from the latest option_eod date < before (one symbol, or all when symbol is None)."""
-    d = prior_eod_date(before)
+    """{osi: oi} from the latest option_eod date < before — the symbol's own latest EOD date when
+    symbol is given (all symbols' latest common date otherwise); {} when there is none."""
+    d = prior_eod_date(before, symbol)
     if d is None:
         return {}
     rows = db.cursor().execute(

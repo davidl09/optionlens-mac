@@ -96,6 +96,21 @@ def iv_rank_percentile(history: Sequence[float | None], current: float | None = 
     return out
 
 
+IV_RANK_ROWS = 252   # stored daily rows in the IV rank window
+
+
+def iv_rank_current(dates: Sequence, iv30: Sequence[float | None], session) -> dict:
+    """The one IV rank rule for symbol pages and reports: `iv_rank_percentile` over the last
+    IV_RANK_ROWS stored rows (chronological ``dates`` / ``iv30``), and rank/percentile only when the
+    latest row is ``session`` (the current / last swept session) — a symbol not swept then is stale
+    (None), never shown as today's rank."""
+    vals = list(iv30)[-IV_RANK_ROWS:]
+    out = iv_rank_percentile(vals)
+    if session is None or not len(dates) or dates[-1] != session:
+        out["iv_rank"] = out["iv_percentile"] = None
+    return out
+
+
 # ----------------------------------------------------------------------------- implied vol
 def atm_iv_by_expiry(ca: ChainArrays) -> list[dict]:
     """Per expiry {expiry, dte, t, atm_iv}: at each strike average call & put IV (whichever is

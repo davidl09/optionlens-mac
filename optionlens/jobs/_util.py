@@ -1,17 +1,22 @@
-"""Helpers shared by collectors: session date, bounded concurrency, progress reporting."""
+"""Helpers shared by collectors: session date and closing-data boundary, bounded concurrency,
+progress reporting."""
 from __future__ import annotations
 
 import asyncio
 import logging
 from contextvars import ContextVar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Awaitable, Callable, Iterable, TypeVar
 
-from ..analytics.calendar import NY, OPEN, is_trading_day, now_ny, prev_trading_day
+from ..analytics.calendar import NY, OPEN, close_time, is_trading_day, now_ny, prev_trading_day
 from ..repo import jobs as jobs_repo
 
 log = logging.getLogger("optionlens.jobs")
 T = TypeVar("T")
+
+# CBOE data is ~15 min delayed; a fetch this long after the close (5 min margin) carries the closing
+# snapshot. The one boundary for "final" session data: EOD schedule/archive, daily bars, freshness.
+FINAL_DELAY_MIN = 20
 
 # Set by scheduler.run_job so long collectors can publish progress into job_runs.detail.
 current_run_id: ContextVar[int | None] = ContextVar("current_run_id", default=None)
@@ -22,6 +27,16 @@ def session_date(now: datetime | None = None) -> date:
     ts = (now or now_ny()).astimezone(NY)
     d = ts.date()
     return d if is_trading_day(d) and ts.time() >= OPEN else prev_trading_day(d)
+
+
+def session_close(day: date) -> datetime:
+    """Close of a trading session (aware NY; 13:00 on early-close days)."""
+    return datetime.combine(day, close_time(day), NY)
+
+
+def final_since(day: date) -> datetime:
+    """Earliest fetch time whose (delayed) data is the session's closing snapshot: close + FINAL_DELAY_MIN."""
+    return session_close(day) + timedelta(minutes=FINAL_DELAY_MIN)
 
 
 async def report_progress(detail: str) -> None:

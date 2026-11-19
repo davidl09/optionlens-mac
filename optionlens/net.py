@@ -41,9 +41,14 @@ class FetchError(Exception):
 
 
 class _TokenBucket:
+    """`rate` tokens/s (> 0); holds at most max(1, rate) tokens so a sub-1 rate still yields a token."""
+
     def __init__(self, rate: float):
+        if rate <= 0:
+            raise ValueError(f"rate must be > 0, got {rate}")
         self.rate = rate
-        self.tokens = rate
+        self.capacity = max(1.0, rate)
+        self.tokens = self.capacity
         self.updated = time.monotonic()
         self.lock = asyncio.Lock()
 
@@ -51,7 +56,7 @@ class _TokenBucket:
         async with self.lock:
             while True:
                 now = time.monotonic()
-                self.tokens = min(self.rate, self.tokens + (now - self.updated) * self.rate)
+                self.tokens = min(self.capacity, self.tokens + (now - self.updated) * self.rate)
                 self.updated = now
                 if self.tokens >= 1:
                     self.tokens -= 1

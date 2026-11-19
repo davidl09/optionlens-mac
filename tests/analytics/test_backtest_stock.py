@@ -33,15 +33,13 @@ def test_build_result_drawdown_cagr_sharpe():
     assert s["cagr"] == pytest.approx(1.3 ** (365.25 / 366) - 1)
     ch = np.array([0.2, -0.25, 130 / 90 - 1])
     assert s["sharpe"] == pytest.approx(ch.mean() / ch.std(ddof=1) * math.sqrt(252))
-    assert s["total_return"] == pytest.approx(1.10 * 0.95 - 1)
+    assert s["total_return"] == pytest.approx(0.30)                 # equity end / start − 1
     assert s["win_rate"] == 0.5 and s["total_pnl"] == 0.0
     assert s["real_count"] == 1 and s["model_count"] == 1
     assert s["avg_hold_days"] == pytest.approx((1 + 5) / 2)
     assert r["benchmark"] is None and r["notes"] == ["n"]
     assert r["equity"][1] == {"date": date(2024, 1, 2), "value": 120.0}
     assert sum(h["count"] for h in r["histogram"]) == 2 and len(r["histogram"]) == 5
-    noncomp = bt.build_result(trades, eq, None, [], compound=False)
-    assert noncomp["summary"]["total_return"] == pytest.approx(0.30)
 
 
 def test_build_result_flat_equity_and_empty():
@@ -145,6 +143,22 @@ def test_earnings_relative_entries_around_thanksgiving():
     assert r["trades"][0]["entry_date"] == date(2025, 11, 28)
 
 
+def test_unknown_timing_earnings_entries_do_not_peek_at_the_gap():
+    ds = cal.trading_days(date(2025, 11, 3), date(2025, 12, 31))
+    # realized: the big gap is on the event day (looks bmo), but timing is unknown before the event
+    bars = [Bar("T", d, c, c, c, c, 1) for d, c in ((d, 120.0 if d >= date(2025, 11, 12) else 100.0) for d in ds)]
+    evs = {"T": [EarningsEvent("T", date(2025, 11, 12), "unknown", None, None, None, None, None)]}
+    r = bt.backtest_stock({"T": bars}, {"type": "days_before_earnings", "n": 1},
+                          {"at_earnings_reaction": True}, earnings_by_symbol=evs)
+    (t,) = r["trades"]
+    assert t["entry_date"] == date(2025, 11, 11)          # before the earlier candidate (event day)
+    assert t["exit_date"] == date(2025, 11, 13)           # after the later candidate (next session)
+    assert any("unknown timing" in n for n in r["notes"])
+    r = bt.backtest_stock({"T": bars}, {"type": "days_after_earnings", "n": 0}, {"hold_days": 1},
+                          earnings_by_symbol=evs)
+    assert r["trades"][0]["entry_date"] == date(2025, 11, 13)
+
+
 def test_multi_symbol_equal_weight_equity_and_benchmark():
     a = growth_bars(10, 0.01, "A")
     b = growth_bars(10, 0.0, "B")
@@ -152,7 +166,8 @@ def test_multi_symbol_equal_weight_equity_and_benchmark():
     assert len(r["trades"]) == 2
     assert r["equity"][-1]["value"] == pytest.approx(10000 * 1.005 ** 9)
     assert r["benchmark"][-1]["value"] == pytest.approx(10000 * (1.01 ** 9 + 1) / 2)
-    assert r["summary"]["total_return"] == pytest.approx(1.01 ** 9 - 1)  # compounded trade returns
+    # overlapping trades of two symbols: total return follows the equal-weight equity, not Π(1+ret)
+    assert r["summary"]["total_return"] == pytest.approx(1.005 ** 9 - 1)
 
 
 # ---- entry rules ----------------------------------------------------------------------------------

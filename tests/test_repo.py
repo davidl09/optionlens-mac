@@ -142,6 +142,15 @@ def test_option_latest_and_eod(tmpdb, aapl):
     assert options.eod_dates() == [day] and status.distinct_dates("option_eod") == 1
     assert options.prior_oi(date(2026, 11, 20), "AAPL")[osi] == by_osi[osi].oi
     assert options.prior_oi(day) == {}
+    # a later EOD day stored for another symbol only: AAPL still compares with its own latest day
+    with db.write() as cur:
+        cur.execute("INSERT INTO option_eod (date, symbol, osi, expiry, strike, \"right\", oi) "
+                    "VALUES ('2026-11-20', 'MSFT', 'MSFT261218C00500000', '2026-12-18', 500, 'C', 7)")
+    assert options.prior_eod_date(date(2026, 11, 23)) == date(2026, 11, 20)          # global latest
+    assert options.prior_eod_date(date(2026, 11, 23), "AAPL") == day
+    assert options.prior_oi(date(2026, 11, 23), "AAPL")[osi] == by_osi[osi].oi       # not {} (no fake change)
+    assert options.prior_eod_date(date(2026, 11, 20), "MSFT") is None
+    db.cursor().execute("DELETE FROM option_eod WHERE symbol = 'MSFT'")
     assert options.prune_option_eod(date(2026, 11, 20)) == n
 
 
@@ -211,6 +220,9 @@ def test_dividends(tmpdb):
     with pytest.raises(ValueError):
         dividends.between(date(2026, 1, 1), date(2026, 2, 1), by="bogus")  # type: ignore[arg-type]
     assert dividends.symbols_with_history() == {"KO"}
+    first = min(d.ex_date for d in dividends.for_symbol("KO"))
+    assert dividends.symbols_with_history(covering=first) == {"KO"}
+    assert dividends.symbols_with_history(covering=first - timedelta(days=1)) == set()
 
 
 # ----------------------------------------------------------------------------- market
@@ -324,3 +336,11 @@ def test_option_latest_per_symbol_bulk_reads(tmpdb, aapl):
     assert len(near["osi"]) > 0 and np.all(np.abs(near["strike"] / spot - 1) <= 0.05)
     assert near["expiry"].min() >= np.datetime64("2026-12-01") and set(near["right"]) == {"C", "P"}
     assert options.near_atm_by_symbol(date(2026, 12, 1), date(2027, 6, 30), 0.05, symbols=["X"]) == {}
+
+
+def test_watchlist_symbols_keep_insertion_order(tmpdb):
+    w = user.create_watchlist("Order", ["TSLA", "AAPL", "MSFT"])
+    assert w["symbols"] == ["TSLA", "AAPL", "MSFT"]
+    assert user.update_watchlist(w["id"], symbols=["KO", "ZM", "AAPL", "BA"])["symbols"] == ["KO", "ZM", "AAPL", "BA"]
+    user.add_symbol(w["id"], "AMD")
+    assert user.get_watchlist(w["id"])["symbols"] == ["KO", "ZM", "AAPL", "BA", "AMD"]

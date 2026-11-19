@@ -13,7 +13,7 @@ from ..analytics.calendar import NY, next_trading_day
 from ..repo import market as market_repo
 from ..repo import quotes as quotes_repo
 from ..repo import user as user_repo
-from . import user
+from . import context, user
 from .reports import registry, universe
 from .reports.base import jsonable, today
 from .reports.common import bar_lists
@@ -52,8 +52,19 @@ def _val(f, i, k):
     return None if isinstance(v, float) and v != v else (v.item() if isinstance(v, np.generic) else v)
 
 
-def _rows(report_id: str, query: dict | None = None, n: int = TOP_N) -> list[dict]:
-    return registry.run_sync(report_id, query or {})["rows"][:n]
+def _panel(report_id: str, query: dict | None = None, n: int = TOP_N) -> tuple[list[dict], str]:
+    """(top n rows, why-empty text): the report's run-time notes (not its static limitations), else a
+    generic 'no row matches' line."""
+    res = registry.run_sync(report_id, query or {})
+    static = set(registry.get(report_id).notes)
+    why = " ".join(x for x in res["notes"] if x not in static)
+    return res["rows"][:n], why or f"No rows match the {res['title']} report's default criteria right now."
+
+
+def _earnings_note(day, label: str, any_events: bool) -> str:
+    if not any_events:
+        return "No upcoming earnings events stored (the calendar job collects today−10 … today+90 daily)."
+    return f"No tracked company reports {label} ({day.isoformat()})."
 
 
 def _build() -> dict:
@@ -73,13 +84,21 @@ def _build() -> dict:
     tom = next_trading_day(t)
     cal = registry.run_sync("earnings-calendar", {"start": t.isoformat(), "end": tom.isoformat()})["rows"]
     wls = user_repo.list_watchlists()
+    panels = {
+        "gainers": _panel("market-movers", {"side": "gainers"}), "losers": _panel("market-movers", {"side": "losers"}),
+        "unusual_options": _panel("unusual-option-volume"), "iv_movers": _panel("iv-movers"),
+    }
+    any_events = bool(context.next_earnings_map())
+    panels["earnings_today"] = ([r for r in cal if r["date"] == t.isoformat()][:15],
+                                _earnings_note(t, "today", any_events))
+    panels["earnings_tomorrow"] = ([r for r in cal if r["date"] == tom.isoformat()][:15],
+                                   _earnings_note(tom, "on the next session", any_events))
+    panels["watchlist"] = (user.watchlist_table(wls[0]["id"])["rows"] if wls else [],
+                           "Empty watchlist." if wls else "No watchlist yet — create one under My › Watchlists.")
     return {
         "asof": f.asof, "indices": indices, **_vix(), "sectors": sectors,
-        "gainers": _rows("market-movers", {"side": "gainers"}), "losers": _rows("market-movers", {"side": "losers"}),
-        "unusual_options": _rows("unusual-option-volume"), "iv_movers": _rows("iv-movers"),
-        "earnings_today": [r for r in cal if r["date"] == t.isoformat()][:15],
-        "earnings_tomorrow": [r for r in cal if r["date"] == tom.isoformat()][:15],
-        "watchlist": user.watchlist_table(wls[0]["id"])["rows"] if wls else [],
+        **{k: rows for k, (rows, _) in panels.items()},
+        "empty_notes": {k: why for k, (rows, why) in panels.items() if not rows},
     }
 
 

@@ -23,6 +23,19 @@ def upsert_bars(bars: Iterable[Bar], replace: bool = True) -> int:
                             "INSERT OR REPLACE" if replace else "INSERT OR IGNORE")
 
 
+def upsert_closes(bars: Iterable[Bar]) -> int:
+    """Close-only bars (sources without OHLC, e.g. CBOE SPX/RUT history): set the close of stored
+    (symbol, date) rows, keeping their open/high/low/volume; insert dates not stored yet. Returns rows offered."""
+    uniq = list({(b.symbol, b.date): b for b in bars}.values())
+    with db.write() as cur:
+        cur.execute("CREATE OR REPLACE TEMP TABLE _closes (symbol VARCHAR, date DATE, close DOUBLE)")
+        n = insert_arrow(cur, "_closes", to_columns(uniq, ("symbol", "date", "close")))
+        cur.execute("""INSERT INTO daily_bars (symbol, date, close) SELECT symbol, date, close FROM _closes
+                       ON CONFLICT (symbol, date) DO UPDATE SET close = EXCLUDED.close""")
+        cur.execute("DROP TABLE _closes")   # (rolled back with the transaction on error)
+        return n
+
+
 def replace_bars(symbol: str, bars: Iterable[Bar]) -> int:
     """Replace a symbol's whole history (used after a split is detected). Returns rows written."""
     uniq = list({b.date: b for b in bars if b.symbol == symbol}.values())

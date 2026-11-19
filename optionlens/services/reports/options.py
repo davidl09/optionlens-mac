@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from ...analytics import probability as prob
+from ...analytics import stats
 from ...analytics.calendar import next_trading_day
 from ...repo import metrics as metrics_repo
 from ...repo import options as options_repo
@@ -34,8 +35,12 @@ UOV_COLS = (
     *group(C.G_OPT, (
         Col("option_volume", "Option Volume", "int"),
         Col("avg_option_volume_20d", "Avg Volume (20d)", "int",
-            description="Mean daily option volume of the prior stored days (needs ≥ 5)"),
-        Col("rel_volume", "Relative Volume", "ratio", description="Option volume / 20d average option volume"),
+            description="Mean daily option volume of up to 20 prior collected days"),
+        Col("avg_days", "Avg days", "int", description="Prior collected days in the average (target 20)"),
+        Col("rel_volume", "Relative Volume", "ratio", description="Option volume / average option volume"),
+        Col("vol_oi", "Vol / OI", "ratio", description="Option volume / total open interest"),
+        Col("criterion", "Criterion", "badge",
+            description="Relative volume; or, for symbols with no prior collected day, the interim Vol / OI test"),
     )),
     *pick(C.FLOW, "call_volume", "put_volume", "pct_call", "pct_put", "call_premium", "put_premium"),
     *C.MONEYNESS,
@@ -54,22 +59,41 @@ UOV_COLS = (
         Col("next_day_chg", "% Chg Next Day", "pct_signed"),
     )),
 )
-_UOV_RENAME = {"rel_volume": "rel_option_volume"}
+_UOV_RENAME = {"rel_volume": "rel_option_volume", "avg_days": "opt_history_days"}
+CRIT_REL, CRIT_INTERIM = "Rel. volume", "Vol/OI (interim)"
 
 
 def run_uov(p: RunParams) -> Output:
+    """Relative option volume ≥ min_rel_volume for symbols with ≥ 1 prior collected day; symbols with
+    none (fresh install / new symbol) qualify on the labelled interim test volume / total OI ≥ min_vol_oi."""
     if p["lookback_days"] > 0:
         return _uov_history(p)
     f = frame()
-    m = (base_mask(f, p) & ge(f["option_volume"], p["min_volume"])
-         & ge(f["rel_option_volume"], p["min_rel_volume"]))
+    ov, oi = f["option_volume"], f["total_oi"]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        vol_oi = np.where(oi > 0, ov / oi, np.nan)
+    has_avg = np.nan_to_num(f["opt_history_days"]) > 0
+    hit = np.where(has_avg, ge(f["rel_option_volume"], p["min_rel_volume"]), ge(vol_oi, p["min_vol_oi"]))
+    m = base_mask(f, p) & ge(ov, p["min_volume"]) & hit
     hist_keys = ("record_date", "appearances", "close", "next_close", "next_day_chg")
     none = np.full(len(f), None, dtype=object)
-    out = frame_output(f, m, UOV_COLS, rename=_UOV_RENAME, extra={k: none for k in hist_keys},
-                       sort=("rel_volume", True))
-    if f.opt_history_days < 5:
-        out.notes.append(f"Only {f.opt_history_days} prior day(s) of option volume collected so far: relative "
-                         "volume needs ≥ 5, so this report stays empty until then (use option-volume-leaders).")
+    extra = {k: none for k in hist_keys}
+    extra.update(vol_oi=vol_oi, criterion=np.where(has_avg, CRIT_REL, CRIT_INTERIM).astype(object))
+    out = frame_output(f, m, UOV_COLS, rename=_UOV_RENAME, extra=extra,
+                       sort=("rel_volume", True) if f.opt_history_days > 0 else ("vol_oi", True))
+    if not out.rows:
+        out.notes.append("No symbol qualifies right now: option volume ≥ "
+                         f"{p['min_volume']:,} and relative option volume ≥ {p['min_rel_volume']:g}× its average "
+                         f"(or, with no prior collected day, volume / open interest ≥ {p['min_vol_oi']:g})."
+                         if len(f) and np.isfinite(ov).any() else "No option chains collected yet (first sweep pending).")
+    n_interim = int((m & ~has_avg).sum())
+    if n_interim:
+        out.notes.append(f"Interim criterion for {n_interim} symbol(s) with no prior collected day of option "
+                         f"volume: option volume / total open interest ≥ {p['min_vol_oi']:g} (relative volume "
+                         "needs an average, which is never estimated).")
+    if 0 < f.opt_history_days < stats.OPTION_VOLUME_AVG_DAYS:
+        out.notes.append(f"Average option volume uses the {f.opt_history_days} prior collected day(s) available so "
+                         f"far (target {stats.OPTION_VOLUME_AVG_DAYS}); see the Avg days column.")
     return out
 
 
@@ -103,6 +127,8 @@ UOV = ReportDef(
     "moneyness breakdown and upcoming catalysts.",
     (p_num("min_rel_volume", "Min relative volume", 2.0, 0, step=0.5),
      p_int("min_volume", "Min option volume", 1000, 0, step=500),
+     p_num("min_vol_oi", "Interim: min volume / OI", 0.5, 0, step=0.05,
+           help="Used only for symbols with no prior collected day of option volume"),
      p_int("lookback_days", "Lookback days", 0, 0, 10, help="> 0: show stored daily snapshots instead"),
      KIND, *SCOPE),
     UOV_COLS, run_uov, ("rel_volume", "desc"),
@@ -318,9 +344,7 @@ def run_option_screener(p: RunParams) -> Output:
         parts["underlying"].append(np.full(n, ca.spot))
         parts["iv_rank"].append(np.full(n, np.nan if ca.iv_rank is None else ca.iv_rank))
         parts["mu"].append(np.full(n, ca.r - ca.q))
-        ne = ca.next_earnings
-        flag = np.array([ne is not None and ca.asof_date <= ne <= e for e in ca.expiries])[ca.exp_idx]
-        parts["earnings_before_expiry"].append(flag)
+        parts["earnings_before_expiry"].append(ca.earnings_before_expiry()[ca.exp_idx])
     if not parts["symbol"]:
         return Output([])
     c = {k: np.concatenate(v) for k, v in parts.items()}

@@ -2,10 +2,11 @@
 per-strategy BacktestTrade list."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Sequence
 
 from ..analytics import calendar as cal
+from ..analytics.calendar import now_ny
 from ..analytics import chainmetrics as cm
 from ..analytics import earnings as earn_a
 from ..analytics import optbacktest
@@ -24,15 +25,27 @@ EXIT_RANGE = (0, 10)       # trading days after the reaction day
 
 
 def _upcoming(symbol: str) -> EarningsEvent | None:
-    return ctx.next_earnings_map().get(symbol)
+    ev = ctx.next_earnings_map().get(symbol)
+    return ev if ev is not None and is_pending(ev) else None
+
+
+def is_pending(ev: EarningsEvent, now: datetime | None = None) -> bool:
+    """The event's (expected) reaction session has not started yet: reaction day after today, or
+    today before the open. A bmo event once today's session runs is past (no post-event straddle)."""
+    now = now or now_ny()
+    r = reaction_day(ev)
+    return r > now.date() or (r == now.date() and now.time() < cal.OPEN)
+
+
+def _past(events: Sequence[EarningsEvent]) -> list[EarningsEvent]:
+    """Events whose reaction session has started (stored history incl. today's bmo after the open)."""
+    t = ctx.today()
+    return [e for e in events if e.date <= t and not is_pending(e)]
 
 
 def reaction_day(ev: EarningsEvent) -> date:
-    """Expected reaction session of a future event: bmo -> event day, amc/unknown -> next session
-    (unknown is treated as amc so the implied move includes the event)."""
-    if ev.timing == "bmo":
-        return ev.date if cal.is_trading_day(ev.date) else cal.next_trading_day(ev.date)
-    return cal.next_trading_day(ev.date)
+    """Expected reaction session of a future event (context.expected_reaction_day)."""
+    return ctx.expected_reaction_day(ev)
 
 
 def next_reaction_date(symbol: str) -> date | None:
@@ -42,7 +55,7 @@ def next_reaction_date(symbol: str) -> date | None:
 
 def _past_rows(symbol: str, events: Sequence[EarningsEvent], bars: Sequence[Bar]) -> list[dict]:
     iv30 = ctx.metrics_series(symbol, ["iv30"])["iv30"]
-    return earn_a.event_rows([e for e in events if e.date < ctx.today()], bars,
+    return earn_a.event_rows(_past(events), bars,
                              implied_moves=_stored_implied(symbol, events, bars), iv30_by_date=iv30)
 
 
@@ -108,11 +121,10 @@ def _inputs(symbol: str) -> dict:
     sym = row["symbol"]
     bars = ctx.load_bars(sym, live=False)
     spot = bars[-1].close if bars else None
-    ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
-    return {"symbol": sym, "bars": bars, "events": [e for e in earn_repo.for_symbol(sym) if e.date < ctx.today()],
+    return {"symbol": sym, "bars": bars, "events": _past(earn_repo.for_symbol(sym)),
             "provider": ctx.DbPriceProvider(), "rate": ctx.rate_fn(),
-            "div_yield": ca.q if ca is not None else ctx.dividend_yield(sym, spot),
-            "is_index": row["kind"] == "index"}
+            "div_yield": ctx.dividend_yield_map({sym: spot}).get(sym, 0.0) if spot else 0.0,   # bulk inputs, cached
+            "is_index": row["kind"] == "index", "universe_event_var": ctx.universe_event_variance()}
 
 
 def strategies(symbol: str, lookback: int = 12, entry: int = -1, exit: int = 1) -> dict:

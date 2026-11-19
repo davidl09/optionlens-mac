@@ -193,10 +193,10 @@ def test_earnings_windows_around_thanksgiving():
     bars, _ = _earn_bars()
     ev = EarningsEvent("TST", date(2025, 11, 26), "amc", "Q3", None, None, None, None)
     a = ob.bar_arrays(bars)
-    (e, react, d0, d1), = ob.earnings_windows(a, [ev], 12, -1, 1)
-    assert react == date(2025, 11, 28) and d0 == date(2025, 11, 26) and d1 == date(2025, 12, 1)
-    (_, _, d0, d1), = ob.earnings_windows(a, [ev], 12, -3, 0)
-    assert d0 == date(2025, 11, 24) and d1 == date(2025, 11, 28)
+    (w,) = ob.earnings_windows(a, [ev], 12, -1, 1)
+    assert w.first == w.last == date(2025, 11, 28) and w.entry == date(2025, 11, 26) and w.exit == date(2025, 12, 1)
+    (w,) = ob.earnings_windows(a, [ev], 12, -3, 0)
+    assert w.entry == date(2025, 11, 24) and w.exit == date(2025, 11, 28)
     future = EarningsEvent("TST", date(2026, 1, 28), "bmo", None, None, None, None, None)
     assert len(ob.earnings_windows(a, [ev, future], 12, -1, 1)) == 1
 
@@ -215,7 +215,10 @@ def test_earnings_long_stock_and_option_trades():
     # exit 2025-12-01 (Mon): first expiry >= exit is Fri 2025-12-05 (long premium)
     assert ls["legs"] == "+1 C 100 / +1 P 100 2025-12-05" and ls["pricing"] == "model"
     exp = date(2025, 12, 5)
-    v0 = 100 * (model(100, 100, date(2025, 11, 26), exp, "C") + model(100, 100, date(2025, 11, 26), exp, "P"))
+    # no prior events and no universe fallback -> default event variance 0.05² added before the reaction day
+    T0 = cal.year_fraction_to_expiry(exp, close_dt(date(2025, 11, 26)))
+    iv0 = (IV ** 2 + 0.05 ** 2 / T0) ** 0.5
+    v0 = 100 * (model(100, 100, date(2025, 11, 26), exp, "C", iv0) + model(100, 100, date(2025, 11, 26), exp, "P", iv0))
     v1 = 100 * (model(112, 100, date(2025, 12, 1), exp, "C") + model(112, 100, date(2025, 12, 1), exp, "P"))
     assert ls["entry_value"] == pytest.approx(v0) and ls["exit_value"] == pytest.approx(v1)
     assert ls["ret"] == pytest.approx((v1 - v0) / v0)
@@ -266,3 +269,75 @@ def test_earnings_summary_rows():
     ls = next(r for r in res["rows"] if r["strategy"] == "long-stock")
     assert ls["win_rate"] == 0.5 and ls["best"] == pytest.approx(0.12) and ls["worst"] == pytest.approx(0.0)
     assert ls["avg_pnl"] == pytest.approx(600.0) and ls["real_count"] == 2
+
+
+# ----------------------------------------------------------------------------- earnings event variance (model)
+def test_event_variance_uses_prior_events_only():
+    from optionlens.analytics import earnings as ea
+    moves = [(date(2025, m, 1), 0.04) for m in (1, 4, 7, 10)] + [(date(2025, 12, 1), 0.50)]
+    assert ea.event_variance(moves, date(2025, 11, 1)) == (pytest.approx(0.04 ** 2), "symbol")
+    # the huge December move is after the event: never used (no look-ahead); 3 prior -> universe fallback
+    assert ea.event_variance(moves, date(2025, 8, 1), 0.003) == (0.003, "universe")
+    assert ea.event_variance(moves, date(2025, 8, 1)) == (ea.DEFAULT_EVENT_VAR, "default")
+    assert ea.universe_event_variance([[0.1] * 4, [0.2] * 5, [0.9]]) == pytest.approx((0.01 + 0.04) / 2)
+
+
+def _quarterly_earnings(move: float, n: int = 13):
+    """Flat 100 bars except an amc earnings move of ±`move` (log, alternating) every ~quarter."""
+    days = cal.trading_days(date(2022, 1, 3), date(2025, 12, 31))
+    events, px, closes = [], 100.0, []
+    react_idx = {60 + 63 * k for k in range(n)}
+    for i, d in enumerate(days):
+        if i in react_idx:
+            px *= float(np.exp(move if len(events) % 2 == 0 else -move))
+            events.append(EarningsEvent("TST", days[i - 1], "amc", None, None, None, None, None))
+        closes.append((d, px))
+    return bars_from(closes), events
+
+
+def test_long_straddle_fair_when_moves_match_history():
+    bars, events = _quarterly_earnings(0.06)
+    res = ob.earnings_strategy_backtest("TST", bars, events, provider=FakeProvider(iv=0.20), rate=R,
+                                        lookback=8, entry=-1, exit=1, strategies=["long-straddle", "short-straddle"])
+    long_, short = res["rows"]
+    assert long_["trades"] == 8 and long_["model_count"] == 8
+    # priced with the event variance the realized moves match: small edge either way, not hundreds of %
+    assert abs(long_["avg_return"]) < 0.25 and abs(short["avg_return"]) < 0.25
+    assert any("base_iv²·T + event_var" in n for n in res["notes"]) and "8 symbol" in res["notes"][1]
+    # without the event term the same strangle-like long premium looked like a huge winner
+    plain = ob._Market("TST", ob.bar_arrays(bars), FakeProvider(iv=0.20), R, 0.0)
+    a = plain.bars
+    w = ob.earnings_windows(a, events, 1, -1, 1)[0]
+    spec = next(s for s in ob.EARNINGS_STRATEGIES if s.id == "long-straddle")
+    assert ob._earnings_trade(plain, spec, w.entry, w.exit)["ret"] > 0.5
+
+
+def test_event_vol_crush_uses_pre_event_base_iv():
+    class DatedIv(FakeProvider):
+        def iv_proxy(self, d, symbol, tenor_days):
+            self.iv_calls.append(d)
+            return 0.20 if d < date(2025, 11, 28) else 0.90     # HV proxy inflated after the move
+
+    bars, _ = _earn_bars()
+    ev = EarningsEvent("TST", date(2025, 11, 26), "amc", None, None, None, None, None)
+    prov = DatedIv()
+    (t,) = ob.earnings_strategy_trades("TST", bars, [ev], "long-call-atm", provider=prov, rate=R,
+                                       universe_event_var=0.03 ** 2)
+    exp, d1 = date(2025, 12, 5), date(2025, 12, 1)
+    assert t["exit_value"] == pytest.approx(100 * model(112, 100, d1, exp, "C", 0.20))
+    assert date(2025, 12, 1) not in prov.iv_calls and "(universe)" in t["note"]
+
+
+def test_unknown_timing_windows_span_both_candidates_without_lookahead():
+    days = cal.trading_days(date(2025, 9, 1), date(2025, 12, 31))
+    gap_on_event_day = {d: (110.0 if d >= date(2025, 11, 12) else 100.0) for d in days}   # realized: bmo-like
+    bars = bars_from(sorted(gap_on_event_day.items()))
+    ev = EarningsEvent("TST", date(2025, 11, 12), "unknown", None, None, None, None, None)
+    (w,) = ob.earnings_windows(ob.bar_arrays(bars), [ev], 12, -1, 1)
+    # placement ignores the realized gap: enter before the event day, exit after the next session
+    assert (w.first, w.last) == (date(2025, 11, 12), date(2025, 11, 13))
+    assert w.entry == date(2025, 11, 11) and w.exit == date(2025, 11, 14)
+    res = ob.earnings_strategy_backtest("TST", bars, [ev], provider=FakeProvider(), rate=R, strategies=["long-stock"])
+    assert res["rows"][0]["best"] == pytest.approx(0.10) and any("unknown timing" in n for n in res["notes"])
+    (t,) = ob.earnings_strategy_trades("TST", bars, [ev], "long-stock", provider=FakeProvider(), rate=R)
+    assert "reaction 2025-11-12 or 2025-11-13" in t["note"]

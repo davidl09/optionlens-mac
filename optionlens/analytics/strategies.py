@@ -766,10 +766,7 @@ def screen(strategy_id: str, ca: ChainArrays, params: ScreenParams = ScreenParam
     last_exp = ca.exp_idx[idx[:, -1]] if spec.calendar else e0
     exp_arr = np.array(ca.expiries, dtype=object)
     earn = ca.next_earnings
-    if earn is not None and earn >= ca.asof_date:
-        earn_flag = np.array([earn <= e for e in ca.expiries])[last_exp]
-    else:
-        earn_flag = np.zeros(n, bool)
+    earn_flag = ca.earnings_before_expiry()[last_exp]
 
     cols.update(
         symbol=np.full(n, ca.symbol, dtype=object), strategy=np.full(n, strategy_id, dtype=object),
@@ -910,6 +907,8 @@ _IDEA_FAMILY = {"single": "single", "vertical": "vertical", "condor_fly": "condo
 
 
 MIN_IDEA_RISK = 1.0  # $ per unit: below this, edge = EV/risk is meaningless (locked/stale quotes)
+MIN_EDGE_POP = 0.20  # "by edge" ideas need this PoP: far-OTM lottery tickets otherwise dominate EV(HV)/risk
+MIN_WIN_EDGE = 0.0   # "by win rate" ideas need EV(HV)/risk ≥ this: else tiny-credit far-OTM spreads dominate PoP
 
 
 def _idea(row: dict) -> dict:
@@ -929,7 +928,7 @@ def rank_trade_ideas(ca: ChainArrays, params: ScreenParams = ScreenParams(), n: 
 
     edge = EV(HV)/max_loss (only finite-risk ideas with a known HV30); win rate = PoP. Candidates
     come from the strategy screeners; ``families`` filters (vertical/condor_fly/single/straddle/
-    calendar). ``seasonality`` (a Seasonality.by_month row for the current month, keys month, avg,
+    calendar). by_edge keeps ideas with PoP ≥ MIN_EDGE_POP, by_win_rate those with edge ≥ MIN_WIN_EDGE. ``seasonality`` (a Seasonality.by_month row for the current month, keys month, avg,
     median, pos_pct, n) appends a seasonality idea to both lists when n ≥ 5.
     """
     by_edge, by_pop = [], []
@@ -943,8 +942,9 @@ def rank_trade_ideas(ca: ChainArrays, params: ScreenParams = ScreenParams(), n: 
         ml = res.cols["max_loss"]
         risk_ok = np.isfinite(ml) & (ml >= MIN_IDEA_RISK)
         e = np.where(risk_ok, res.cols["ev_hv"] / np.where(risk_ok, ml, 1.0), np.nan)
-        res.cols["_edge"] = e
-        res.cols["_pop"] = np.where(risk_ok, res.cols["pop"], np.nan)
+        pop = res.cols["pop"]
+        res.cols["_edge"] = np.where(np.nan_to_num(pop) >= MIN_EDGE_POP, e, np.nan)
+        res.cols["_pop"] = np.where(risk_ok & (np.nan_to_num(e, nan=-np.inf) >= MIN_WIN_EDGE), pop, np.nan)
         for key, bucket in (("_edge", by_edge), ("_pop", by_pop)):
             o = res.order_by(key)
             o = [i for i in o[:n] if np.isfinite(res.cols[key][i])]

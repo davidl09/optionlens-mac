@@ -148,7 +148,7 @@ def run_compare_straddle(p: RunParams) -> Output:
         i = pos.get(sym)
         r.update(iv30=_fv(f["iv30"][i]) if i is not None else None, hv20=_fv(f["hv20"][i]) if i is not None else None,
                  iv_rank=ca.iv_rank, next_earnings=ne,
-                 earnings_in_window=bool(ne is not None and ca.asof_date <= ne <= ca.expiries[e]))
+                 earnings_in_window=bool(ca.earnings_before_expiry()[e]))
         rows.append(r)
     return Output(rows, asof=f.asof)
 

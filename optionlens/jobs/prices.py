@@ -23,6 +23,12 @@ HISTORY_YEARS = 10
 REFRESH_DAYS = 30
 SPLIT_TOLERANCE = 0.02   # median |stored/new - 1| above this => adjusted history => refetch all
 CATCH_UP_OVERLAP_DAYS = 7
+COVER_SLACK_DAYS = 7     # a full refetch may start this much after the expected first date (holidays, listing)
+
+
+def history_start(today: date) -> date:
+    """First date of a full (10y) history fetch."""
+    return today - timedelta(days=365 * HISTORY_YEARS + 3)
 
 
 def _asset(kind: str) -> nasdaq.AssetClass:
@@ -41,13 +47,21 @@ async def fetch_bars(symbol: str, kind: str, start: date, end: date) -> list[Bar
     return await nasdaq.fetch_history(symbol, _asset(kind), start, end)
 
 
+def store_bars(bars: list[Bar]) -> int:
+    """Upsert fetched bars. Close-only bars (no open/high/low, e.g. CBOE SPX/RUT) only set the close, so
+    OHLC built by the EOD job is kept. Returns rows offered."""
+    close_only = [b.open is None and b.high is None and b.low is None for b in bars]
+    return (bars_repo.upsert_closes([b for b, c in zip(bars, close_only) if c])
+            + bars_repo.upsert_bars([b for b, c in zip(bars, close_only) if not c]))
+
+
 def plan_backfill(symbols: list[dict], coverage: dict[str, dict], today: date, last_session: date) -> list[tuple[dict, date]]:
     """(symbol row, fetch start) for symbols without history (10y) or whose last bar predates last_session."""
     plan = []
     for row in symbols:
         cov = coverage.get(row["symbol"])
         if cov is None:
-            plan.append((row, today - timedelta(days=365 * HISTORY_YEARS + 3)))
+            plan.append((row, history_start(today)))
         elif cov["last"] < last_session:
             plan.append((row, cov["last"] - timedelta(days=CATCH_UP_OVERLAP_DAYS)))
     return plan
@@ -56,9 +70,9 @@ def plan_backfill(symbols: list[dict], coverage: dict[str, dict], today: date, l
 async def backfill_symbol(row: dict, start: date | None = None) -> int:
     """Fetch and store bars for one symbols row from start (default 10y). Returns bars stored."""
     today = now_ny().date()
-    start = start or today - timedelta(days=365 * HISTORY_YEARS + 3)
+    start = start or history_start(today)
     bars = await fetch_bars(row["symbol"], row["kind"], start, today)
-    return await asyncio.to_thread(bars_repo.upsert_bars, bars) if bars else 0
+    return await asyncio.to_thread(store_bars, bars) if bars else 0
 
 
 async def prices_backfill(symbols: list[str] | None = None, limit: int | None = None) -> str:
@@ -95,18 +109,30 @@ def adjusted_since_stored(stored: dict[str, np.ndarray], new: list[Bar]) -> bool
     return bool(ratios) and float(np.median(np.abs(ratios))) > SPLIT_TOLERANCE
 
 
+def covers_history(full: list[Bar], stored_first: date, today: date) -> bool:
+    """True when a full refetch reaches back to the stored history's start (or, for histories longer
+    than a fresh backfill, to the backfill start), within COVER_SLACK_DAYS."""
+    expected = max(stored_first, history_start(today))
+    return bool(full) and min(b.date for b in full) <= expected + timedelta(days=COVER_SLACK_DAYS)
+
+
 async def refresh_symbol(row: dict) -> str:
-    """Refetch the last 30 days; on an adjustment mismatch refetch and replace the full history."""
-    today = now_ny().date()
+    """Refetch the last 30 days; on an adjustment mismatch refetch and replace the full history.
+    ValueError (stored history kept) when that refetch is empty or does not cover the stored history."""
+    sym, today = row["symbol"], now_ny().date()
     start = today - timedelta(days=REFRESH_DAYS)
-    new = await fetch_bars(row["symbol"], row["kind"], start, today)
-    stored = await asyncio.to_thread(bars_repo.get_bars, row["symbol"], start, today)
+    new = await fetch_bars(sym, row["kind"], start, today)
+    stored = await asyncio.to_thread(bars_repo.get_bars, sym, start, today)
     if adjusted_since_stored(stored, new):
-        full = await fetch_bars(row["symbol"], row["kind"], today - timedelta(days=365 * HISTORY_YEARS + 3), today)
-        await asyncio.to_thread(bars_repo.replace_bars, row["symbol"], full)
+        first = (await asyncio.to_thread(bars_repo.coverage, [sym]))[sym]["first"]
+        full = await fetch_bars(sym, row["kind"], min(first, history_start(today)), today)
+        if not covers_history(full, first, today):
+            got = f"from {min(b.date for b in full)}" if full else "no bars"
+            raise ValueError(f"{sym}: split refetch returned {got}, stored history starts {first}; kept")
+        await asyncio.to_thread(bars_repo.replace_bars, sym, full)
         return "replaced"
     if new:
-        await asyncio.to_thread(bars_repo.upsert_bars, new)
+        await asyncio.to_thread(store_bars, new)
     return "refreshed"
 
 

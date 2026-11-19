@@ -138,3 +138,14 @@ def test_skew_sign_on_synthetic_smile():
     assert sk0["skew25_30"] == pytest.approx(0.0, abs=1e-12) and sk0["put_skew_30"] == pytest.approx(0.0, abs=1e-12)
     inverted = vol.skew_30(_smile_chain(slope=0.4), 0.25)
     assert inverted["skew25_30"] < 0
+
+
+def test_iv_rank_current_window_and_staleness():
+    from datetime import date, timedelta
+    from optionlens.analytics import vol as v
+    days = [date(2025, 1, 1) + timedelta(days=i) for i in range(300)]
+    ivs = [0.9] * 48 + [0.2 + 0.001 * i for i in range(252)]          # old spike outside the 252-row window
+    cur = v.iv_rank_current(days, ivs, days[-1])
+    assert cur["iv_rank"] == pytest.approx(1.0) and cur["iv_high_52w"] == pytest.approx(0.451)
+    stale = v.iv_rank_current(days, ivs, days[-1] + timedelta(days=1))   # not swept in the last session
+    assert stale["iv_rank"] is None and stale["iv_percentile"] is None and stale["history_days"] == 252

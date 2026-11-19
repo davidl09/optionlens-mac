@@ -111,3 +111,13 @@ def test_dividend_summary_shape():
     nov = next(r for r in s["capture"] if r["ex_date"] == date(2025, 11, 10))
     assert nov["total_return"] == pytest.approx(0.0026)
     assert dv.dividend_summary("X", [], [], 10.0, ASOF)["next"] is None
+
+
+def test_covers_trailing_year_requires_a_year_of_history():
+    from datetime import date
+    from optionlens.analytics.dividends import covers_trailing_year
+    from optionlens.models import Dividend
+    one = [Dividend("X", date(2026, 11, 1), 0.5, None, None, None, "cash")]      # calendar-only row
+    assert not covers_trailing_year(one, date(2026, 11, 19)) and not covers_trailing_year([], date(2026, 11, 19))
+    year = one + [Dividend("X", date(2025, 11, 10), 0.5, None, None, None, "cash")]
+    assert covers_trailing_year(year, date(2026, 11, 19))

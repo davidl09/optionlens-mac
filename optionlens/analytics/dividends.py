@@ -58,6 +58,15 @@ def _ttm(divs: Sequence[Dividend], end: date, regular_only: bool) -> float:
                      and (not regular_only or is_regular(d))))
 
 
+TRAILING_COVERAGE_DAYS = 365   # stored history must reach back this far before trailing_yield is used
+
+
+def covers_trailing_year(divs: Sequence[Dividend], asof: date) -> bool:
+    """Stored dividends reach back ≥ TRAILING_COVERAGE_DAYS before asof (else a calendar-only row or
+    a short history would understate the trailing-12m sum)."""
+    return bool(divs) and min(d.ex_date for d in divs) <= asof - timedelta(days=TRAILING_COVERAGE_DAYS)
+
+
 def trailing_yield(divs: Sequence[Dividend], price: float | None, asof: date) -> float:
     """q for BSM: trailing-12-month cash dividends (all kinds, ex-date in (asof−365d, asof]) / price.
     0 when there are none or price is unknown."""

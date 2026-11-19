@@ -51,6 +51,9 @@ def trailing_sum(as_of: date, days: int = 365) -> dict[str, float]:
     return {r["symbol"]: float(r["amt"]) for r in rows}
 
 
-def symbols_with_history() -> set[str]:
-    """Symbols having any stored dividend."""
-    return {r["symbol"] for r in query("SELECT DISTINCT symbol FROM dividends")}
+def symbols_with_history(covering: date | None = None) -> set[str]:
+    """Symbols having any stored dividend; with ``covering``, only those whose earliest stored
+    ex-date is on/before it (history reaches back that far)."""
+    return {r["symbol"] for r in query(
+        "SELECT symbol FROM dividends GROUP BY symbol HAVING ?::DATE IS NULL OR min(ex_date) <= ?",
+        [covering, covering])}

@@ -117,8 +117,8 @@ MOVERS = (*DESC, *QUOTE, Col("rel_volume", "Rel Vol", "ratio", G_TECH), Col("avg
 # Notes shared by every frame-derived report.
 NOTE_IV_RANK = ("IV rank / IV percentile need ≥ 20 stored daily IV30 values (collected since the first "
                 "sweep); they are blank until then.")
-NOTE_OPT_AVG = ("Average / relative option volume need ≥ 5 prior collected days of option volume; blank "
-                "until then.")
+NOTE_OPT_AVG = ("Average option volume = mean of up to 20 prior collected days (fewer while history builds — "
+                "see the days column); blank when no prior day is collected yet (never estimated).")
 NOTE_DIVS = "Dividend data (yield, ex-dates) covers Nasdaq-listed securities only; NYSE/ARCA listings show blanks."
 NOTE_DELAY = "Quotes and chains are ~15 min delayed (CBOE delayed feed)."
 

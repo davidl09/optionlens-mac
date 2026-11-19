@@ -54,7 +54,9 @@ def expiry_infos(ca: ChainArrays) -> list[dict]:
 
 
 def _prior_oi(ca: ChainArrays) -> tuple[date | None, dict[str, int] | None]:
-    d = options_repo.prior_eod_date(ca.asof_date)
+    """(the symbol's own latest EOD date before the chain, its {osi: oi}); (None, None) without one,
+    so no OI change is shown (never the full OI as 'change')."""
+    d = options_repo.prior_eod_date(ca.asof_date, ca.symbol)
     return (d, options_repo.prior_oi(ca.asof_date, ca.symbol)) if d else (None, None)
 
 
@@ -170,7 +172,9 @@ def straddle(symbol: str) -> dict:
     return {"symbol": ca.symbol, "spot": ca.spot, "rows": cm.straddle_rows(ca), "backtest": bt}
 
 
-IDEA_PARAMS = strategies.ScreenParams(min_oi=50, max_spread_pct=0.20)   # tradeable legs only
+# tradeable legs only; anchor |delta| 0.10–0.90 keeps out lottery tickets and deep-ITM calendars whose
+# tiny, noisy debits make EV/risk meaningless
+IDEA_PARAMS = strategies.ScreenParams(min_oi=50, max_spread_pct=0.20, delta_min=0.10, delta_max=0.90)
 
 
 def _ideas(ca: ChainArrays) -> dict:

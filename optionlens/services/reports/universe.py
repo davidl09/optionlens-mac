@@ -28,9 +28,7 @@ from ...repo import user as user_repo
 
 FRAME_TTL_S = 900
 BARS_LOOKBACK_DAYS = 400          # calendar days of bars (52w highs, SMA200, 1y return, beta)
-HISTORY_ROWS = 252                # stored metrics rows per symbol (IV rank window)
-AVG_OPT_VOL_DAYS = 20
-MIN_AVG_OPT_VOL_DAYS = 5          # prior stored days needed before relative option volume is shown
+HISTORY_ROWS = vol.IV_RANK_ROWS   # stored metrics rows per symbol (IV rank window)
 SENTIMENT_THRESHOLD = 0.70
 BENCH = "SPY"
 
@@ -45,7 +43,7 @@ class Frame:
     asof: datetime | None             # newest quote timestamp
     cols: dict[str, np.ndarray]
     iv_history_days: int              # distinct stored metrics dates (max over symbols)
-    opt_history_days: int             # prior stored days available for avg option volume (max)
+    opt_history_days: int             # prior stored days in the avg option volume (max over symbols, ≤ 20)
     built_at: float
 
     def __len__(self) -> int:
@@ -277,7 +275,7 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
         iv = h["iv30"]
         C["iv_history_days"][i] = int(np.isfinite(iv).sum())
         if has_today:
-            r = vol.iv_rank_percentile(iv.tolist())
+            r = vol.iv_rank_current(dts.astype("datetime64[D]").astype(object).tolist(), iv.tolist(), mdate)
             C["iv_rank"][i], C["iv_pct"][i] = _f(r["iv_rank"]), _f(r["iv_percentile"])
             C["iv_high_52w"][i], C["iv_low_52w"][i] = _f(r["iv_high_52w"]), _f(r["iv_low_52w"])
             prev = iv[:-1]
@@ -291,12 +289,10 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
             C["skew_rank"][i] = _f(sk["iv_rank"])
             prem = vol.iv_rank_percentile((iv - h["hv30"]).tolist())
             C["iv_hv_rank"][i] = _f(prem["iv_rank"])
-            ov = (np.nan_to_num(h["call_volume"]) + np.nan_to_num(h["put_volume"]))[:-1]
-            okd = np.isfinite(h["call_volume"][:-1]) | np.isfinite(h["put_volume"][:-1])
-            ov = ov[okd][-AVG_OPT_VOL_DAYS:]
-            C["opt_history_days"][i] = len(ov)
-            if len(ov) >= MIN_AVG_OPT_VOL_DAYS:
-                C["avg_option_volume_20d"][i] = float(np.mean(ov))
+            avg, days = stats.prior_option_volume_avg(h["call_volume"][:-1], h["put_volume"][:-1])
+            C["opt_history_days"][i] = days
+            if avg is not None:
+                C["avg_option_volume_20d"][i] = avg
     cv, pv = C["call_volume"], C["put_volume"]
     with np.errstate(divide="ignore", invalid="ignore"):
         C["option_volume"] = np.where(np.isfinite(cv) | np.isfinite(pv), np.nan_to_num(cv) + np.nan_to_num(pv), np.nan)

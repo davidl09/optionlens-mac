@@ -12,7 +12,7 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from optionlens.analytics import calendar as cal
-from optionlens.analytics.earnings import reaction_from_arrays
+from optionlens.analytics.earnings import UNKNOWN_TIMING_NOTE, reaction_window
 from optionlens.analytics.stats import BarArrays, bar_arrays, rsi_series, sma_series
 from optionlens.models import Bar, EarningsEvent
 
@@ -59,19 +59,16 @@ def equity_stats(equity: Sequence[tuple[date, float]]) -> dict:
 
 def build_result(
     trades: list[dict], equity: list[tuple[date, float]],
-    benchmark: list[tuple[date, float]] | None, notes: list[str], *, compound: bool = True,
+    benchmark: list[tuple[date, float]] | None, notes: list[str],
 ) -> dict:
     """BacktestResult. win_rate = share of trades with pnl > 0; avg/median over non-None ret;
-    total_return = Π(1+ret)−1 by exit date (compound) or equity end/start − 1; cagr from the
+    total_return = equity end/start − 1 (so it agrees with the equity curve and CAGR also when
+    trades of several symbols overlap; for one symbol's sequential trades = Π(1+ret)−1); cagr from the
     equity curve's first/last value and calendar span; sharpe = mean/std(ddof=1)·√252 of daily
     equity changes (None when < 2 changes or flat); max_drawdown ≤ 0; avg_hold_days in trading
     days."""
     rets = [t["ret"] for t in trades if t.get("ret") is not None]
-    by_exit = sorted((t for t in trades if t.get("ret") is not None), key=lambda t: t["exit_date"])
-    if compound:
-        total = float(np.prod([1.0 + t["ret"] for t in by_exit]) - 1.0) if by_exit else None
-    else:
-        total = (equity[-1][1] / equity[0][1] - 1.0) if equity and equity[0][1] else None
+    total = float(equity[-1][1] / equity[0][1] - 1.0) if trades and equity and equity[0][1] else None
     es = equity_stats(equity)
     holds = [len(cal.trading_days(t["entry_date"], t["exit_date"])) - 1 for t in trades]
     summary = {
@@ -105,24 +102,22 @@ def _cross(cond: np.ndarray) -> np.ndarray:
     return cond & ~prev
 
 
-def _reactions(a: BarArrays, events: Sequence[EarningsEvent]) -> list[date]:
-    out = set()
-    for ev in events:
-        r, _ = reaction_from_arrays(a, ev.date, ev.timing)
-        if r is not None:
-            out.add(r)
-    return sorted(out)
+def _reactions(events: Sequence[EarningsEvent]) -> list[tuple[date, date]]:
+    """(first, last) possible reaction sessions per event, known before the event (no look-ahead;
+    see earnings.reaction_window)."""
+    return sorted({reaction_window(ev.date, ev.timing) for ev in events})
 
 
-def entry_signals(a: BarArrays, entry: Mapping, reactions: Sequence[date], lo: int) -> np.ndarray:
+def entry_signals(a: BarArrays, entry: Mapping, reactions: Sequence[tuple[date, date]], lo: int) -> np.ndarray:
     """Boolean entry signal per bar (only bars with index ≥ lo can fire).
 
     Rules (signal evaluated at the close; entry at that close):
       every_n_days n: bars lo, lo+n, lo+2n, …
       day_of_month day: first bar of each month whose day-of-month ≥ day
       month_of_year month[, day]: first bar of that month with day-of-month ≥ day (default 1)
-      days_before_earnings n (default 1): bar add_trading_days(reaction, −n)
-      days_after_earnings n (default 0): bar add_trading_days(reaction, n)
+      days_before_earnings n (default 1): bar add_trading_days(first possible reaction day, −n)
+      days_after_earnings n (default 0): bar add_trading_days(last possible reaction day, n)
+      (reactions = (first, last) windows; they differ only for unknown timing)
       gap direction up|down value x: open/prev close − 1 ≥ x (up) or ≤ −x (down)
       rsi direction below|above value v [n=14]: RSI crosses below v (RSI<v today, ≥v yesterday)
           or above v (RSI>v today, ≤v yesterday)
@@ -152,8 +147,8 @@ def entry_signals(a: BarArrays, entry: Mapping, reactions: Sequence[date], lo: i
     elif t in ("days_before_earnings", "days_after_earnings"):
         n = int(entry.get("n") if entry.get("n") is not None else (1 if t == "days_before_earnings" else 0))
         off = -n if t == "days_before_earnings" else n
-        for r in reactions:
-            i = a.index_of(cal.add_trading_days(r, off))
+        for first, last in reactions:
+            i = a.index_of(cal.add_trading_days(first if t == "days_before_earnings" else last, off))
             if i is not None:
                 sig[i] = True
     elif t == "gap":
@@ -191,7 +186,7 @@ def entry_signals(a: BarArrays, entry: Mapping, reactions: Sequence[date], lo: i
 
 def _simulate_symbol(
     sym: str, a: BarArrays, entry: Mapping, exit_: Mapping, side: str,
-    reactions: list[date], lo: int, hi: int,
+    reactions: list[tuple[date, date]], lo: int, hi: int,
 ) -> tuple[list[dict], list[tuple[int, int]]]:
     """Trades plus their (entry index, exit index) for one symbol over bars [lo, hi]."""
     sig = entry_signals(a, entry, reactions, lo)
@@ -200,7 +195,7 @@ def _simulate_symbol(
     at_earn = bool(exit_.get("at_earnings_reaction"))
     if not hold and sl is None and tp is None and not at_earn:
         hold = 5
-    react_idx = sorted(i for r in reactions if (i := a.index_of(r)) is not None)
+    react_idx = sorted(i for _, last in reactions if (i := a.index_of(last)) is not None)   # exit after both
     sign = 1.0 if side == "long" else -1.0
     trades, spans = [], []
     i = lo
@@ -274,7 +269,7 @@ def backtest_stock(
         if lo is None or hi is None or hi < lo:
             notes.append(f"{sym}: no bars in range")
             continue
-        reactions = _reactions(a, (earnings_by_symbol or {}).get(sym, ()))
+        reactions = _reactions((earnings_by_symbol or {}).get(sym, ()))
         trades, spans = _simulate_symbol(sym, a, entry, exit, side, reactions, lo, hi)
         all_trades.extend(trades)
         for (i, j) in spans:
@@ -301,4 +296,7 @@ def backtest_stock(
                     last[s] = m[d]
             benchmark.append((d, initial * float(np.mean(list(last.values())))))
     all_trades.sort(key=lambda t: (t["entry_date"], t["symbol"]))
-    return build_result(all_trades, equity, benchmark, notes, compound=True)
+    uses_earnings = entry["type"] in ("days_before_earnings", "days_after_earnings") or exit.get("at_earnings_reaction")
+    if uses_earnings and any(e.timing == "unknown" for evs in (earnings_by_symbol or {}).values() for e in evs):
+        notes.append(UNKNOWN_TIMING_NOTE)
+    return build_result(all_trades, equity, benchmark, notes)

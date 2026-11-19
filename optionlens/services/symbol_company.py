@@ -9,7 +9,6 @@ from typing import Any
 from ..analytics import stats
 from ..jobs import ondemand
 from ..repo import bars as bars_repo
-from ..repo import cache as cache_repo
 from ..repo import metrics as metrics_repo
 from ..repo import symbols as symbols_repo
 from . import context as ctx
@@ -47,9 +46,7 @@ def _num(v: Any) -> float | None:
 def _cached(kind: str, symbol: str, **params: Any) -> tuple[Any, datetime | None]:
     """(normalized Nasdaq payload, fetched_at) via the on-demand TTL cache."""
     payload = ctx.run_async(ondemand.fetch_cached, kind, symbol, **params)
-    # same key as ondemand.fetch_cached builds
-    key = ":".join([kind, symbol, *(f"{k}={params[k]}" for k in sorted(params))])
-    hit = cache_repo.cache_get_any(key)
+    hit = ondemand.peek_cached(kind, symbol, **params)
     return payload, (hit[1] if hit else None)
 
 
@@ -98,9 +95,8 @@ def fundamentals(symbol: str, period: str = "annual") -> dict:
     if row["kind"] == "index":
         return out
     summ, fetched = _cached("summary", sym)
-    fin = None
-    if row["kind"] == "stock":            # Nasdaq has no statements for ETFs (answers data: null, uncached)
-        fin, fetched = _cached("financials", sym, quarterly=period == "quarterly")
+    fin, fin_fetched = _cached("financials", sym, quarterly=period == "quarterly")   # None for ETFs
+    fetched = fin_fetched or fetched
     out["key_stats"] = [{"label": _label(k), "value": None if v is None else str(v)} for k, v in (summ or {}).items()]
     for name in FIN_TITLES:
         out[name] = _fin_table(name, (fin or {}).get(name))
@@ -157,10 +153,10 @@ def profile(symbol: str) -> dict:
     row = _company(symbol)
     sym = row["symbol"]
     prof = {}
-    if row["kind"] == "stock":            # company profiles exist for stocks only
+    if row["kind"] != "index":            # None (negatively cached) for ETFs
         prof, _ = _cached("profile", sym)
         prof = prof or {}
-    summ = cache_repo.cache_get_any(f"summary:{sym}")
+    summ = ondemand.peek_cached("summary", sym)
     exchange = (summ[0] or {}).get("Exchange") if summ else None
     return {"symbol": sym, "name": prof.get("CompanyName") or row["name"] or sym,
             "description": prof.get("CompanyDescription"), "website": prof.get("CompanyUrl"),
@@ -196,7 +192,7 @@ def peers(symbol: str) -> dict:
         c = closes.get(s)
         ret = stats.returns_row([ctx.as_date(d) for d in c["date"]], c["close"]) if c is not None and len(c["date"]) else {}
         q = ctx.quote_dict(s)
-        summ = cache_repo.cache_get_any(f"summary:{s}")
+        summ = ondemand.peek_cached("summary", s)
         rows.append({"symbol": s, "name": r["name"], "market_cap": r["market_cap"],
                      "price": q["price"] if q else (float(c["close"][-1]) if c is not None and len(c["close"]) else None),
                      "change_pct": q["change_pct"] if q else ret.get("d1"),

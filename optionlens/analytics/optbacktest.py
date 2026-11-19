@@ -17,17 +17,17 @@ Units: dollars for ``qty`` units (1 contract per option leg, 100 shares per stoc
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from functools import lru_cache
-from typing import Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, NamedTuple, Protocol, Sequence
 
 import numpy as np
 
 from . import bs
 from . import calendar as cal
 from .backtest import build_result
-from .earnings import reaction_from_arrays
+from .earnings import UNKNOWN_TIMING_NOTE, event_variance, reaction_log_moves, reaction_window
 from .stats import BarArrays, bar_arrays
 from .strategies import (OPTION_MULT, TEMPLATES, Leg, Template, close_dt, describe_legs, linear_profile,
                          naked_margin, net_cost, resolve_strikes)
@@ -98,6 +98,18 @@ def _rate(x: Rate, d: date) -> float:
 
 
 # ============================================================================ pricing context
+@dataclass(frozen=True)
+class EventVol:
+    """An earnings event as seen by MODEL pricing: a leg valued before the reaction-day close whose
+    expiry is on/after the reaction day gets total variance base_iv²·T + ``var`` (one-day event
+    variance); valuations from the reaction day on use the base IV of ``pre_day`` (the last close
+    before the reaction day) only — the IV crush, and an HV proxy not inflated by the move itself."""
+    reaction: date
+    pre_day: date
+    var: float
+    source: str = "symbol"          # symbol | universe | default (see earnings.event_variance)
+
+
 @dataclass
 class _Market:
     symbol: str
@@ -106,6 +118,8 @@ class _Market:
     rate: Rate
     div_yield: Rate
     is_index: bool = False
+    event: EventVol | None = None
+    _prices: dict = field(default_factory=dict, init=False, repr=False)   # option price memo (per context)
 
     def close(self, d: date) -> float | None:
         i = self.bars.index_of(d)
@@ -125,12 +139,26 @@ class _Market:
         return synth_strikes(spot, self.is_index)
 
     def iv(self, d: date, expiry: date) -> float | None:
-        return self.provider.iv_proxy(d, self.symbol, max((expiry - d).days, 1))
+        """Model vol of a leg expiring at ``expiry`` valued at d's close (event-adjusted, see EventVol)."""
+        ev = self.event
+        base_day = ev.pre_day if ev is not None and d >= ev.reaction else d
+        base = self.provider.iv_proxy(base_day, self.symbol, max((expiry - d).days, 1))
+        if base is None or ev is None or not d < ev.reaction <= expiry:
+            return base
+        T = cal.year_fraction_to_expiry(expiry, close_dt(d))
+        return math.sqrt(base * base + ev.var / T) if T > 0 else base
 
     def price_leg(self, d: date, spot: float, leg: Leg) -> tuple[float, bool] | None:
-        """(price per share, is_real) at d's close, or None when unpriceable."""
+        """(price per share, is_real) at d's close, or None when unpriceable (memoized: the same
+        contract is priced by many strategies on the same day)."""
         if leg.kind == "stock":
             return spot, True
+        key = (d, spot, leg.expiry, leg.strike, leg.right)
+        if key not in self._prices:
+            self._prices[key] = self._price_option(d, spot, leg)
+        return self._prices[key]
+
+    def _price_option(self, d: date, spot: float, leg: Leg) -> tuple[float, bool] | None:
         if d >= leg.expiry:
             intr = max(spot - leg.strike, 0.0) if leg.right == "C" else max(leg.strike - spot, 0.0)
             return intr, True
@@ -292,8 +320,9 @@ def _run_trade(mk: _Market, legs: list[Leg], i0: int, last_i: int, exit_rule: Ma
     opts = [l for l in legs if l.kind == "option"]
     first_exp = min((l.expiry for l in opts), default=None)
     priced = [Leg(l.kind, l.qty, l.right, l.strike, l.expiry, p) for l, p in zip(legs, p0)]
+    tp, sl = exit_rule.get("take_profit"), exit_rule.get("stop_loss")
     mp = None
-    if len({l.expiry for l in opts}) == 1:
+    if tp is not None and fixed_exit is None and len({l.expiry for l in opts}) == 1:   # take-profit target only
         stock = sum(l.qty for l in legs if l.kind == "stock") / OPTION_MULT
         prof = linear_profile(np.array([[l.strike for l in opts]], float), [l.right == "C" for l in opts],
                               [l.qty for l in opts], stock, np.array([net_cost(priced) / OPTION_MULT]), s0,
@@ -306,7 +335,6 @@ def _run_trade(mk: _Market, legs: list[Leg], i0: int, last_i: int, exit_rule: Ma
         if cur is None:
             return None
         return _trade(mk.symbol, legs, d0, d, v0, cur[0], basis, real0 and cur[1], "exit"), [(d, cur[0] - v0, basis)]
-    tp, sl = exit_rule.get("take_profit"), exit_rule.get("stop_loss")
     typ = exit_rule.get("type", "expiry")
     path = []
     for j in range(i0 + 1, last_i + 1):
@@ -384,13 +412,16 @@ def backtest_options(symbol: str, bars: Sequence, template_id: str, *, provider:
     a = bar_arrays(list(bars))
     mk = _Market(symbol, a, provider, rate, div_yield, is_index)
     notes = ["Option prices: stored EOD mids when available, else Black-Scholes with an IV proxy "
-             "(stored ATM IV → IV30 → HV30·k); model rows are approximations."]
+             "(stored ATM IV → IV30 → HV30·k); model rows are approximations.",
+             "Not compounded: one position size throughout; equity = capital (peak capital at risk of the open "
+             "trades) + cumulative P/L, so total return and drawdown are relative to that capital and fall below "
+             "−100% when cumulative losses exceed it."]
     if len(a) < 2:
-        return build_result([], [], None, notes, compound=False)
+        return build_result([], [], None, notes)
     lo = a.index_on_or_after(start) if start else 0
     hi = (a.index_before(end + timedelta(days=1)) if end else len(a) - 1)
     if lo is None or hi is None or hi <= lo:
-        return build_result([], [], None, notes, compound=False)
+        return build_result([], [], None, notes)
     results = []
 
     def open_at(i):
@@ -425,7 +456,7 @@ def backtest_options(symbol: str, bars: Sequence, template_id: str, *, provider:
     if any(t["pricing"] == "model" for t in trades):
         notes.append("Model-priced trades use strikes snapped to a listing-like grid and synthesized expiries "
                      "when no stored listing exists.")
-    return build_result(trades, eq, bench or None, notes, compound=False)
+    return build_result(trades, eq, bench or None, notes)
 
 
 def straddle_backtest(symbol: str, bars: Sequence, *, provider: PriceProvider, rate: Rate,
@@ -435,7 +466,7 @@ def straddle_backtest(symbol: str, bars: Sequence, *, provider: PriceProvider, r
     ``years`` of bars."""
     bars = list(bars)
     if not bars:
-        return build_result([], [], None, [], compound=False)
+        return build_result([], [], None, [])
     last = max(b.date for b in bars)
     start = last - timedelta(days=int(round(365.25 * years)))
     return backtest_options(symbol, bars, "long-straddle", provider=provider, rate=rate, div_yield=div_yield,
@@ -505,22 +536,54 @@ EARNINGS_STRATEGY_IDS = tuple(s.id for s in EARNINGS_STRATEGIES)
 MAX_REAL_SPREAD = 0.25
 
 
-def earnings_windows(bars: BarArrays, events: Sequence, lookback: int, entry: int, exit: int) -> list[tuple]:
-    """[(event, reaction_day, entry_day, exit_day)] for the most recent ``lookback`` past events
-    whose entry and exit closes exist. entry n (<0) -> add_trading_days(reaction, n);
-    exit n -> add_trading_days(reaction, n) (0 = reaction-day close)."""
+class EarningsWindow(NamedTuple):
+    event: Any
+    first: date          # earliest possible reaction session (earnings.reaction_window)
+    last: date           # latest possible reaction session (= first unless timing is unknown)
+    entry: date
+    exit: date
+
+
+def earnings_windows(bars: BarArrays, events: Sequence, lookback: int, entry: int, exit: int) -> list[EarningsWindow]:
+    """Windows of the most recent ``lookback`` past events whose entry and exit closes exist, placed
+    without look-ahead (earnings.reaction_window): entry n (<0) -> add_trading_days(first, n);
+    exit n -> add_trading_days(last, n) (0 = close of the last possible reaction session)."""
     out = []
     for ev in sorted(events, key=lambda e: e.date, reverse=True):
-        react, _ = reaction_from_arrays(bars, ev.date, ev.timing)
-        if react is None:
-            continue
-        d0, d1 = cal.add_trading_days(react, entry), cal.add_trading_days(react, exit)
+        first, last = reaction_window(ev.date, ev.timing)
+        d0, d1 = cal.add_trading_days(first, entry), cal.add_trading_days(last, exit)
         if d1 <= d0 or bars.index_of(d0) is None or bars.index_of(d1) is None:
             continue
-        out.append((ev, react, d0, d1))
+        out.append(EarningsWindow(ev, first, last, d0, d1))
         if len(out) >= lookback:
             break
     return out
+
+
+EVENT_VOL_NOTE = ("Model-priced legs whose expiry spans the reaction day use total variance base_iv²·T + event_var, "
+                  "event_var = mean squared log reaction-day move (reaction close / pre-event close) of the symbol's "
+                  "PRIOR earnings events only (≥ 4 needed; else the universe median; else 5%²). From the reaction "
+                  "day on only the pre-event base IV is used (IV crush). Real-priced legs are unchanged.")
+
+
+def _event_markets(mk: _Market, events: Sequence, windows: Sequence[tuple],
+                   universe_event_var: float | None) -> list[_Market]:
+    """One pricing context per earnings window, carrying that event's EventVol (prior events only)."""
+    a = mk.bars
+    moves = reaction_log_moves(a, events)
+    out = []
+    for w in windows:
+        var, src = event_variance(moves, w.first, universe_event_var)    # events reacting before this one
+        pre = a.index_before(w.first)
+        out.append(replace(mk, event=EventVol(w.last, a.dates[pre] if pre is not None else w.entry, var, src)))
+    return out
+
+
+def _event_notes(windows: Sequence[EarningsWindow], markets: Sequence[_Market]) -> list[str]:
+    srcs = [m.event.source for m in markets]
+    counts = ", ".join(f"{srcs.count(k)} {k}" for k in ("symbol", "universe", "default") if srcs.count(k))
+    return ([EVENT_VOL_NOTE] + ([f"Event variance source per event: {counts}."] if counts else [])
+            + ([UNKNOWN_TIMING_NOTE] if any(w.first != w.last for w in windows) else []))
 
 
 def _earnings_trade(mk: _Market, spec: EarningsStrategy, d0: date, d1: date):
@@ -543,16 +606,22 @@ def _earnings_trade(mk: _Market, spec: EarningsStrategy, d0: date, d1: date):
 
 def earnings_strategy_trades(symbol: str, bars: Sequence, events: Sequence, strategy_id: str, *,
                              provider: PriceProvider, rate: Rate, div_yield: Rate = 0.0, lookback: int = 12,
-                             entry: int = -1, exit: int = 1, is_index: bool = False) -> list[dict]:
-    """BacktestTrade[] (newest first) for one earnings strategy."""
+                             entry: int = -1, exit: int = 1, is_index: bool = False,
+                             universe_event_var: float | None = None) -> list[dict]:
+    """BacktestTrade[] (newest first) for one earnings strategy. ``universe_event_var``: the caller's
+    universe median event variance (fallback for symbols with < 4 prior events; see EVENT_VOL_NOTE)."""
     spec = next(s for s in EARNINGS_STRATEGIES if s.id == strategy_id)
     a = bar_arrays(list(bars))
     mk = _Market(symbol, a, provider, rate, div_yield, is_index)
+    windows = earnings_windows(a, events, min(lookback, 12), entry, exit)
     out = []
-    for ev, react, d0, d1 in earnings_windows(a, events, min(lookback, 12), entry, exit):
-        t = _earnings_trade(mk, spec, d0, d1)
+    for w, m in zip(windows, _event_markets(mk, events, windows, universe_event_var)):
+        t = _earnings_trade(m, spec, w.entry, w.exit)
         if t is not None:
-            t["note"] = f"earnings {ev.date.isoformat()} ({ev.timing}), reaction {react.isoformat()}"
+            react = w.first.isoformat() if w.first == w.last else f"{w.first.isoformat()} or {w.last.isoformat()}"
+            t["note"] = f"earnings {w.event.date.isoformat()} ({w.event.timing}), reaction {react}"
+            if t["pricing"] == "model":
+                t["note"] += f"; model event move σ {math.sqrt(m.event.var):.1%} ({m.event.source})"
             out.append(t)
     return out
 
@@ -576,14 +645,17 @@ def summarize_trades(spec_id: str, label: str, trades: Sequence[dict]) -> dict:
 def earnings_strategy_backtest(symbol: str, bars: Sequence, events: Sequence, *, provider: PriceProvider,
                                rate: Rate, div_yield: Rate = 0.0, lookback: int = 12, entry: int = -1,
                                exit: int = 1, strategies: Sequence[str] | None = None,
-                               is_index: bool = False) -> dict:
-    """EarningsStrategyResult: one StrategyBacktestSummary per strategy (SPEC §7)."""
+                               is_index: bool = False, universe_event_var: float | None = None) -> dict:
+    """EarningsStrategyResult: one StrategyBacktestSummary per strategy (SPEC §7) + notes on the
+    model's event variance (see EVENT_VOL_NOTE; ``universe_event_var`` as in earnings_strategy_trades)."""
     sel = [s for s in EARNINGS_STRATEGIES if strategies is None or s.id in strategies]
     a = bar_arrays(list(bars))
     mk = _Market(symbol, a, provider, rate, div_yield, is_index)
     windows = earnings_windows(a, events, min(lookback, 12), entry, exit)
+    markets = _event_markets(mk, events, windows, universe_event_var)
     rows = []
     for spec in sel:
-        trades = [t for _, _, d0, d1 in windows if (t := _earnings_trade(mk, spec, d0, d1)) is not None]
+        trades = [t for w, m in zip(windows, markets) if (t := _earnings_trade(m, spec, w.entry, w.exit)) is not None]
         rows.append(summarize_trades(spec.id, spec.label, trades))
-    return {"symbol": symbol, "lookback": lookback, "entry": entry, "exit": exit, "rows": rows}
+    return {"symbol": symbol, "lookback": lookback, "entry": entry, "exit": exit, "rows": rows,
+            "notes": _event_notes(windows, markets)}

@@ -70,6 +70,15 @@ def bar_arrays(bars: Sequence[Bar]) -> BarArrays:
     )
 
 
+def bar_arrays_from_columns(cols: Mapping[str, np.ndarray]) -> BarArrays:
+    """BarArrays from repo columns {date (datetime64[D], ascending), open, high, low, close, volume}."""
+    dates = tuple(np.asarray(cols["date"]).astype("datetime64[D]").astype(object).tolist())
+    f = lambda k: np.asarray(cols[k], dtype=float)  # noqa: E731
+    return BarArrays(dates=dates, open=f("open"), high=f("high"), low=f("low"), close=f("close"),
+                     volume=f("volume"), pos={d: i for i, d in enumerate(dates)},
+                     ords=np.array([d.toordinal() for d in dates], dtype=np.int64))
+
+
 def _num(x: float) -> float | None:
     """NaN/inf -> None, else float."""
     return float(x) if x is not None and math.isfinite(x) else None
@@ -209,6 +218,20 @@ def relative_volume(volume: np.ndarray, n: int = 30) -> float | None:
         return None
     avg = avg_volume(v, n, exclude_last=True)
     return float(v[-1] / avg) if avg else None
+
+
+OPTION_VOLUME_AVG_DAYS = 20
+
+
+def prior_option_volume_avg(call_volume: np.ndarray, put_volume: np.ndarray,
+                            n: int = OPTION_VOLUME_AVG_DAYS) -> tuple[float | None, int]:
+    """(mean daily option volume, days used) over up to the last n PRIOR stored days (pass history
+    without today). A day counts when either side is known. (None, 0) without any prior day — an
+    average is never fabricated; callers flag the day count (fewer than n days = partial average)."""
+    cv, pv = np.asarray(call_volume, dtype=float), np.asarray(put_volume, dtype=float)
+    known = np.isfinite(cv) | np.isfinite(pv)
+    tot = (np.nan_to_num(cv) + np.nan_to_num(pv))[known][-n:]
+    return (float(np.mean(tot)), len(tot)) if len(tot) else (None, 0)
 
 
 def support_resistance(

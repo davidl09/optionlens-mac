@@ -2,7 +2,8 @@
 
 Every job runs through `run_job`, which records the run in job_runs, logs failures and never lets a
 job overlap itself. `start()`/`stop()` are called from the FastAPI lifespan; the CLI calls `run_job`.
-On start, jobs whose most recent scheduled time passed without a run are caught up (universe first).
+On start, jobs whose most recent scheduled time passed without a successful run are caught up
+(universe first); a failed run of a slot is retried every RETRY_BACKOFF, at most MAX_ATTEMPTS runs per slot.
 """
 from __future__ import annotations
 
@@ -17,12 +18,14 @@ from ..analytics.calendar import NY, close_time, is_trading_day, now_ny
 from ..config import get_settings
 from ..repo import jobs as jobs_repo
 from . import calendars, chains, maintenance, marketdata, prices, universe
-from ._util import current_run_id
+from ._util import FINAL_DELAY_MIN, current_run_id
 
 log = logging.getLogger("optionlens.scheduler")
 
 SEARCH_DAYS = 15
 MAX_SLEEP_S = 60.0     # re-check the clock at least every minute (suspend/resume, clock jumps)
+RETRY_BACKOFF = timedelta(minutes=15)   # wait after a failed run before retrying its slot
+MAX_ATTEMPTS = 3                        # runs per scheduled slot (first + retries) before waiting for the next
 
 
 # ----------------------------------------------------------------------------- schedules
@@ -67,7 +70,10 @@ def daily(at: time, weekdays: set[int] | None = None, trading_only: bool = False
 
 
 def intraday(interval_min: int, first: time = time(9, 45)) -> Schedule:
-    """Trading days every interval_min from `first` until the (possibly early) close, inclusive."""
+    """Trading days every interval_min (>= 1) from `first` until the (possibly early) close, inclusive."""
+    if interval_min < 1:
+        raise ValueError(f"intraday interval must be >= 1 minute, got {interval_min}")
+
     def times(d: date) -> list[time]:
         if not is_trading_day(d):
             return []
@@ -114,7 +120,7 @@ def build_jobs() -> dict[str, Job]:
         Job("vix", marketdata.vix, daily(time(17, 0))),
         Job("rates", marketdata.rates, daily(time(17, 5))),
         Job("sweep", chains.sweep, intraday(s.sweep_interval_min)),
-        Job("eod", chains.eod, after_close(20)),
+        Job("eod", chains.eod, after_close(FINAL_DELAY_MIN)),   # final sweep sees the closing data
         Job("prune", maintenance.prune, daily(time(3, 0))),
     ]
     return {j.name: j for j in jobs}
@@ -157,13 +163,30 @@ def next_run_at(name: str, now: datetime | None = None) -> datetime | None:
     return JOBS[name].schedule.next_after(now or now_ny())
 
 
+def owed_run_at(job: Job, runs: list[dict], now: datetime) -> datetime | None:
+    """When the job's latest scheduled slot (at or before now) is owed a run, given its recorded runs
+    (newest first), or None. Owed = no successful run started since the slot: due now if nothing was
+    attempted since, else RETRY_BACKOFF after the latest failed (or crashed) attempt, until MAX_ATTEMPTS
+    attempts. Jobs without catch_up only ever run on schedule."""
+    prev = job.schedule.prev_before(now)
+    if prev is None or not job.catch_up:
+        return None
+    attempts = [r for r in runs if r["started_at"] >= prev]
+    if any(r["ok"] for r in attempts) or len(attempts) >= MAX_ATTEMPTS:
+        return None
+    return max(now, attempts[0]["started_at"] + RETRY_BACKOFF) if attempts else now
+
+
+async def _owed_run_at(job: Job, now: datetime) -> datetime | None:
+    runs = await asyncio.to_thread(jobs_repo.recent_runs, MAX_ATTEMPTS + 1, job.name)
+    return owed_run_at(job, runs, now)
+
+
 async def missed(job: Job, now: datetime | None = None) -> bool:
-    """True if the job's latest scheduled time passed after its latest recorded run (or it never ran)."""
-    prev = job.schedule.prev_before(now or now_ny())
-    if prev is None:
-        return False
-    last = await asyncio.to_thread(jobs_repo.latest_run, job.name)
-    return last is None or last["started_at"] < prev
+    """True if the job's latest scheduled slot is owed a run due by now (see owed_run_at)."""
+    now = now or now_ny()
+    at = await _owed_run_at(job, now)
+    return at is not None and at <= now
 
 
 async def _sleep_until(ts: datetime) -> None:
@@ -172,14 +195,14 @@ async def _sleep_until(ts: datetime) -> None:
 
 
 async def _loop(job: Job) -> None:
-    if job.catch_up and await missed(job):
-        await run_job(job.name)
+    """Run the job at its owed catch-up/retry time or its next scheduled slot, whichever comes first."""
     while True:
-        nxt = job.schedule.next_after(now_ny())
-        if nxt is None:
+        now = now_ny()
+        due = [t for t in (await _owed_run_at(job, now), job.schedule.next_after(now)) if t is not None]
+        if not due:
             await asyncio.sleep(3600)
             continue
-        await _sleep_until(nxt)
+        await _sleep_until(min(due))
         await run_job(job.name)
 
 

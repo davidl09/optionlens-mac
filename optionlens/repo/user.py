@@ -4,7 +4,7 @@ Dict shapes match web/src/api/types.ts (Watchlist, Preset, Alert, Notification);
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from .. import db
@@ -83,9 +83,15 @@ def watchlist_symbols(watchlist_id: int | None = None) -> list[str]:
 
 
 def _add_items(cur: Any, wid: int, symbols: Iterable[str]) -> None:
+    """Insert symbols with strictly increasing added_at (1 µs apart, after any existing item) so
+    list order = insertion order even within one call."""
+    last = cur.execute("SELECT max(added_at) FROM watchlist_items WHERE watchlist_id = ?", [wid]).fetchone()[0]
     ts = now_utc()
-    for s in dict.fromkeys(symbols):
-        cur.execute("INSERT INTO watchlist_items VALUES (?, ?, ?) ON CONFLICT DO NOTHING", [wid, s, ts])
+    if last is not None and ts <= last:
+        ts = last + timedelta(microseconds=1)
+    for i, s in enumerate(dict.fromkeys(symbols)):
+        cur.execute("INSERT INTO watchlist_items VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                    [wid, s, ts + timedelta(microseconds=i)])
 
 
 # ----------------------------------------------------------------------------- presets

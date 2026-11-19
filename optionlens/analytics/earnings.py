@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from datetime import date
-from typing import Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -42,6 +42,26 @@ def reaction_from_arrays(a: BarArrays, event_date: date, timing: str) -> tuple[d
     if g_bmo is None or g_amc is None:
         return None, True
     return (amc_day if abs(g_amc) > abs(g_bmo) else bmo_day), True
+
+
+def reaction_window(event_date: date, timing: str) -> tuple[date, date]:
+    """(first, last) candidate reaction sessions as known BEFORE the event (calendar only, no bars —
+    for trade placement without look-ahead): bmo → the event day (rolled to a trading day) twice;
+    amc → the next trading day twice; unknown → (bmo day, amc day). Backtests enter relative to
+    ``first`` and exit relative to ``last``, so an unknown-timing trade spans both candidates. The
+    gap-based inference of `reaction_from_arrays` is for move statistics only."""
+    bmo_day = event_date if cal.is_trading_day(event_date) else cal.next_trading_day(event_date)
+    amc_day = cal.next_trading_day(event_date)
+    if timing == "bmo":
+        return bmo_day, bmo_day
+    if timing == "amc":
+        return amc_day, amc_day
+    return bmo_day, amc_day
+
+
+UNKNOWN_TIMING_NOTE = ("Events with unknown timing: entries count back from the earlier possible reaction "
+                       "session (the event day) and exits count forward from the later one (the next session), "
+                       "so trades span both without using the realized gaps.")
 
 
 def reaction_date(event_date: date, timing: str, bars: Sequence[Bar]) -> tuple[date | None, bool]:
@@ -168,3 +188,47 @@ def implied_vs_hist_ratio(implied: float | None, avg_abs_move: float | None) -> 
     if implied is None or not avg_abs_move:
         return None
     return implied / avg_abs_move
+
+
+# ----------------------------------------------------------------------------- event variance
+MIN_EVENTS_FOR_VAR = 4           # prior events needed for a symbol's own event variance
+DEFAULT_EVENT_VAR = 0.05 ** 2    # conservative fallback: a 5% one-day log move
+
+
+def reaction_log_moves(a: BarArrays, events: Sequence[EarningsEvent]) -> list[tuple[date, float]]:
+    """[(reaction_day, ln(close(react) / pre_close))] ascending by reaction day, for events whose
+    reaction-day bar and the bar before it exist (pre_close as in `event_rows`)."""
+    out = []
+    for ev in events:
+        react, _ = reaction_from_arrays(a, ev.date, ev.timing)
+        r = a.index_of(react) if react is not None else None
+        if r is None or r < 1:
+            continue
+        m = math.log(a.close[r] / a.close[r - 1])
+        if math.isfinite(m):
+            out.append((react, m))
+    return sorted(out)
+
+
+def mean_sq_move(moves: Sequence[float]) -> float | None:
+    """Mean squared (log) reaction move = one-day event variance; None with < MIN_EVENTS_FOR_VAR moves."""
+    return float(np.mean(np.square(moves))) if len(moves) >= MIN_EVENTS_FOR_VAR else None
+
+
+def universe_event_variance(per_symbol_moves: Iterable[Sequence[float]]) -> float | None:
+    """Median across symbols of `mean_sq_move` (symbols with too few events are ignored)."""
+    vs = [v for m in per_symbol_moves if (v := mean_sq_move(m)) is not None]
+    return float(np.median(vs)) if vs else None
+
+
+def event_variance(moves: Sequence[tuple[date, float]], before: date,
+                   fallback: float | None = None) -> tuple[float, str]:
+    """(event variance, source) for an event reacting on `before`, from the symbol's PRIOR events only
+    (reaction day < before; no look-ahead): source "symbol" with ≥ MIN_EVENTS_FOR_VAR of them, else
+    the caller's universe ``fallback`` ("universe"), else DEFAULT_EVENT_VAR ("default")."""
+    own = mean_sq_move([m for d, m in moves if d < before])
+    if own is not None:
+        return own, "symbol"
+    if fallback is not None and math.isfinite(fallback) and fallback > 0:
+        return float(fallback), "universe"
+    return DEFAULT_EVENT_VAR, "default"
