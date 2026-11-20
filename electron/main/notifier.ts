@@ -61,3 +61,22 @@ export class NotificationPoller {
 export function notificationRoute(link: string | null): string {
   return link && link.startsWith("/") && !link.startsWith("//") ? link : "/alerts";
 }
+
+/** The parts of Electron's Notification used here. */
+export interface NativeNotification {
+  on(event: "click" | "close", cb: () => void): unknown;
+  on(event: "failed", cb: (e: unknown, error: string) => void): unknown;
+  show(): void;
+}
+
+/**
+ * Shows `native` and keeps it referenced in `live` until it is clicked, closed or failed: on macOS a
+ * garbage-collected Notification loses its click handler (the click no longer opens the page).
+ */
+export function showRetained<T extends NativeNotification>(native: T, live: Set<T>, onClick: () => void, onFailed: (error: string) => void): void {
+  live.add(native);
+  native.on("click", () => { live.delete(native); onClick(); });
+  native.on("close", () => { live.delete(native); });
+  native.on("failed", (_e, error) => { live.delete(native); onFailed(error); });
+  native.show();
+}

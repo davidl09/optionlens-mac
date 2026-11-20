@@ -15,6 +15,7 @@ const api: DesktopApi = {
   importData: () => ipcRenderer.invoke(IPC.importData),
   settings: () => ipcRenderer.invoke(IPC.settings),
   saveSettings: (s) => ipcRenderer.invoke(IPC.saveSettings, s),
+  loginItemStatus: () => ipcRenderer.invoke(IPC.loginItemStatus),
   bridgeStatus: () => ipcRenderer.invoke(IPC.bridgeStatus),
   refreshSymbol: (symbol) => ipcRenderer.invoke(IPC.refreshSymbol, symbol),
   cancelRefresh: (symbol) => ipcRenderer.invoke(IPC.cancelRefresh, symbol),
@@ -22,6 +23,7 @@ const api: DesktopApi = {
   onEngineStatus: (cb) => subscribe(IPC.engineEvent, cb),
   onBridgeStatus: (cb) => subscribe(IPC.bridgeEvent, cb),
   onNavigate: (cb) => subscribe(IPC.navigateEvent, cb),
+  onImportProgress: (cb) => subscribe(IPC.importProgressEvent, cb),
 };
 
 contextBridge.exposeInMainWorld("optionlens", api);

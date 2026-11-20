@@ -82,7 +82,10 @@ def test_serve_port_zero_announces_port_and_stops_on_sigterm(tmp_path):
     finally:
         p.send_signal(signal.SIGTERM)
     assert _wait(p) == -signal.SIGTERM          # uvicorn re-raises the signal after its graceful shutdown
-    assert "Application shutdown complete" in (tmp_path / "engine.log").read_text()
+    log = (tmp_path / "engine.log").read_text()
+    assert "Application shutdown complete" in log
+    # no per-request access log (uvicorn writes it to stdout, which the app copies into main.log)
+    assert "GET /api/status" not in log + p.stdout.read()
 
 
 def test_engine_exits_when_parent_dies(tmp_path):

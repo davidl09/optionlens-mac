@@ -1,7 +1,7 @@
 // Menu-bar (Tray) icon: engine + IBKR status and the app's background controls.
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
-import type { BridgeStatus, EngineStatus } from "../shared/api";
+import type { BridgeStatus, EngineStatus, LoginItemStatus } from "../shared/api";
 import { bridgeLines, engineLine, trayTooltip } from "./status-text";
 
 export interface TrayActions {
@@ -13,7 +13,7 @@ export interface TrayActions {
   quit(): void;
 }
 
-export interface TrayState { engine: EngineStatus; bridge: BridgeStatus; launchAtLogin: boolean }
+export interface TrayState { engine: EngineStatus; bridge: BridgeStatus; loginItem: LoginItemStatus }
 
 export class AppTray {
   private readonly tray: Tray;
@@ -51,7 +51,8 @@ export class AppTray {
       { label: s.bridge.enabled ? "Pause IBKR bridge" : "Resume IBKR bridge", click: () => this.actions.setBridgeEnabled(!s.bridge.enabled) },
       { label: "Cancel bridge work", enabled: busy, click: () => this.actions.cancelBridgeWork() },
       { type: "separator" },
-      { label: "Launch at login", type: "checkbox", checked: s.launchAtLogin, click: (item) => this.actions.setLaunchAtLogin(item.checked) },
+      { label: s.loginItem === "requires-approval" ? "Launch at login (allow in System Settings → Login Items)" : "Launch at login",
+        type: "checkbox", checked: s.loginItem !== "disabled", click: (item) => this.actions.setLaunchAtLogin(item.checked) },
       { label: "Quit OptionLens", accelerator: "CommandOrControl+Q", click: () => this.actions.quit() },
     ];
     this.tray.setContextMenu(Menu.buildFromTemplate(template));

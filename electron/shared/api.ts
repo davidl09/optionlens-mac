@@ -22,6 +22,9 @@ export interface BridgeSettings {
   marketDataLines: number;      // the account's simultaneous market-data line limit
 }
 
+/** What macOS has for "launch at login" ("requires-approval": the user must allow it in System Settings). */
+export type LoginItemStatus = "enabled" | "disabled" | "requires-approval" | "unsupported";
+
 export interface AppSettings {
   bridge: BridgeSettings;
   launchAtLogin: boolean;
@@ -66,6 +69,7 @@ export interface DesktopApi {
   importData(): Promise<Result | { ok: false; cancelled: true }>;
   settings(): Promise<AppSettings>;
   saveSettings(s: AppSettings): Promise<Result>;
+  loginItemStatus(): Promise<LoginItemStatus>;
   bridgeStatus(): Promise<BridgeStatus>;
   refreshSymbol(symbol: string): Promise<RefreshResult>;
   /** The page that asked for refreshSymbol(symbol) went away: drop the refresh if it has not finished. */
@@ -75,6 +79,8 @@ export interface DesktopApi {
   onBridgeStatus(cb: (s: BridgeStatus) => void): () => void;
   /** In-app navigation requested by the main process (notification click, menu). */
   onNavigate(cb: (path: string) => void): () => void;
+  /** Progress of a running importData copy (bytes). */
+  onImportProgress(cb: (p: { copied: number; total: number }) => void): () => void;
 }
 
 export const IPC = {
@@ -83,6 +89,7 @@ export const IPC = {
   importData: "engine:import",
   settings: "settings:get",
   saveSettings: "settings:save",
+  loginItemStatus: "settings:login-item",
   bridgeStatus: "bridge:status",
   refreshSymbol: "bridge:refresh",
   cancelRefresh: "bridge:cancel-refresh",
@@ -90,4 +97,5 @@ export const IPC = {
   engineEvent: "event:engine",
   bridgeEvent: "event:bridge",
   navigateEvent: "event:navigate",
+  importProgressEvent: "event:import-progress",
 } as const;

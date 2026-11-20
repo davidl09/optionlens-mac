@@ -1,5 +1,6 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { MAX_PER_POLL, newNotifications, NotificationPoller, notificationRoute, type EngineNotification } from "./notifier";
+import { MAX_PER_POLL, newNotifications, NotificationPoller, notificationRoute, showRetained, type EngineNotification } from "./notifier";
 
 const n = (id: number, link: string | null = null): EngineNotification => ({ id, title: `t${id}`, body: "b", link });
 
@@ -35,5 +36,25 @@ describe("notifications", () => {
     expect(notificationRoute("https://evil.example")).toBe("/alerts");
     expect(notificationRoute("//evil.example")).toBe("/alerts");
     expect(notificationRoute(null)).toBe("/alerts");
+  });
+});
+
+describe("showRetained", () => {
+  class FakeNotification extends EventEmitter { shown = false; show() { this.shown = true; } }
+
+  it("keeps a shown notification referenced until it is clicked, closed or failed", () => {
+    const live = new Set<FakeNotification>();
+    const clicks: string[] = [];
+    const failures: string[] = [];
+    const [a, b, c] = [new FakeNotification(), new FakeNotification(), new FakeNotification()];
+    for (const n of [a, b, c]) showRetained(n, live, () => clicks.push("click"), (e) => failures.push(e));
+    expect(a.shown && b.shown && c.shown).toBe(true);
+    expect(live.size).toBe(3);
+    a.emit("click");
+    b.emit("close");
+    c.emit("failed", {}, "not authorized");
+    expect(live.size).toBe(0);
+    expect(clicks).toEqual(["click"]);
+    expect(failures).toEqual(["not authorized"]);
   });
 });

@@ -15,8 +15,10 @@ import { importDatabase } from "./import-data";
 import { registerIpc } from "./ipc";
 import { jsonFile } from "./json-file";
 import { createLogger } from "./log";
-import { isNotificationList, NotificationPoller, notificationRoute, type EngineNotification } from "./notifier";
+import { isNotificationList, NotificationPoller, notificationRoute, showRetained, type EngineNotification } from "./notifier";
+import { allowPermission } from "./permissions";
 import { APP_SCHEME, serveAsset } from "./protocol";
+import { launchAtLoginFromOs, loginItemStatus } from "./login-item";
 import { parseStoredSettings, validateSettings } from "./settings";
 import { AppTray } from "./tray";
 import { createMainWindow } from "./window";
@@ -39,7 +41,9 @@ async function main(): Promise<void> {
   const dataDir = join(userData, "data");
   const appRoot = app.getAppPath();
 
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
+  // Deny every permission except Local Network Access for app://optionlens (the renderer → loopback engine).
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb, details) => cb(allowPermission(perm, details.requestingUrl ?? wc.getURL())));
+  session.defaultSession.setPermissionCheckHandler((_wc, perm, origin) => allowPermission(perm, origin));
   protocol.handle(APP_SCHEME, (req) => serveAsset(join(appRoot, "dist"), req.url));
 
   let win: BrowserWindow | null = null;
@@ -85,14 +89,13 @@ async function main(): Promise<void> {
   });
 
   // ---- notifications ----
+  const shownNotifications = new Set<Notification>();
   const showNotification = (n: EngineNotification) => {
     if (!Notification.isSupported()) return;
-    const native = new Notification({ title: n.title, body: n.body });
-    native.on("click", () => {
+    showRetained(new Notification({ title: n.title, body: n.body }), shownNotifications, () => {
       navigate(notificationRoute(n.link));
       void http.post("/api/notifications/read", { ids: [n.id] }).catch(() => undefined);
-    });
-    native.show();
+    }, (error) => log.warn(`notification ${n.id} could not be shown: ${error}`));
   };
   const notifier = new NotificationPoller({
     fetchUnread: async () => {
@@ -107,14 +110,18 @@ async function main(): Promise<void> {
   });
 
   // ---- settings ----
-  const applyLoginItem = () => { if (process.platform === "darwin") app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin }); };
+  const loginItem = () => loginItemStatus(process.platform, app.getLoginItemSettings());
+  // The OS is the truth for launch at login (the user may have removed the item in System Settings).
+  const fromOs = launchAtLoginFromOs(loginItem());
+  if (fromOs !== null && fromOs !== settings.launchAtLogin) { settings = { ...settings, launchAtLogin: fromOs }; settingsFile.write(settings); }
   const saveSettings = (next: unknown) => {
     const v = validateSettings(next);
     if (!v.ok) return v;
     const bridgeChanged = JSON.stringify(v.value.bridge) !== JSON.stringify(settings.bridge);
+    const loginChanged = v.value.launchAtLogin !== settings.launchAtLogin;
     settings = v.value;
     settingsFile.write(settings);
-    applyLoginItem();
+    if (loginChanged && process.platform === "darwin") app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
     if (bridgeChanged) bridge.reconfigure();
     tray?.update();
     return { ok: true as const };
@@ -127,7 +134,7 @@ async function main(): Promise<void> {
       const pick = await dialog.showOpenDialog({ title: "Import OptionLens data", properties: ["openFile"], filters: [{ name: "DuckDB database", extensions: ["duckdb"] }] });
       if (pick.canceled || !pick.filePaths[0]) return { ok: false, cancelled: true } as const;
       try {
-        const out = await engine.whileStopped(() => importDatabase(pick.filePaths[0], dataDir));
+        const out = await engine.whileStopped(() => importDatabase(pick.filePaths[0], dataDir, { onProgress: (p) => send(IPC.importProgressEvent, p) }));
         log.info(`imported ${pick.filePaths[0]} → ${out.target}${out.backup ? ` (previous kept as ${out.backup})` : ""}`);
         return { ok: true } as const;
       } catch (e) {
@@ -136,6 +143,7 @@ async function main(): Promise<void> {
     },
     settings: () => settings,
     saveSettings,
+    loginItemStatus: loginItem,
     bridgeStatus: () => bridge.status(),
     refreshSymbol: (sym) => bridge.refreshSymbol(sym),
     cancelRefresh: (sym) => bridge.cancelRefresh(sym),
@@ -158,7 +166,7 @@ async function main(): Promise<void> {
     cancelBridgeWork: () => bridge.cancel(),
     setLaunchAtLogin: (on) => saveSettings({ ...settings, launchAtLogin: on }),
     quit: () => app.quit(),
-  }, () => ({ engine: engine.status(), bridge: bridge.status(), launchAtLogin: settings.launchAtLogin }));
+  }, () => ({ engine: engine.status(), bridge: bridge.status(), loginItem: loginItem() }));
 
   app.on("second-instance", () => { showWindow(); });
   app.on("activate", () => { showWindow(); });
@@ -170,10 +178,9 @@ async function main(): Promise<void> {
     e.preventDefault();
     notifier.stop();
     bridge.stop();
-    void engine.stop().finally(() => { shutDown = true; app.quit(); });
+    void engine.shutdown().finally(() => { shutDown = true; app.quit(); });
   });
 
-  applyLoginItem();
   engine.start();
   bridge.start();
   notifier.start();

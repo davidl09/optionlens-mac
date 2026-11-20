@@ -60,8 +60,13 @@ class SidecarServer(uvicorn.Server):
             await asyncio.sleep(PARENT_POLL_S)
 
 
+def server_config(app: ASGIApp, settings: Settings) -> uvicorn.Config:
+    """uvicorn config of the sidecar: one worker on loopback, no access log (the app polls the API all day
+    and keeps engine output in its own log; per-request lines only made that log grow)."""
+    return uvicorn.Config(app, host=settings.host, port=settings.port, workers=1, log_level="info", access_log=False)
+
+
 def serve(app: ASGIApp, settings: Settings) -> int:
     """Run until SIGTERM/SIGINT or parent death. Returns the process exit code."""
-    config = uvicorn.Config(app, host=settings.host, port=settings.port, workers=1, log_level="info")
-    SidecarServer(config, settings.parent_pid).run()
+    SidecarServer(server_config(app, settings), settings.parent_pid).run()
     return 0

@@ -1,7 +1,7 @@
 // /settings — desktop app settings: the engine (status, restart, data import), the IBKR bridge
 // (live status, connection settings, cancel work) and launch at login.
 import { FormEvent, useEffect, useState } from "react";
-import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus } from "../../electron/shared/api";
+import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus, type LoginItemStatus } from "../../electron/shared/api";
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
@@ -19,10 +19,13 @@ const PORTS: { value: string; label: string }[] = [
 function EngineCard({ engine }: { engine: EngineStatus }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  useEffect(() => desktop?.onImportProgress((p) => setProgress(p.total > 0 ? p.copied / p.total : null)), []);
   const importData = async () => {
     if (!desktop) return;
     if (!window.confirm("Import an existing optionlens.duckdb? The engine stops, the file is copied into the app's data folder (the current database is kept as a backup) and the engine restarts.")) return;
     setBusy(true);
+    setProgress(null);
     const r = await desktop.importData();
     setBusy(false);
     if (r.ok) { setMsg({ ok: true, text: "Imported. The engine is restarting with the imported data." }); reloadAll(); }
@@ -41,7 +44,7 @@ function EngineCard({ engine }: { engine: EngineStatus }) {
       {engine.lastError && <p className="muted small">Last error: {engine.lastError}</p>}
       <div className="toolbar">
         <button className="btn" onClick={() => void desktop?.restartEngine()}>Restart engine</button>
-        <button className="btn" onClick={() => void importData()} disabled={busy}>{busy ? "Importing…" : "Import data…"}</button>
+        <button className="btn" onClick={() => void importData()} disabled={busy}>{busy ? `Importing…${progress !== null ? ` ${Math.round(progress * 100)}%` : ""}` : "Import data…"}</button>
       </div>
       {msg && (msg.ok ? <InfoBox>{msg.text}</InfoBox> : <ErrorBox error={msg.text} />)}
     </Card>
@@ -115,7 +118,8 @@ export default function SettingsPage() {
   const engine = useEngineStatus();
   const bridge = useBridgeStatus();
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  useEffect(() => { void desktop?.settings().then(setSettings); }, []);
+  const [loginItem, setLoginItem] = useState<LoginItemStatus | null>(null);
+  useEffect(() => { void desktop?.settings().then(setSettings); void desktop?.loginItemStatus().then(setLoginItem); }, []);
 
   if (!desktop) {
     return (
@@ -129,6 +133,7 @@ export default function SettingsPage() {
     const r = await desktop!.saveSettings(next);
     if (!r.ok) return r.error;
     setSettings(next);
+    setLoginItem(await desktop!.loginItemStatus());
     return null;
   };
   return (
@@ -145,6 +150,9 @@ export default function SettingsPage() {
             <input type="checkbox" checked={settings.launchAtLogin} onChange={(e) => void save({ ...settings, launchAtLogin: e.target.checked })} />
             Launch OptionLens at login (it keeps collecting in the menu bar when the window is closed)
           </label>
+          {loginItem === "requires-approval" && (
+            <InfoBox>macOS needs your approval: open <b>System Settings → General → Login Items</b> and turn on OptionLens.</InfoBox>
+          )}
           <p className="muted small">Notifications from your alerts appear as macOS notifications; clicking one opens it here.</p>
         </Card>
       )}

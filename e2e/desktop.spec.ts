@@ -31,10 +31,11 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       settings: async () => ({ bridge: { enabled: true, port: null, clientId: 17, marketDataLines: 100 }, launchAtLogin: false }),
       saveSettings: async (s: { bridge: { clientId: number } }) => (s.bridge.clientId >= 0 ? { ok: true } : { ok: false, error: "Client ID must be a whole number ≥ 0." }),
       bridgeStatus: async () => bridge,
+      loginItemStatus: async () => "requires-approval",
       refreshSymbol: async (sym: string) => { (w.__refreshCalls as string[]).push(sym); return { status: "refreshed" }; },
       cancelRefresh: async (sym: string) => { (w.__cancelRefreshCalls as string[]).push(sym); },
       cancelJobs: async () => undefined,
-      onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"),
+      onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"),
     };
   }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running" });
 }
@@ -94,6 +95,7 @@ test("settings page shows engine, bridge status and saves bridge settings", asyn
   await expect(page.getByText("IB Gateway (live) · port 4001")).toBeVisible();
   await expect(page.locator(".warn-box", { hasText: "IBKR delayed (no OPRA subscription)" })).toBeVisible();
   await expect(page.getByText("13/40 (1 failed)")).toBeVisible();
+  await expect(page.getByText("macOS needs your approval")).toBeVisible();   // login item waiting for approval
   await page.getByLabel("API port").selectOption("4002");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("Saved. The bridge reconnects")).toBeVisible();

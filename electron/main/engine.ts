@@ -74,6 +74,8 @@ export class EngineSupervisor {
   private failuresInRow = 0;
   private lastError: string | null = null;
   private stopping = false;
+  /** The app is quitting: never start again (e.g. at the end of whileStopped). */
+  private shutDown = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private exited: Promise<void> = Promise.resolve();
   private readonly stderrTail: string[] = [];
@@ -88,9 +90,16 @@ export class EngineSupervisor {
   }
 
   start(): void {
+    if (this.shutDown) return;
     this.stopping = false;
     if (this.child || this.timer) return;
     this.spawnOnce();
+  }
+
+  /** Stops the engine for good (app quit): later start / restart / whileStopped calls do nothing. */
+  async shutdown(): Promise<void> {
+    this.shutDown = true;
+    await this.stop();
   }
 
   async stop(): Promise<void> {

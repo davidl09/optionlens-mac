@@ -44,6 +44,24 @@ describe("engine supervisor", () => {
     expect(h.sup.status()).toMatchObject({ state: "running", version: "1.2.3", connection: { baseUrl: "http://127.0.0.1:53111", token: h.sup.token } });
   });
 
+  it("does not start again after shutdown (app quit while an import holds the engine stopped)", async () => {
+    const h = harness();
+    h.sup.start();
+    h.children[0].listen(5000);
+    await vi.advanceTimersByTimeAsync(10);
+    let finishImport!: () => void;
+    const imported = h.sup.whileStopped(() => new Promise<void>((r) => { finishImport = r; }));
+    await vi.advanceTimersByTimeAsync(10);
+    await h.sup.shutdown();   // Cmd+Q during the copy
+    finishImport();
+    await imported;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.children).toHaveLength(1);
+    expect(h.sup.status().state).toBe("stopped");
+    h.sup.start();
+    expect(h.children).toHaveLength(1);
+  });
+
   it("restarts with backoff when the engine dies, then recovers", async () => {
     const h = harness();
     h.sup.start();
