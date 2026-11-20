@@ -11,6 +11,10 @@ export const COMPETING_MESSAGE = "IBKR session in use elsewhere — market data 
 export const CONNECTIVITY_MESSAGE = "IB Gateway lost its connection to IBKR — market data paused until it is restored";
 /** How long a competing-session pause lasts before the bridge tries again (quietly). */
 export const COMPETING_PAUSE_MS = 5 * 60_000;
+/** Longest connectivity pause: TWS does not always say when it is restored, so the next task then probes. */
+export const CONNECTIVITY_PAUSE_MS = 2 * 60_000;
+/** "Data farm connection is OK" (market data, HMDS, sec-def): connectivity is back. */
+const FARM_OK_CODES = new Set<number>([2104, 2106, 2158]);
 const CLIENT_ID_TRIES = 4;
 
 export interface ConnectionState {
@@ -84,6 +88,13 @@ export class TwsSupervisor {
     if (ms !== null) this.pauseTimer = setTimeout(() => { this.pauseTimer = null; this.update({ paused: null }); }, ms);
   }
 
+  private connectivityRestored(): void {
+    if (this.s.paused !== CONNECTIVITY_MESSAGE) return;
+    this.o.log.info("bridge: IBKR connectivity restored");
+    this.clearPause();
+    this.update({ paused: null });
+  }
+
   private clearPause(): void {
     if (this.pauseTimer) { clearTimeout(this.pauseTimer); this.pauseTimer = null; }
   }
@@ -151,13 +162,14 @@ export class TwsSupervisor {
         return;
       case CODE.CONNECTIVITY_LOST:
       case 2110:   // connectivity between TWS and server is broken
-        this.pause(CONNECTIVITY_MESSAGE, null);
+        this.pause(CONNECTIVITY_MESSAGE, CONNECTIVITY_PAUSE_MS);
         return;
       case CODE.RESTORED_DATA_LOST:
       case CODE.RESTORED_DATA_KEPT:
-        if (this.s.paused === CONNECTIVITY_MESSAGE) { this.o.log.info("bridge: IBKR connectivity restored"); this.update({ paused: null }); }
+        this.connectivityRestored();
         return;
       default:
+        if (FARM_OK_CODES.has(m.code)) this.connectivityRestored();
         return;
     }
   }

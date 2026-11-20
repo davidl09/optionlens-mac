@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { silentLogger } from "../main/log";
 import { DEFAULT_BRIDGE } from "../main/settings";
 import type { BridgeSettings } from "../shared/api";
-import { accountType, COMPETING_MESSAGE, CONNECTIVITY_MESSAGE, reconnectDelayMs, TwsSupervisor } from "./connection";
+import { accountType, COMPETING_MESSAGE, CONNECTIVITY_MESSAGE, CONNECTIVITY_PAUSE_MS, reconnectDelayMs, TwsSupervisor } from "./connection";
 import { emptyMarket, FakeConnector, FakeSession } from "./fake-tws.test-helper";
 import { CODE, TwsRequestError, type TwsSession } from "./tws";
 
@@ -82,6 +82,23 @@ describe("TwsSupervisor", () => {
     s.emitSystem({ code: CODE.RESTORED_DATA_KEPT, message: "restored" });
     expect(sup.state().paused).toBeNull();
     expect(c.attempts).toHaveLength(1);
+    sup.stop();
+  });
+
+  it("clears a connectivity pause (2110) on 'data farm connection is OK', or after a time cap", async () => {
+    const s = new FakeSession(emptyMarket());
+    const { sup } = setup(new FakeConnector(new Map([[4001, s]])));
+    sup.start();
+    await vi.advanceTimersByTimeAsync(0);
+    s.emitSystem({ code: 2110, message: "Connectivity between TWS and server is broken. It will be restored automatically." });
+    expect(sup.state().paused).toBe(CONNECTIVITY_MESSAGE);
+    s.emitSystem({ code: 2104, message: "Market data farm connection is OK:usfarm" });
+    expect(sup.state().paused).toBeNull();
+    s.emitSystem({ code: 2110, message: "Connectivity between TWS and server is broken." });
+    await vi.advanceTimersByTimeAsync(CONNECTIVITY_PAUSE_MS - 1000);
+    expect(sup.state().paused).toBe(CONNECTIVITY_MESSAGE);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sup.state().paused).toBeNull();   // the next task probes; a new 2110 pauses again
     sup.stop();
   });
 
