@@ -50,5 +50,8 @@ async def test_failing_hook_does_not_stop_others():
 
     d = hooks.Debounced([boom, lambda day, syms: seen.append(syms)], interval_s=1, min_delay_s=0.01)
     await d.notify(D1, ["A"])
-    await asyncio.sleep(0.1)
+    for _ in range(100):                     # wait up to 2 s (slow CI runners), not a fixed 0.1 s
+        if seen:
+            break
+        await asyncio.sleep(0.02)
     assert seen == [["A"]]
