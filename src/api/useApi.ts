@@ -1,5 +1,14 @@
-import { DependencyList, useCallback, useEffect, useRef, useState } from "react";
-import { invalidate } from "./client";
+import { DependencyList, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { connection, invalidate } from "./client";
+
+/** Re-renders when the client's reload epoch changes (recovery, new engine connection, IBKR refresh). */
+export function useReloadEpoch(): number {
+  return useSyncExternalStore(connection.subscribe, connection.epoch);
+}
+
+export function useConnectivity() {
+  return useSyncExternalStore(connection.subscribe, connection.connectivity);
+}
 
 export interface ApiState<T> {
   data: T | null;
@@ -20,6 +29,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: DependencyList): 
   const [nonce, setNonce] = useState(0);
   const fnRef = useRef(fn);
   fnRef.current = fn;
+  const epoch = useReloadEpoch();
 
   useEffect(() => {
     const run = fnRef.current;
@@ -33,7 +43,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: DependencyList): 
     );
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, nonce]);
+  }, [...deps, nonce, epoch]);
 
   const refetch = useCallback(() => { invalidate(); setNonce((n) => n + 1); }, []);
   return { data, error, loading, refetch };

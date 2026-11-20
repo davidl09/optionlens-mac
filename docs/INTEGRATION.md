@@ -1,50 +1,43 @@
-# OptionLens client ⇄ server integration contract (authoritative; identical copy in both repos)
+# OptionLens app ⇄ engine integration contract (authoritative)
 
-Two repos:
-- **optionlens-server** — Python service (FastAPI + DuckDB + in-process scheduler). Runs 24/7 on any
-  Linux/macOS box. Collects data (Nasdaq prices/calendars, Treasury rates; option data pushed by the IBKR bridge or an optional vendor source),
-  archives end-of-day, serves the analytics API. API-only: it no longer serves the web UI.
-- **optionlens-mac** — Electron app: the UI (React, formerly `web/`), server connection settings,
-  and the **IBKR bridge** (talks to the user's running TWS / IB Gateway on the Mac and pushes data
-  to the server).
+Two parts, one machine:
+- **engine** (this Python code; FastAPI + DuckDB + in-process scheduler) — the app's embedded backend.
+  The Mac app launches it as a local sidecar process bound to loopback. Collects data (Nasdaq
+  prices/calendars, Treasury rates; option data pushed by the IBKR bridge or an optional vendor source),
+  archives end-of-day, serves the analytics API. API-only: it does not serve the UI.
+- **optionlens-mac** — Electron app: the UI (React, formerly `web/`), the engine's lifecycle, and the
+  **IBKR bridge** (talks to the user's running TWS / IB Gateway and pushes data to the engine).
 
-No tailnet assumption: the server may be reached over a LAN or the internet. Security is therefore
-built in: every request carries a token; HTTPS with a pinned self-signed certificate is the default.
+No remote server: the engine listens on loopback only. A per-launch token still guards the
+API against other local processes and web pages.
 
 ---------------------------------------------------------------------------------------------------
-## 1. Server configuration (env, also read from `~/.config/optionlens/server.env` if present)
+## 1. Engine configuration (environment, set by the app at launch)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `OPTIONLENS_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` to accept network clients) |
-| `OPTIONLENS_PORT` | `8473` | Port |
-| `OPTIONLENS_API_TOKEN` | — | Required whenever HOST is not loopback (server refuses to start otherwise). Generate with `optionlens.cli gen-token`. |
-| `OPTIONLENS_TLS` | `auto` | `auto`: HTTPS with a self-signed cert when HOST is not loopback, plain HTTP on loopback. `on` / `off` force it. |
-| `OPTIONLENS_TLS_CERT`, `OPTIONLENS_TLS_KEY` | — | Use your own cert/key instead of the generated one |
+| `OPTIONLENS_HOST` | `127.0.0.1` | Bind address; must be `127.0.0.1`, `::1` or `localhost` (anything else: the engine refuses to start) |
+| `OPTIONLENS_PORT` | `8473` | Port; `0` = bind a free port. `serve --port N` overrides it |
+| `OPTIONLENS_API_TOKEN` | — | Random per launch, chosen by the app (≥ 16 chars). Unset = auth disabled (development only) |
+| `OPTIONLENS_PARENT_PID` | — | The app's pid: the engine shuts down when that process disappears |
 | `OPTIONLENS_CORS_ORIGINS` | `app://optionlens` | Comma list of allowed browser origins (the Electron renderer origin) |
 | `OPTIONLENS_CHAIN_UNIVERSE_SIZE` | `150` | Most-liquid symbols (by option volume) included in the chain universe besides watchlists and recently opened symbols |
-| `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database + TLS material |
+| `OPTIONLENS_CHAIN_SOURCE` | `none` | Optional server-side vendor chain source (none by default) |
+| `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `~/Library/Application Support/OptionLens/data` |
 
-Generated TLS material lives in `DATA_DIR/tls/{cert.pem,key.pem}` (EC P-256, 10-year validity,
-SAN = every non-loopback IP of the host + its hostname + `localhost`). `optionlens.cli tls-fingerprint`
-prints the SHA-256 fingerprint of the served certificate (uppercase hex, colon-separated).
+Launch: `python -m optionlens.cli serve [--port N]`. Once the API is ready the engine prints exactly one
+line `LISTENING <port>` on stdout (logs go to stderr); the app reads the port from it. SIGTERM (or
+SIGINT) shuts it down gracefully. One engine per DATA_DIR (DuckDB is single-process).
 
 ## 2. Authentication
 
-- Every `/api/**` request except `GET /api/health` must send `Authorization: Bearer <token>`.
-  Missing/wrong → `401 {"detail":"unauthorized"}`. Comparison is constant-time.
-- When HOST is loopback and no token is configured, auth is disabled (local development only).
-- `GET /api/health` (no auth) → `{"ok": true, "version": "<semver>", "auth": true|false, "tls": true|false,
+- With a token configured, every request except `GET /api/health` must send
+  `Authorization: Bearer <token>`. Missing/wrong → `401 {"detail":"unauthorized"}`. Comparison is
+  constant-time. CORS preflights (`OPTIONS`) are answered without a token.
+- `GET /api/health` (no auth) → `{"ok": true, "version": "<semver>", "auth": true|false,
   "server_id": "<stable random id stored in DATA_DIR>"}`.
 
-## 3. Certificate pinning (client side)
-
-- First connection to a new server URL: the app fetches `/api/health`, shows the certificate's SHA-256
-  fingerprint and asks the user to confirm it matches `optionlens.cli tls-fingerprint` on the server
-  (trust on first use). The confirmed fingerprint is stored with the server URL; later connections
-  accept only that certificate (Electron `session.setCertificateVerifyProc`). A changed fingerprint
-  is a hard error with a "re-pair" button. Plain `http://` is allowed only for loopback/LAN URLs and
-  shows a warning badge.
+## 3. (removed — no certificate pinning: the engine is loopback-only, plain HTTP)
 
 ## 4. CORS
 
@@ -60,7 +53,7 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
 - `Status` gains `sources: { name: string; ok: boolean | null; last_success_at: string | null; detail: string | null }[]`
   and `bridge: { connected: boolean; last_push_at: string | null; client: string | null }`.
 
-## 6. Ingest API (written by the IBKR bridge; all POST, Bearer auth, JSON, idempotent)
+## 6. Ingest API (written by the IBKR bridge; all POST except `wants`, Bearer auth, JSON, idempotent)
 
 Times are ISO-8601 with offset; dates `YYYY-MM-DD`; IV/percent as fractions; prices per share.
 
@@ -115,6 +108,13 @@ POST /api/ingest/option-bars               // historical daily bars of individua
                       // computed server-side from close + underlying close); never overwrite real rows
 ```
 
+**`delayed` flag.** `/api/ingest/chain`, `/api/ingest/quotes` and `/api/ingest/underlying-stats` bodies carry a
+top-level boolean `delayed` (always present): true when at least one value in the push came from IBKR delayed
+data (no real-time subscription for that contract class; the bridge uses reqMarketDataType(4), so subscribed
+classes stay real-time). Unknown values are sent as null, never 0 (delayed data often lacks generic ticks
+100/101/104/106, so call/put volume, OI, iv30 and hv30 may be null). The engine stores the flag with the data and
+exposes it as `delayed: boolean` on `Quote` and `Chain` JSON so the UI can badge delayed data.
+
 `GET /api/ingest/wants` → what the server would like the bridge to fetch now (the bridge polls it every
 5 min while connected, and immediately after connecting). The bridge works through these in priority
 order: on-demand refreshes (user-triggered) → eod_chains → chain_universe → underlying_stats →
@@ -148,5 +148,5 @@ server's own collected IV30 for that date is missing (collected values win; both
 ## 7. Client-triggered refresh
 
 When the user opens a symbol page the app (renderer → main) asks the bridge to fetch that symbol's chain
-from IBKR (if connected) and POST it, then reloads the page data from the server. Without IBKR the server
+from IBKR (if connected) and POST it, then reloads the page data from the engine. Without IBKR the engine
 serves the most recent chain it has stored (from an earlier IBKR push or a vendor source).

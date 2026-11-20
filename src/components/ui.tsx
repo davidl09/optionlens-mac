@@ -1,5 +1,6 @@
 // Small presentational primitives.
 import { ReactNode, RefObject, useEffect } from "react";
+import type { DataSource } from "../api/types";
 import type { ApiState } from "../api/useApi";
 import { fmtDateTime, NULL_TEXT } from "../lib/format";
 
@@ -29,9 +30,34 @@ export function NullValue({ hint = DEFAULT_NULL_HINT }: { hint?: string }) {
 
 export function AsOf({ ts, label = "as of" }: { ts: string | null | undefined; label?: string }) {
   return (
-    <span className="asof" title="Quotes are delayed ~15 minutes (CBOE delayed feed).">
+    <span className="asof" title="Time of the most recent data stored by the engine.">
       {label} {ts ? fmtDateTime(ts) : <NullValue hint="No data collected yet." />}
     </span>
+  );
+}
+
+const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutral"; title: string }> = {
+  ibkr: { label: "IBKR", tone: "pos", title: "Interactive Brokers market data via the bridge" },
+  vendor: { label: "vendor", tone: "warn", title: "Third-party vendor data (may be indicative)" },
+  reconstructed: { label: "reconstructed", tone: "warn", title: "Rebuilt from historical daily bars: no bid/ask/OI; IV and delta computed from the close" },
+  model: { label: "model", tone: "warn", title: "Priced with a Black-Scholes model" },
+  cboe: { label: "CBOE", tone: "neutral", title: "CBOE" },
+  nasdaq: { label: "Nasdaq", tone: "neutral", title: "Nasdaq public data" },
+};
+
+export function isDataSource(v: unknown): v is DataSource {
+  return typeof v === "string" && v in SOURCES;
+}
+
+/** Where the data came from; `delayed` adds a delayed marker (IBKR without a real-time subscription). */
+export function SourceBadge({ source, delayed = false }: { source: DataSource | null | undefined; delayed?: boolean }) {
+  if (!source && !delayed) return null;
+  const s = source ? SOURCES[source] : null;
+  return (
+    <>
+      {s && <span className={`badge ${s.tone} source-badge`} title={s.title}>{s.label}</span>}
+      {delayed && <span className="badge warn source-badge" title="15-minute delayed data (no real-time subscription for this contract class)">delayed</span>}
+    </>
   );
 }
 

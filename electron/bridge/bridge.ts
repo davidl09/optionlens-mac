@@ -45,6 +45,8 @@ export class Bridge {
   private wants: Wants | null = null;
   private polling = false;
   private backfill = { total: 0, done: 0, failed: 0 };
+  /** What the last pushes revealed about the account's market data (null = not seen yet). */
+  private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
 
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
@@ -85,9 +87,17 @@ export class Bridge {
     const c = this.supervisor.state();
     return {
       enabled: this.d.settings().enabled, tws: c.tws, port: c.port, endpoint: c.endpoint, accountType: c.accountType, paused: c.paused,
-      lastError: c.lastError ?? this.lastError, lastPushAt: this.lastPushAt,
+      lastError: c.lastError ?? this.lastError, notes: this.notes(), lastPushAt: this.lastPushAt,
       current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: { ...this.backfill },
     };
+  }
+
+  private notes(): string[] {
+    const out: string[] = [];
+    if (this.feed.optionsDelayed) out.push("IBKR delayed (no OPRA subscription)");
+    if (this.feed.stocksDelayed) out.push("IBKR delayed stock quotes (no real-time US stock subscription)");
+    if (this.feed.optionTicksMissing) out.push("IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown");
+    return out;
   }
 
   async refreshSymbol(symbol: string): Promise<RefreshResult> {
@@ -234,7 +244,9 @@ export class Bridge {
   private chainTask(kind: JobKind, key: string, symbol: string, shape: ChainShape, sessionDate: string | null): Task {
     const final = sessionDate !== null;
     return this.task(kind, key, `${symbol} ${final ? "closing chain" : "chain"}`, async (ctx) => {
-      await pushChain(ctx, { symbol, shape, final, sessionDate });
+      const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
+      this.feed.optionsDelayed = r.optionsDelayed;
+      this.feed.stocksDelayed = r.underlyingDelayed;
       this.lastChainPush.set(symbol, this.now());
       this.pushed();
     }, { ledgerKey: final ? ledgerKey.eod(sessionDate, symbol) : undefined });
@@ -246,7 +258,11 @@ export class Bridge {
       const t = this.now();
       // Symbols without data are marked too, so they wait max_age like the rest instead of re-queuing.
       for (const s of symbols) this.lastStatsPush.set(s, t);
-      if (done.length) this.pushed();
+      if (done.symbols.length) {
+        this.feed.stocksDelayed = done.delayed;
+        this.feed.optionTicksMissing = !done.optionTicks;
+        this.pushed();
+      }
     });
   }
 

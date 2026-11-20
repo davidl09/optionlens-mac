@@ -86,7 +86,7 @@ export function assembleContract(c: TwsContract, q: QuoteSnapshot): IngestContra
   };
 }
 
-export interface ChainMeta { symbol: string; fetchedAt: string; final: boolean; sessionDate: string | null }
+export interface ChainMeta { symbol: string; fetchedAt: string; final: boolean; sessionDate: string | null; underlyingDelayed: boolean }
 
 export function assembleChain(meta: ChainMeta, underlying: IngestUnderlying, quotes: { contract: TwsContract; quote: QuoteSnapshot }[]): IngestChain {
   if (meta.final && !meta.sessionDate) throw new Error("a final chain needs its session date");
@@ -94,6 +94,7 @@ export function assembleChain(meta: ChainMeta, underlying: IngestUnderlying, quo
   return {
     source: "ibkr", symbol: meta.symbol, fetched_at: meta.fetchedAt, final: meta.final,
     ...(meta.final && meta.sessionDate ? { session_date: meta.sessionDate } : {}),
+    delayed: meta.underlyingDelayed || quotes.some((x) => x.quote.delayed),
     underlying, contracts,
   };
 }

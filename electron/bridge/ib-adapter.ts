@@ -203,8 +203,11 @@ export const ibConnector: TwsConnector = {
         settled = true;
         clearTimeout(timer);
         ib.removeAllListeners();
-        // Frozen: live data while the market is open, the closing snapshot after hours (EOD chains).
-        ib.reqMarketDataType(MarketDataType.FROZEN);
+        // Delayed-frozen: TWS returns real-time data where the account has the subscription (and the
+        // frozen closing snapshot after hours), and falls back to 15-min delayed data per contract
+        // class where it does not (e.g. no OPRA). Delayed ticks use their own tick ids, which the
+        // accumulator maps and flags, so every push says whether it was delayed.
+        ib.reqMarketDataType(MarketDataType.DELAYED_FROZEN);
         resolve(new IbSession(ib, accounts));
       });
       try { ib.connect(o.clientId); } catch (e) { fail(e as Error); }

@@ -1,11 +1,13 @@
 // /status, /about, 404
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import type { ColumnDef, ReportRow } from "../api/types";
+import type { ColumnDef, ReportRow, Status } from "../api/types";
 import { useApi } from "../api/useApi";
 import { DataTable } from "../components/DataTable";
 import { StatGrid } from "../components/StatGrid";
+import { bridgeSummary } from "../components/Desktop";
 import { AsOf, Async, Card } from "../components/ui";
+import { useBridgeStatus } from "../state/desktop";
 import { fmt } from "../lib/format";
 
 const JOB_COLUMNS: ColumnDef[] = [
@@ -15,6 +17,32 @@ const JOB_COLUMNS: ColumnDef[] = [
   { key: "state", label: "Result", fmt: "badge" },
   { key: "detail", label: "Detail", fmt: "text" },
 ];
+
+const SOURCE_COLUMNS: ColumnDef[] = [
+  { key: "name", label: "Source", fmt: "text" },
+  { key: "state", label: "State", fmt: "badge" },
+  { key: "last_success_at", label: "Last success", fmt: "datetime" },
+  { key: "detail", label: "Detail", fmt: "text" },
+];
+
+function SourcesCard({ s }: { s: Status }) {
+  const rows = s.sources.map((x) => ({ ...x, state: x.ok === null ? "unknown" : x.ok ? "ok" : "failed" })) as unknown as ReportRow[];
+  return <Card title="Data sources"><DataTable minimal rowLink={false} columns={SOURCE_COLUMNS} rows={rows} emptyText="No sources reported." /></Card>;
+}
+
+function BridgeCard({ s }: { s: Status }) {
+  const local = useBridgeStatus();
+  return (
+    <Card title="IBKR bridge" actions={local ? <Link className="btn btn-sm" to="/settings">Bridge settings</Link> : undefined}>
+      <StatGrid items={[
+        { label: "Engine sees bridge", node: <span className={`badge ${s.bridge.connected ? "pos" : "neutral"}`}>{s.bridge.connected ? "connected" : "not connected"}</span> },
+        { label: "Last push", value: s.bridge.last_push_at, fmt: "datetime", hint: "The bridge has not pushed data yet." },
+        { label: "Client", node: <span>{s.bridge.client ?? "—"}</span> },
+      ]} />
+      {local && <p className="small bridge-summary">This Mac: {bridgeSummary(local)}</p>}
+    </Card>
+  );
+}
 
 export function StatusPage() {
   const st = useApi(api.status, []);
@@ -40,6 +68,10 @@ export function StatusPage() {
                 { label: "Earnings backfill", node: <div className="progress" title={fmt(s.earnings_backfill_progress, "pct")}><div style={{ width: `${Math.round(s.earnings_backfill_progress * 100)}%` }} /><span>{fmt(s.earnings_backfill_progress, "pct")}</span></div> },
               ]} />
             </Card>
+            <div className="grid-2">
+              <SourcesCard s={s} />
+              <BridgeCard s={s} />
+            </div>
             <div className="grid-main-side">
               <Card title="Job runs"><DataTable columns={JOB_COLUMNS} rows={jobs} rowLink={false} csvName="job-runs" maxHeight={520} /></Card>
               <Card title="Row counts"><DataTable minimal rowLink={false} columns={[{ key: "table", label: "Table", fmt: "text" }, { key: "rows", label: "Rows", fmt: "int" }]} rows={counts} /></Card>
@@ -62,7 +94,7 @@ export function AboutPage() {
       <div className="grid-2">
         <Card title="Where the data comes from">
           <ul className="prose-list">
-            <li><b>CBOE delayed quotes</b> — option chains (bid/ask, volume, open interest, greeks) and underlying quotes, roughly 15 minutes behind; the VIX family of indices and their daily history.</li>
+            <li><b>Interactive Brokers (IBKR bridge)</b> — option chains (bid/ask, volume, open interest, model greeks), per-underlying option volume / open interest / IV for the whole universe, IV and HV history, VIX-family quotes and history, pushed from your IB Gateway or TWS. Real-time where your IBKR account has the subscription, otherwise 15-minute delayed (labelled <span className="badge warn">delayed</span>).</li>
             <li><b>Nasdaq public endpoints</b> — daily price history, earnings and dividend calendars, dividend history, company profile, financial statements, insider filings, headlines and extended-hours quotes.</li>
             <li><b>U.S. Treasury</b> — the 13-week bill rate, used as the risk-free rate in option models.</li>
             <li>Everything else (IV rank, term structure, skew, expected moves, backtests…) is computed locally from those inputs.</li>
@@ -74,7 +106,8 @@ export function AboutPage() {
             <li>Implied-volatility history (and therefore IV rank / percentile) begins on the first day the collector ran. IV rank needs at least 20 stored days.</li>
             <li>Historical option prices are only available from stored end-of-day chains. Where a result needs a price from before that, it is estimated with a Black-Scholes model and the row is labelled <span className="badge warn">model</span>; rows from stored prices count as real.</li>
             <li>The model's volatility input falls back from stored at-the-money IV, to stored 30-day IV, to recent historical volatility scaled by the symbol's typical implied/realized ratio.</li>
-            <li>Quotes are delayed about 15 minutes; pages show an “as of” time.</li>
+            <li>Full option chains are collected for the <b>chain universe</b> (watchlists, the most liquid symbols, recently opened symbols); chain-based screeners say so in their coverage note. Universe-wide reports use per-underlying IBKR statistics.</li>
+            <li>Rows labelled <span className="badge warn">reconstructed</span> were rebuilt from historical daily bars of individual contracts (no bid/ask/OI). Pages show an “as of” time.</li>
           </ul>
         </Card>
       </div>

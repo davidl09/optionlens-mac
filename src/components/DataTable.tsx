@@ -5,7 +5,7 @@ import { Link, useNavigate } from "react-router-dom";
 import type { ColumnDef, ColumnFilter, ReportRow } from "../api/types";
 import { toCsv, downloadText } from "../lib/csv";
 import { badgeTone, displayScale, fmt, isMissing, isNumericFmt, signClass } from "../lib/format";
-import { ModelBadge, NullValue, useClickOutside } from "./ui";
+import { isDataSource, ModelBadge, NullValue, SourceBadge, useClickOutside } from "./ui";
 
 export interface SortState { key: string; dir: "asc" | "desc" }
 export interface TableState { sort: SortState | null; filters: Record<string, ColumnFilter>; hidden: string[] }
@@ -90,8 +90,17 @@ function filterSummary(col: ColumnDef, f: ColumnFilter): string {
   return `${col.label} ${parts.join(" ")}`;
 }
 
+const SOURCE_COLUMN: ColumnDef = { key: "source", label: "Source", fmt: "text", description: "Where the row's data came from (IBKR, vendor, reconstructed from daily bars, model)." };
+
+/** Rows that say where they came from get a Source column even when the report does not define one. */
+export function withSourceColumn(columns: ColumnDef[], rows: ReportRow[]): ColumnDef[] {
+  if (columns.some((c) => c.key === "source") || !rows.some((r) => isDataSource(r.source))) return columns;
+  return [...columns, SOURCE_COLUMN];
+}
+
 export function Cell({ col, row }: { col: ColumnDef; row: ReportRow }) {
   const v = row[col.key];
+  if (col.key === "source" && isDataSource(v)) return <SourceBadge source={v} delayed={row.delayed === true} />;
   if (isMissing(v)) return <NullValue hint={col.description ? `${col.label}: not available. ${col.description}` : undefined} />;
   switch (col.fmt) {
     case "symbol":
@@ -223,8 +232,9 @@ function ColumnsMenu({ columns, hidden, onChange }: { columns: ColumnDef[]; hidd
 }
 
 export function DataTable(props: DataTableProps) {
-  const { columns, rows, minimal = false, csvName, toolbar, maxHeight, emptyText = "No rows match.", renderCell, rowClass } = props;
+  const { rows, minimal = false, csvName, toolbar, maxHeight, emptyText = "No rows match.", renderCell, rowClass } = props;
   const navigate = useNavigate();
+  const columns = useMemo(() => withSourceColumn(props.columns, rows), [props.columns, rows]);
   const [inner, setInner] = useState<TableState>(() => initialTableState(columns, props.defaultSort));
   const state = props.state ?? inner;
   const setState = useCallback((s: TableState) => { if (props.onStateChange) props.onStateChange(s); else setInner(s); }, [props]);

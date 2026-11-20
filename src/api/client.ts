@@ -1,6 +1,8 @@
 // Typed fetch wrappers — one function per endpoint in SPEC §10.
 // GETs go through a short-TTL in-memory cache with in-flight de-duplication;
 // mutations invalidate the affected URL prefixes.
+// In the desktop app the engine's base URL and per-launch token come from the preload (memory only,
+// never persisted); in a plain browser requests are same-origin without a token.
 import type {
   Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain,
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
@@ -44,22 +46,64 @@ function errorMessage(body: unknown, fallback: string): string {
   return fallback;
 }
 
+// ---------------- engine connection + connectivity ----------------
+export interface ClientConnection { baseUrl: string; token: string }
+export type Connectivity = "ok" | "unreachable" | "unauthorized";
+
+let conn: ClientConnection | null = null;
+let connectivity: Connectivity = "ok";
+/** Bumped whenever every mounted query should reload (recovery, new engine connection, IBKR refresh). */
+let epoch = 0;
+const listeners = new Set<() => void>();
+const emit = () => { for (const l of listeners) l(); };
+
+export const connection = {
+  subscribe(cb: () => void): () => void { listeners.add(cb); return () => { listeners.delete(cb); }; },
+  connectivity: (): Connectivity => connectivity,
+  epoch: (): number => epoch,
+};
+
+/** Point the client at the engine (desktop) and reload everything. */
+export function configureClient(c: ClientConnection | null): void {
+  const changed = c?.baseUrl !== conn?.baseUrl || c?.token !== conn?.token;
+  conn = c;
+  if (changed) reloadAll();
+}
+
+/** Drop the cache and make every mounted query refetch. */
+export function reloadAll(): void {
+  cache.clear();
+  epoch += 1;
+  if (connectivity !== "ok") connectivity = "ok";
+  emit();
+}
+
+function setConnectivity(next: Connectivity): void {
+  if (next === connectivity) return;
+  const recovered = connectivity !== "ok" && next === "ok";
+  connectivity = next;
+  if (recovered) { cache.clear(); epoch += 1; }
+  emit();
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (conn?.token) headers.Authorization = `Bearer ${conn.token}`;
   let res: Response;
   try {
-    res = await fetch(url, {
-      method,
-      headers: body !== undefined ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    res = await fetch(`${conn?.baseUrl ?? ""}${url}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   } catch {
-    throw new ApiError(0, "Network error — is the OptionLens server running?");
+    setConnectivity("unreachable");
+    throw new ApiError(0, "Network error — the OptionLens engine is not reachable.");
   }
   const text = await res.text();
   let parsed: unknown = null;
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = null; }
   }
+  if (res.status === 401) setConnectivity("unauthorized");
+  else setConnectivity("ok");
   if (!res.ok) throw new ApiError(res.status, errorMessage(parsed, `${res.status} ${res.statusText || "error"}`));
   return parsed as T;
 }
@@ -102,7 +146,7 @@ export interface AlertInput {
 }
 
 export const api = {
-  health: () => get<{ ok: boolean }>("/api/health", 0),
+  health: () => get<{ ok: boolean; version?: string }>("/api/health", 0),
   status: () => get<Status>("/api/status", 10_000),
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),

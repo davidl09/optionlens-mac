@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import type { Chain, Leg, OptionRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { StatGrid } from "../../components/StatGrid";
-import { AsOf, Async, Card, NullValue, Segmented } from "../../components/ui";
+import { AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmt, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
 import { describeLeg, useLegs } from "../../state/legs";
@@ -100,7 +100,7 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
               <FragmentRow key={k} spotLine={i === spotAfter} spot={spot} left={showC ? cols.length : 0} right={showP ? cols.length : 0}>
                 <tr>
                   {showC && callCols.map((c) => cell(r.c, c))}
-                  <td className="strike-col">{fmt(k, "num")}</td>
+                  <td className="strike-col">{fmt(k, "num")}<RowSource chain={chain} rows={[r.c, r.p]} /></td>
                   {showP && cols.map((c) => cell(r.p, c))}
                 </tr>
               </FragmentRow>
@@ -111,6 +111,12 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
       </table>
     </div>
   );
+}
+
+/** A row whose source differs from the chain's (e.g. reconstructed among IBKR rows) is badged at its strike. */
+function RowSource({ chain, rows }: { chain: Chain; rows: (OptionRow | undefined)[] }) {
+  const src = rows.find((x) => x?.source && x.source !== chain.source)?.source;
+  return src ? <> <SourceBadge source={src} /></> : null;
 }
 
 function FragmentRow({ spotLine, spot, left, right, children }: { spotLine: boolean; spot: number; left: number; right: number; children: ReactNode }) {
@@ -165,6 +171,7 @@ export default function ChainTab() {
               <Segmented label="Side" value={side} onChange={setSide} options={[{ value: "both", label: "Both" }, { value: "calls", label: "Calls" }, { value: "puts", label: "Puts" }]} />
               <Segmented label="Strikes" value={range} onChange={setRange} options={[{ value: "10", label: "±10" }, { value: "20", label: "±20" }, { value: "all", label: "All" }]} />
               <label className="check-inline"><input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> Greeks</label>
+              {(chain.source || chain.delayed) && <span className="chain-source">Source <SourceBadge source={chain.source} delayed={chain.delayed === true} /></span>}
               <span className="muted small legend-inline"><span className="swatch itm" /> in the money · <span className="swatch hot" /> volume &gt; OI · click bid to sell / ask to buy</span>
             </div>
           </Card>

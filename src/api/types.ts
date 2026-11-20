@@ -7,6 +7,8 @@ export type ISODateTime = string;
 export type Right = "C" | "P";
 export type Pricing = "real" | "model";
 export type SymbolKind = "stock" | "etf" | "index";
+/** Where a value came from (INTEGRATION.md §5). */
+export type DataSource = "vendor" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed";
 
 export interface SymbolRef { symbol: string; name: string; kind: SymbolKind }
 
@@ -14,6 +16,7 @@ export interface Quote {
   symbol: string; ts: ISODateTime; price: number; change: number; change_pct: number;
   open: number | null; high: number | null; low: number | null; prev_close: number | null;
   volume: number | null; bid: number | null; ask: number | null; iv30: number | null;
+  source?: DataSource; delayed?: boolean;
 }
 
 export interface Bar { date: ISODate; open: number; high: number; low: number; close: number; volume: number }
@@ -30,6 +33,8 @@ export interface Status {
   row_counts: Record<string, number>;
   jobs: JobRun[];                     // latest run of each job + last 50 runs
   db_size_bytes: number;
+  sources: { name: string; ok: boolean | null; last_success_at: ISODateTime | null; detail: string | null }[];
+  bridge: { connected: boolean; last_push_at: ISODateTime | null; client: string | null };
 }
 
 // ---------------- market overview ----------------
@@ -90,14 +95,16 @@ export interface OptionRow {
   volume: number; oi: number; iv: number | null;
   delta: number | null; gamma: number | null; theta: number | null; vega: number | null; rho: number | null; theo: number | null;
   itm: boolean;
+  source?: DataSource;
 }
-export interface ExpiryInfo { expiry: ISODate; dte: number; is_monthly: boolean; atm_iv: number | null; straddle: number | null; call_volume: number; put_volume: number; call_oi: number; put_oi: number }
+export interface ExpiryInfo { expiry: ISODate; dte: number; is_monthly: boolean; atm_iv: number | null; straddle: number | null; call_volume: number; put_volume: number; call_oi: number; put_oi: number; source?: DataSource }
 export interface Chain {
   symbol: string; underlying: Quote; asof: ISODateTime;
   expiries: ExpiryInfo[];
   expiry: ISODate;                 // selected
   strikes: number[];               // sorted asc for selected expiry
   calls: OptionRow[]; puts: OptionRow[];   // selected expiry, sorted by strike
+  source?: DataSource; delayed?: boolean;
 }
 
 // ---------------- activity / OI ----------------
@@ -278,6 +285,7 @@ export interface ReportResult {
   columns: ColumnDef[]; rows: ReportRow[]; truncated: boolean;
   notes: string[];                     // limitations / proxies
   extra?: Record<string, unknown>;     // report-specific (e.g. P/C history)
+  source?: DataSource;
 }
 
 // ---------------- backtests ----------------

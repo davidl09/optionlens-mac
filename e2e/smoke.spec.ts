@@ -61,6 +61,7 @@ const PAGES: [string, string | RegExp][] = [
   ["/alerts", "Your alerts"],
   ["/status", "Job runs"],
   ["/about", "Not available (no free source)"],
+  ["/settings", "available in the OptionLens desktop app"],
   ["/no/such/page", "Page not found"],
 ];
 
@@ -108,6 +109,21 @@ test("report: filters, sort and URL state", async ({ page }) => {
   await page.getByRole("button", { name: "Run" }).click();
   await page.waitForLoadState("networkidle");
   await page.screenshot({ path: `${SHOTS}/report.png` });
+  clean(p);
+});
+
+test("source badges and chain-universe coverage note", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/reports/covered-calls");
+  await expect(page.locator(".coverage-note")).toContainText("chain universe");
+  await expect(page.locator("th").filter({ hasText: "Source" })).toBeVisible();
+  await expect(page.locator("td .badge", { hasText: "reconstructed" }).first()).toBeVisible();
+  await page.goto("/s/AAPL/chain");
+  await expect(page.locator(".chain-source")).toContainText("IBKR");
+  await expect(page.locator(".chain-source")).toContainText("delayed");
+  await page.goto("/status");
+  await expect(page.getByText("Data sources")).toBeVisible();
+  await expect(page.getByText("optionlens-mac 0.1.0")).toBeVisible();
   clean(p);
 });
 

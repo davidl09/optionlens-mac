@@ -6,7 +6,7 @@ import type { IngestApi, IngestChain, OptionBar, UnderlyingStat } from "./ingest
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import { bestPrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
-import { CODE, isCompetingSession, isNoDataError, isPacingError, TwsRequestError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
+import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
 import { durationFor } from "./wants";
 
 export interface JobContext {
@@ -58,7 +58,7 @@ export async function collectQuotes(ctx: JobContext, contracts: TwsContract[], o
       onTick: (e) => accs[j].apply(e),
       onError: (err) => {
         accs[j].dead = true;
-        if (err.code === CODE.MKT_DATA_NOT_SUBSCRIBED) notSubscribed += 1;
+        if (NOT_SUBSCRIBED_CODES.has(err.code)) notSubscribed += 1;
         if (isCompetingSession(err)) fatal = err;
       },
     }));
@@ -114,19 +114,20 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
 }
 
 export interface ChainRequest { symbol: string; shape: ChainShape; final: boolean; sessionDate: string | null }
+export interface ChainPushed { contracts: number; optionsDelayed: boolean; underlyingDelayed: boolean }
 
-/** Fetches and posts one chain; returns the number of contracts pushed. */
-export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<number> {
+/** Fetches and posts one chain. */
+export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed> {
   const r = await resolveOptionContracts(ctx, req.symbol, req.shape);
   const quotes = await collectQuotes(ctx, r.contracts, { genericTicks: "101", complete: (a) => a.optionComplete() });
   const fetchedAt = ctx.now().toISOString();
   const underlying = assembleUnderlying(r.underlying, fetchedAt);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
-  const body: IngestChain = assembleChain({ symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate }, underlying,
+  const body: IngestChain = assembleChain({ symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed }, underlying,
     r.contracts.map((contract, i) => ({ contract, quote: quotes[i] })));
   if (!body.contracts.length) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
   await ctx.ingest.chain(body);
-  return body.contracts.length;
+  return { contracts: body.contracts.length, optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed };
 }
 
 // ---------------- universe stats and index quotes ----------------
@@ -141,12 +142,20 @@ export function assembleStat(symbol: string, q: QuoteSnapshot): UnderlyingStat |
   };
 }
 
-/** One batch of underlying stats (generic ticks 100/101/104/106 on the underlying); returns symbols pushed. */
-export async function pushUnderlyingStats(ctx: JobContext, symbols: string[], sessionDate: string): Promise<string[]> {
+export interface StatsPushed {
+  symbols: string[];
+  delayed: boolean;
+  /** Whether any symbol got option volume / OI ticks (generic 100/101 can be unavailable on delayed data). */
+  optionTicks: boolean;
+}
+
+/** One batch of underlying stats (generic ticks 100/101/104/106 on the underlying). */
+export async function pushUnderlyingStats(ctx: JobContext, symbols: string[], sessionDate: string): Promise<StatsPushed> {
   const quotes = await collectQuotes(ctx, symbols.map(underlyingContract), { genericTicks: "100,101,104,106", complete: (a) => a.statsComplete(), minDwellMs: 1500 });
   const stats = symbols.map((s, i) => assembleStat(s, quotes[i])).filter((s): s is UnderlyingStat => s !== null);
-  if (stats.length) await ctx.ingest.underlyingStats({ source: "ibkr", session_date: sessionDate, ts: ctx.now().toISOString(), stats });
-  return stats.map((s) => s.symbol);
+  const delayed = quotes.some((q) => q.delayed);
+  if (stats.length) await ctx.ingest.underlyingStats({ source: "ibkr", session_date: sessionDate, ts: ctx.now().toISOString(), delayed, stats });
+  return { symbols: stats.map((s) => s.symbol), delayed, optionTicks: stats.some((s) => s.call_volume !== null || s.call_oi !== null) };
 }
 
 export async function pushIndexQuotes(ctx: JobContext, symbols: string[]): Promise<number> {
@@ -159,7 +168,7 @@ export async function pushIndexQuotes(ctx: JobContext, symbols: string[]): Promi
     const change = q.close ? price - q.close : null;
     return [{ symbol, price, change, change_pct: change !== null && q.close ? change / q.close : null, ts }];
   });
-  if (rows.length) await ctx.ingest.quotes(rows);
+  if (rows.length) await ctx.ingest.quotes({ source: "ibkr", delayed: quotes.some((q) => q.delayed), quotes: rows });
   return rows.length;
 }
 

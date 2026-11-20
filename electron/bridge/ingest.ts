@@ -12,6 +12,8 @@ export interface IngestContract {
 }
 export interface IngestChain {
   source: "ibkr"; symbol: string; fetched_at: string; final: boolean; session_date?: string;
+  /** True when any quote in the push came from IBKR delayed data (no real-time subscription). */
+  delayed: boolean;
   underlying: IngestUnderlying; contracts: IngestContract[];
 }
 export interface VolBars { source: "ibkr"; symbol: string; kind: "iv30" | "hv30"; bars: { date: string; value: number }[] }
@@ -21,7 +23,8 @@ export interface UnderlyingStat {
   symbol: string; price: N; change_pct: N; volume: N;
   call_volume: N; put_volume: N; call_oi: N; put_oi: N; iv30: N; hv30: N;
 }
-export interface UnderlyingStats { source: "ibkr"; session_date: string; ts: string; stats: UnderlyingStat[] }
+export interface UnderlyingStats { source: "ibkr"; session_date: string; ts: string; delayed: boolean; stats: UnderlyingStat[] }
+export interface IngestQuotes { source: "ibkr"; delayed: boolean; quotes: IngestQuote[] }
 export interface OptionBar { expiry: string; strike: number; right: "C" | "P"; date: string; open: N; high: N; low: N; close: number; volume: N }
 export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] }
 export interface Heartbeat { client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null }
@@ -31,7 +34,7 @@ export interface IngestApi {
   chain(b: IngestChain): Promise<unknown>;
   volHistory(b: VolBars): Promise<unknown>;
   indexBars(b: IndexBars): Promise<unknown>;
-  quotes(quotes: IngestQuote[]): Promise<unknown>;
+  quotes(b: IngestQuotes): Promise<unknown>;
   underlyingStats(b: UnderlyingStats): Promise<unknown>;
   optionBars(b: OptionBars): Promise<unknown>;
   heartbeat(b: Heartbeat): Promise<unknown>;
@@ -43,7 +46,7 @@ export function ingestApi(http: JsonHttp): IngestApi {
     chain: (b) => http.post("/api/ingest/chain", b),
     volHistory: (b) => http.post(b.kind === "iv30" ? "/api/ingest/iv-history" : "/api/ingest/hv-history", b),
     indexBars: (b) => http.post("/api/ingest/index-bars", b),
-    quotes: (quotes) => http.post("/api/ingest/quotes", { source: "ibkr", quotes }),
+    quotes: (b) => http.post("/api/ingest/quotes", b),
     underlyingStats: (b) => http.post("/api/ingest/underlying-stats", b),
     optionBars: (b) => http.post("/api/ingest/option-bars", b),
     heartbeat: (b) => http.post("/api/ingest/heartbeat", b),

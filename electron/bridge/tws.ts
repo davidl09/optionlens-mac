@@ -75,6 +75,9 @@ export const CODE = {
   NOT_CONNECTED: 504,
 } as const;
 
+/** "Not subscribed" / "additional subscription required" / "delayed not enabled": the contract gets no data. */
+export const NOT_SUBSCRIBED_CODES = new Set<number>([354, 10089, 10090, 10168]);
+
 /** Historical pacing violation (back off and retry). */
 export function isPacingError(e: unknown): boolean {
   if (!(e instanceof TwsRequestError)) return false;

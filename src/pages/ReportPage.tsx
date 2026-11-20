@@ -116,6 +116,11 @@ function ReportView({ def }: { def: ReportDef }) {
     return wl ? all.filter((r) => typeof r.symbol === "string" && wlSymbols.has(r.symbol)) : all;
   }, [result.data, wl, wlSymbols]);
 
+  // Chain-based screeners only cover the chain universe; the engine says so in a note (INTEGRATION.md §6).
+  const notes = result.data?.notes ?? [];
+  const coverage = notes.filter(isCoverageNote);
+  const otherNotes = notes.filter((n) => !isCoverageNote(n));
+
   const run = () => {
     const next = new URLSearchParams(sp);
     for (const d of def.params) next.set(d.key, form[d.key] ?? "");
@@ -145,9 +150,12 @@ function ReportView({ def }: { def: ReportDef }) {
           <ParamForm defs={def.params} values={form} onChange={setForm} onSubmit={run} busy={result.loading} />
         </Card>
       )}
-      {result.data && result.data.notes.length > 0 && (
+      {coverage.length > 0 && (
+        <div className="warn-box coverage-note"><strong>Coverage:</strong> <span>{coverage.join(" ")}</span></div>
+      )}
+      {otherNotes.length > 0 && (
         <InfoBox title="Data notes:">
-          <ul className="notes">{result.data.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+          <ul className="notes">{otherNotes.map((n, i) => <li key={i}>{n}</li>)}</ul>
         </InfoBox>
       )}
       {result.data?.truncated && <div className="warn-box">Showing the first {result.data.rows.length.toLocaleString()} rows — narrow the parameters to see everything.</div>}
@@ -162,6 +170,10 @@ function ReportView({ def }: { def: ReportDef }) {
       <ExtraData extra={result.data?.extra} />
     </div>
   );
+}
+
+export function isCoverageNote(note: string): boolean {
+  return /chain universe/i.test(note);
 }
 
 export default function ReportPage() {

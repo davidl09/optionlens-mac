@@ -70,7 +70,7 @@ describe("pushChain", () => {
   it("fetches expiries/strikes per the shape and posts the contract JSON", async () => {
     const s = new FakeSession(aaplMarket());
     const ctx = ctxFor(s);
-    const n = await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 2, moneyness: 0.25 }, final: true, sessionDate: "2026-11-20" });
+    const n = (await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 2, moneyness: 0.25 }, final: true, sessionDate: "2026-11-20" })).contracts;
     const body = ctx.ingest.calls.chain[0] as { contracts: { expiry: string; strike: number }[]; final: boolean; session_date: string; underlying: { price: number; prev_close: number } };
     expect(n).toBe(body.contracts.length);
     expect(body.final).toBe(true);
@@ -102,12 +102,22 @@ describe("underlying stats", () => {
     ];
     const s = new FakeSession(m);
     const ctx = ctxFor(s);
-    expect(await pushUnderlyingStats(ctx, ["AAPL", "NODATA"], "2026-11-20")).toEqual(["AAPL"]);
+    expect(await pushUnderlyingStats(ctx, ["AAPL", "NODATA"], "2026-11-20")).toEqual({ symbols: ["AAPL"], delayed: false, optionTicks: true });
     expect(s.streams[0].generic).toBe("100,101,104,106");
-    expect(ctx.ingest.calls.underlyingStats[0]).toMatchObject({ source: "ibkr", session_date: "2026-11-20", stats: [{
+    expect(ctx.ingest.calls.underlyingStats[0]).toMatchObject({ source: "ibkr", session_date: "2026-11-20", delayed: false, stats: [{
       symbol: "AAPL", price: 99, change_pct: expect.closeTo(-0.01, 10), volume: 4.1e7, call_volume: 338000, put_volume: 251000,
       call_oi: 2960000, put_oi: 2730000, iv30: 0.251, hv30: 0.27,
     }] });
+  });
+});
+
+describe("delayed data (no real-time subscription)", () => {
+  it("pushes delayed stats with nulls (never zeros) when generic ticks are missing, and says so", async () => {
+    const m = emptyMarket();
+    m.ticks = (id) => id === "KO:STK" ? [{ kind: "price", field: TICK.DELAYED_LAST, value: 60 }, { kind: "price", field: TICK.DELAYED_CLOSE, value: 61 }] : undefined;
+    const ctx = ctxFor(new FakeSession(m));
+    expect(await pushUnderlyingStats(ctx, ["KO"], "2026-11-20")).toEqual({ symbols: ["KO"], delayed: true, optionTicks: false });
+    expect(ctx.ingest.calls.underlyingStats[0]).toMatchObject({ delayed: true, stats: [{ symbol: "KO", price: 60, call_volume: null, put_volume: null, call_oi: null, put_oi: null, iv30: null, hv30: null }] });
   });
 });
 

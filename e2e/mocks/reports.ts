@@ -113,8 +113,11 @@ export function reportResult(id: string, params: Record<string, string>): Report
     return { pc_history: tradingDays(30).map((d) => ({ date: d, pc_volume: round(between(0.6, 1.2)), pc_premium: round(between(0.5, 1.4)) })) };
   })() : undefined;
   return {
-    id, title: def.title, asof: NOW, params: effective, columns: def.columns, rows: rowsFor(def.columns, n, id.length), truncated: false,
-    notes: id === "unusual-option-volume" ? ["Volume is per-contract daily totals; it does not identify individual trades.", "Net delta is volume × delta, unsigned by trade side."] : [],
+    id, title: def.title, asof: NOW, params: effective, columns: def.columns,
+    rows: id === "covered-calls" ? rowsFor(def.columns, n, id.length).map((r, i) => ({ ...r, source: i % 3 === 0 ? "reconstructed" : "ibkr" })) : rowsFor(def.columns, n, id.length),
+    truncated: false,
+    notes: id === "unusual-option-volume" ? ["Volume is per-contract daily totals; it does not identify individual trades.", "Net delta is volume × delta, unsigned by trade side."]
+      : id === "covered-calls" ? ["Covers the chain universe only (watchlists, the most liquid symbols and recently opened symbols): 152 symbols.", "Mid prices."] : [],
     ...(extra ? { extra } : {}),
   };
 }

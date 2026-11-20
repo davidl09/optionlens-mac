@@ -1,6 +1,8 @@
 // Market-data tick accumulation. TWS marks "not available" with sentinels (-1 prices, -2 greeks,
 // Double.MAX_VALUE) and occasionally sends garbage; every value is sanitized here so nothing downstream
-// sees a non-finite or sentinel number. Tick field numbers are IBKR tick types (live / frozen).
+// sees a non-finite or sentinel number. Tick field numbers are IBKR tick types; live/frozen and delayed
+// ids map to the same fields, and any delayed tick marks the snapshot `delayed`. Values never received
+// stay null (never 0).
 import type { TickEvent } from "./tws";
 
 export const TICK = {
@@ -8,7 +10,11 @@ export const TICK = {
   OPEN_INTEREST: 22, OPTION_CALL_OI: 27, OPTION_PUT_OI: 28, OPTION_CALL_VOLUME: 29, OPTION_PUT_VOLUME: 30,
   OPTION_HISTORICAL_VOL: 23, OPTION_IMPLIED_VOL: 24,
   BID_OPTION: 10, ASK_OPTION: 11, LAST_OPTION: 12, MODEL_OPTION: 13,
+  DELAYED_BID: 66, DELAYED_ASK: 67, DELAYED_LAST: 68, DELAYED_HIGH: 72, DELAYED_LOW: 73, DELAYED_VOLUME: 74, DELAYED_CLOSE: 75, DELAYED_OPEN: 76,
+  DELAYED_BID_OPTION: 80, DELAYED_ASK_OPTION: 81, DELAYED_LAST_OPTION: 82, DELAYED_MODEL_OPTION: 83,
 } as const;
+
+const DELAYED_FIELDS = new Set<number>([66, 67, 68, 72, 73, 74, 75, 76, 80, 81, 82, 83]);
 
 const HUGE = 1e12;
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && Math.abs(v) < HUGE;
@@ -33,23 +39,28 @@ export interface QuoteSnapshot {
   oi: number | null; callOi: number | null; putOi: number | null;
   callVolume: number | null; putVolume: number | null;
   impliedVol: number | null; historicalVol: number | null;
-  /** Model computation (tick 13), else the first other computation received. */
+  /** Model computation (tick 13 / 83), else the first other computation received. */
   greeks: Greeks | null;
+  /** At least one delayed tick was received (no real-time subscription for this contract class). */
+  delayed: boolean;
 }
 
 const PRICE_FIELDS: Record<number, keyof QuoteSnapshot> = {
   [TICK.BID]: "bid", [TICK.ASK]: "ask", [TICK.LAST]: "last", [TICK.HIGH]: "high", [TICK.LOW]: "low", [TICK.CLOSE]: "close", [TICK.OPEN]: "open",
+  [TICK.DELAYED_BID]: "bid", [TICK.DELAYED_ASK]: "ask", [TICK.DELAYED_LAST]: "last", [TICK.DELAYED_HIGH]: "high", [TICK.DELAYED_LOW]: "low",
+  [TICK.DELAYED_CLOSE]: "close", [TICK.DELAYED_OPEN]: "open",
 };
 const SIZE_FIELDS: Record<number, keyof QuoteSnapshot> = {
   [TICK.VOLUME]: "volume", [TICK.OPEN_INTEREST]: "oi", [TICK.OPTION_CALL_OI]: "callOi", [TICK.OPTION_PUT_OI]: "putOi",
-  [TICK.OPTION_CALL_VOLUME]: "callVolume", [TICK.OPTION_PUT_VOLUME]: "putVolume",
+  [TICK.OPTION_CALL_VOLUME]: "callVolume", [TICK.OPTION_PUT_VOLUME]: "putVolume", [TICK.DELAYED_VOLUME]: "volume",
 };
 const GENERIC_FIELDS: Record<number, keyof QuoteSnapshot> = { [TICK.OPTION_IMPLIED_VOL]: "impliedVol", [TICK.OPTION_HISTORICAL_VOL]: "historicalVol" };
-const COMPUTATION_FIELDS = new Set<number>([TICK.BID_OPTION, TICK.ASK_OPTION, TICK.LAST_OPTION, TICK.MODEL_OPTION]);
+const COMPUTATION_FIELDS = new Set<number>([TICK.BID_OPTION, TICK.ASK_OPTION, TICK.LAST_OPTION, TICK.MODEL_OPTION,
+  TICK.DELAYED_BID_OPTION, TICK.DELAYED_ASK_OPTION, TICK.DELAYED_LAST_OPTION, TICK.DELAYED_MODEL_OPTION]);
 
 export function emptySnapshot(): QuoteSnapshot {
   return { bid: null, ask: null, last: null, open: null, high: null, low: null, close: null, volume: null, oi: null, callOi: null, putOi: null,
-    callVolume: null, putVolume: null, impliedVol: null, historicalVol: null, greeks: null };
+    callVolume: null, putVolume: null, impliedVol: null, historicalVol: null, greeks: null, delayed: false };
 }
 
 export class TickAccumulator {
@@ -59,6 +70,7 @@ export class TickAccumulator {
   dead = false;
 
   apply(e: TickEvent): void {
+    if (e.kind !== "generic" && DELAYED_FIELDS.has(e.field)) this.s.delayed = true;
     switch (e.kind) {
       case "price": {
         const k = PRICE_FIELDS[e.field];
@@ -77,7 +89,7 @@ export class TickAccumulator {
       }
       case "option": {
         if (!COMPUTATION_FIELDS.has(e.field)) return;
-        const isModel = e.field === TICK.MODEL_OPTION;
+        const isModel = e.field === TICK.MODEL_OPTION || e.field === TICK.DELAYED_MODEL_OPTION;
         if (this.greeksFromModel && !isModel) return;
         const g: Greeks = { iv: cleanVol(e.iv), delta: cleanDelta(e.delta), gamma: cleanNonNeg(e.gamma), vega: cleanNonNeg(e.vega), theta: cleanTheta(e.theta) };
         if (g.iv === null && g.delta === null) return;   // nothing computed yet

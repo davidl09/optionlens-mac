@@ -9,7 +9,7 @@ import { addDays, between, NOW, pick, reseed, rnd, round, rowsFor, SYMBOLS, TODA
 const SPOT = 231.42;
 
 export function quote(sym: string): Quote {
-  return { symbol: sym, ts: NOW, price: SPOT, change: 2.87, change_pct: 0.01256, open: 229.1, high: 232.05, low: 228.4, prev_close: 228.55, volume: 48_211_300, bid: 231.4, ask: 231.44, iv30: 0.274 };
+  return { symbol: sym, ts: NOW, price: SPOT, change: 2.87, change_pct: 0.01256, open: 229.1, high: 232.05, low: 228.4, prev_close: 228.55, volume: 48_211_300, bid: 231.4, ask: 231.44, iv30: 0.274, source: "ibkr", delayed: false };
 }
 
 export function bars(range: string): Bar[] {
@@ -68,6 +68,7 @@ export function chain(sym: string, expiry: string | null): Chain {
   return {
     symbol: sym, underlying: quote(sym), asof: NOW, expiries: expiries(), expiry: exp, strikes: STRIKES,
     calls: STRIKES.map((k) => optionRow(sym, exp, "C", k)), puts: STRIKES.map((k) => optionRow(sym, exp, "P", k)),
+    source: "ibkr", delayed: true,
   };
 }
 

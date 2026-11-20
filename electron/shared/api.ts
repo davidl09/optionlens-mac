@@ -42,6 +42,8 @@ export interface BridgeStatus {
   /** Why data requests are paused while connected (competing session, IBKR servers unreachable), else null. */
   paused: string | null;
   lastError: string | null;
+  /** Data-quality notes, e.g. "IBKR delayed (no OPRA subscription)". */
+  notes: string[];
   lastPushAt: string | null;
   current: { kind: JobKind; label: string } | null;
   queued: Record<JobKind, number>;

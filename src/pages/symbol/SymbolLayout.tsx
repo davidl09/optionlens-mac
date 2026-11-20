@@ -1,10 +1,12 @@
 // /s/:sym/* — quote header, grouped tab sub-nav, and tab routes (registry is the single source).
-import { ComponentType } from "react";
+import { ComponentType, useEffect, useState } from "react";
+import type { RefreshResult } from "../../../electron/shared/api";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { api } from "../../api/client";
+import { api, invalidate, reloadAll } from "../../api/client";
 import { useApi } from "../../api/useApi";
 import { AddToWatchlist } from "../../components/AddToWatchlist";
-import { AsOf, ErrorBox, Spinner } from "../../components/ui";
+import { AsOf, ErrorBox, SourceBadge, Spinner } from "../../components/ui";
+import { desktop } from "../../desktop";
 import { fmt, signClass } from "../../lib/format";
 import { LegsProvider } from "../../state/legs";
 import CalculatorTab from "./CalculatorTab";
@@ -58,7 +60,39 @@ export const TAB_GROUPS: { group: string; tabs: TabDef[] }[] = [
 
 export const ALL_TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
+/**
+ * INTEGRATION.md §7: opening a symbol asks the bridge (main process) to fetch its chain from IBKR and push it
+ * to the engine; when that worked, every query on the page reloads. Without the desktop app: no-op.
+ */
+function useIbkrRefresh(sym: string): RefreshResult | "pending" | null {
+  const [state, setState] = useState<RefreshResult | "pending" | null>(null);
+  useEffect(() => {
+    if (!desktop) return undefined;
+    let alive = true;
+    setState("pending");
+    desktop.refreshSymbol(sym).then((r) => {
+      if (!alive) return;
+      setState(r);
+      if (r.status === "refreshed") { invalidate(`/api/symbol/${sym}`); reloadAll(); }
+    }, (e: unknown) => { if (alive) setState({ status: "failed", message: e instanceof Error ? e.message : String(e) }); });
+    return () => { alive = false; };
+  }, [sym]);
+  return state;
+}
+
+function RefreshChip({ state }: { state: RefreshResult | "pending" | null }) {
+  if (state === null) return null;
+  if (state === "pending") return <span className="refresh-chip" role="status"><span className="spinner-dot" />IBKR refresh…</span>;
+  switch (state.status) {
+    case "refreshed": return <span className="refresh-chip pos" title="Chain fetched from IBKR just now">IBKR ✓</span>;
+    case "fresh": return <span className="refresh-chip pos" title="Chain from IBKR is recent">IBKR ✓</span>;
+    case "unavailable": return <span className="refresh-chip" title={state.message}>IBKR off</span>;
+    case "failed": return <span className="refresh-chip warn" title={state.message}>IBKR refresh failed</span>;
+  }
+}
+
 function QuoteHeader({ sym }: { sym: string }) {
+  const refresh = useIbkrRefresh(sym);
   const st = useApi(() => api.summary(sym), [sym]);
   if (st.error) return <ErrorBox error={st.error} onRetry={st.refetch} />;
   const s = st.data && st.data.symbol === sym ? st.data : null;
@@ -74,6 +108,7 @@ function QuoteHeader({ sym }: { sym: string }) {
           <span className="qh-last">{fmt(q.price, "money")}</span>
           <span className={`qh-chg ${signClass(q.change)}`}>{q.change > 0 ? "+" : ""}{fmt(q.change, "num2")} ({fmt(q.change_pct, "pct_signed")})</span>
           <AsOf ts={q.ts} />
+          <SourceBadge source={q.source} delayed={q.delayed === true} />
         </div>
       )}
       {s && (
@@ -85,6 +120,7 @@ function QuoteHeader({ sym }: { sym: string }) {
         </div>
       )}
       <div className="qh-actions">
+        <RefreshChip state={refresh} />
         <AddToWatchlist symbol={sym} />
         <Link className="btn btn-sm" to={`/alerts?symbol=${sym}`}>+ Alert</Link>
       </div>

@@ -508,3 +508,26 @@ table.chain td a:hover { color: var(--accent); }
   .w-wide { width: 100%; }
   .bell-pop { position: fixed; top: var(--header-h); right: 8px; left: 8px; width: auto; }
 }
+
+/* ---- desktop app: engine gate, connection banner, IBKR indicator, settings ---- */
+.engine-gate { min-height: 100vh; display: grid; place-items: center; background: var(--bg); }
+.engine-gate-box { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 520px; text-align: center; padding: 24px; }
+.engine-gate-box h1 { margin: 0 0 6px; font-size: 22px; }
+.error-text { color: var(--down); }
+.conn-banner { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 6px 16px; background: var(--warn-soft); border-bottom: 1px solid var(--warn); color: var(--fg); font-size: 12.5px; }
+.bridge-pill { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px solid var(--border); color: var(--fg-2); font-size: 11.5px; font-weight: 600; text-decoration: none; }
+.bridge-pill:hover { background: var(--panel-3); text-decoration: none; }
+.bridge-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.bridge-pill.pos .dot { background: var(--up); }
+.bridge-pill.warn .dot { background: var(--warn); }
+.bridge-busy { color: var(--muted); }
+.bridge-summary { margin: 0 0 8px; color: var(--fg-2); }
+.refresh-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); padding: 0 6px; }
+.refresh-chip.pos { color: var(--up); }
+.refresh-chip.warn { color: var(--warn); }
+.source-badge { margin-left: 4px; }
+.chain-source { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--fg-2); }
+.coverage-note { display: block; }
+.settings-form { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+.settings-form label:not(.check-inline) { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--fg-2); }
+code.wrap { word-break: break-all; font-size: 11.5px; }

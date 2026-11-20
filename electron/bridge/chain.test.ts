@@ -29,6 +29,20 @@ describe("tick sanitizing", () => {
     expect(a.snapshot().greeks).toEqual({ iv: 0.25, delta: -1, gamma: 0, vega: 0.2, theta: -0.04 });
   });
 
+  it("maps delayed tick ids (no OPRA) to the same fields and flags the snapshot", () => {
+    const a = new TickAccumulator();
+    a.apply({ kind: "price", field: TICK.DELAYED_BID, value: 1.1 });
+    a.apply({ kind: "price", field: TICK.DELAYED_ASK, value: 1.2 });
+    a.apply({ kind: "size", field: TICK.DELAYED_VOLUME, value: 10 });
+    a.apply({ kind: "option", field: TICK.DELAYED_MODEL_OPTION, iv: 0.3, delta: 0.4, gamma: 0.01, vega: 0.1, theta: -0.01 });
+    const s = a.snapshot();
+    expect(s).toMatchObject({ bid: 1.1, ask: 1.2, volume: 10, delayed: true, oi: null, callOi: null });
+    expect(a.optionComplete()).toBe(true);
+    const live = new TickAccumulator();
+    live.apply({ kind: "price", field: TICK.BID, value: 1 });
+    expect(live.snapshot().delayed).toBe(false);
+  });
+
   it("ignores unknown fields and never throws on odd events", () => {
     const a = new TickAccumulator();
     expect(() => {
@@ -87,15 +101,17 @@ describe("chain assembly (ticks → ingest JSON)", () => {
   it("drops contracts with nothing usable and requires a session date for final chains", () => {
     const empty = ticksFor([]);
     const und = { price: 349.1, bid: 349, ask: 349.2, open: null, high: null, low: null, prev_close: 351, volume: 1e6, ts: "2026-11-20T21:00:00.000Z" };
-    const body = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: "2026-11-20" }, und, [
+    const body = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: "2026-11-20", underlyingDelayed: false }, und, [
       { contract: opt("20261218", 350, "C"), quote: empty },
       { contract: opt("20261218", 350, "P"), quote: ticksFor([{ kind: "price", field: TICK.BID, value: 1 }]) },
     ]);
     expect(body).toMatchObject({ source: "ibkr", symbol: "AAPL", final: true, session_date: "2026-11-20" });
     expect(body.contracts).toHaveLength(1);
     expect(body.contracts[0]).toMatchObject({ right: "P", bid: 1, ask: null, iv: null });
-    expect(() => assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: null }, und, [])).toThrow(/session date/);
-    const live = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: false, sessionDate: null }, und, []);
+    expect(() => assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: null, underlyingDelayed: false }, und, [])).toThrow(/session date/);
+    const live = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: false, sessionDate: null, underlyingDelayed: true }, und, []);
     expect("session_date" in live).toBe(false);
+    expect(live.delayed).toBe(true);
+    expect(body.delayed).toBe(false);
   });
 });

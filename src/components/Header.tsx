@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { ReportDef } from "../api/types";
 import { useApi } from "../api/useApi";
 import { useTheme } from "../state/theme";
+import { BridgeIndicator } from "./Desktop";
 import { NotificationBell } from "./NotificationBell";
 import { SymbolSearch } from "./SymbolSearch";
 import { useClickOutside } from "./ui";
@@ -45,7 +46,7 @@ export function buildMenus(defs: ReportDef[]): Menu[] {
     ] }] },
     { label: "My", sections: [{ items: [
       { to: "/watchlists", label: "Watchlists" }, { to: "/alerts", label: "Alerts & notifications" },
-      { to: "/status", label: "Data status" }, { to: "/about", label: "About & data limits" },
+      { to: "/status", label: "Data status" }, { to: "/settings", label: "Settings" }, { to: "/about", label: "About & data limits" },
     ] }] },
   ].map((m) => ({ ...m, sections: m.sections.filter((s) => s.items.length) }));
 }
@@ -99,6 +100,7 @@ export function Header() {
         </nav>
         <div className="header-tools">
           <SymbolSearch onNavigate={closeAll} />
+          <BridgeIndicator />
           <NotificationBell />
           <button className="icon-btn" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title="Toggle theme">
             {theme === "dark"
@@ -114,7 +116,7 @@ export function Header() {
 export function Footer() {
   return (
     <footer className="app-footer">
-      <span>OptionLens · quotes delayed ~15 min · model-priced rows are labelled <span className="badge warn">model</span></span>
+      <span>OptionLens · data from IBKR (real-time or <span className="badge warn">delayed</span> per your subscriptions) · model-priced rows are labelled <span className="badge warn">model</span></span>
       <span><NavLink to="/status">Data status</NavLink> · <NavLink to="/about">About & limitations</NavLink></span>
     </footer>
   );

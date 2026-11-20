@@ -18,6 +18,13 @@ export function status(): Status {
       { job: "prices_refresh", started_at: "2026-11-15T07:00:00-05:00", finished_at: "2026-11-15T07:22:00-05:00", ok: false, detail: "Nasdaq 429 for 3 symbols" },
     ],
     db_size_bytes: 1_840_000_000,
+    sources: [
+      { name: "ibkr", ok: true, last_success_at: NOW, detail: "bridge push 2 min ago" },
+      { name: "nasdaq", ok: true, last_success_at: "2026-11-19T15:20:00-05:00", detail: null },
+      { name: "treasury", ok: false, last_success_at: "2026-11-15T07:00:00-05:00", detail: "HTTP 503" },
+      { name: "vendor", ok: null, last_success_at: null, detail: "not configured" },
+    ],
+    bridge: { connected: true, last_push_at: NOW, client: "optionlens-mac 0.1.0" },
   };
 }
 
