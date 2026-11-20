@@ -24,15 +24,16 @@ mac:
   extendInfo:
     LSUIElement: false
     NSHumanReadableCopyright: OptionLens
-  # Relocatable CPython + engine dependencies (scripts/bundle-engine.sh) and the engine package.
+  # Relocatable CPython with the engine and its locked dependencies (scripts/bundle-engine.sh).
   extraResources:
     - from: build/python
       to: python
-    - from: build/engine
-      to: engine
 dmg:
   artifactName: OptionLens-${version}-${arch}.${ext}
   writeUpdateInfo: false
 linux:
   target: dir
   category: Finance
+  extraResources:
+    - from: build/python
+      to: python

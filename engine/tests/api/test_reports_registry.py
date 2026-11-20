@@ -13,7 +13,7 @@ from optionlens.services.reports.base import CATEGORIES, FMTS, PARAM_TYPES, Para
 
 from .seed_reports import api, seeded  # noqa: F401 - fixtures
 
-SPEC = Path(__file__).resolve().parents[3] / "SPEC.md"
+SPEC = Path(__file__).resolve().parents[3] / "docs" / "SPEC.md"
 
 
 def spec_report_ids() -> set[str]:

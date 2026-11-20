@@ -3,7 +3,11 @@ dist/
 dist-electron/
 release/
 build/python/
-build/engine/
+build/pyinst/
+build/requirements.txt
 test-results/
 e2e/screenshots/
 *.tsbuildinfo
+.venv/
+__pycache__/
+.pytest_cache/

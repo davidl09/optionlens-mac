@@ -106,7 +106,8 @@ describe("engine paths", () => {
   it("uses the bundled Python and engine in the packaged app", () => {
     const c = resolveEngineCommand({ packaged: true, resourcesPath: "/App/Contents/Resources", appPath: "/x", env: {} });
     expect(c.python).toBe("/App/Contents/Resources/python/bin/python3");
-    expect(c.env.PYTHONPATH).toBe("/App/Contents/Resources/engine");
+    expect(c.env.PYTHONPATH).toBeUndefined();
+    expect(c.cwd).toBe("/App/Contents/Resources");
   });
   it("honours OPTIONLENS_PYTHON / OPTIONLENS_ENGINE_DIR in development", () => {
     const c = resolveEngineCommand({ packaged: false, resourcesPath: "", appPath: "/repo", env: { OPTIONLENS_PYTHON: "/venv/bin/python", OPTIONLENS_ENGINE_DIR: "/srv/engine" } });

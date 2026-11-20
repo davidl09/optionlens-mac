@@ -52,12 +52,12 @@ export class Bridge {
     this.now = d.now ?? Date.now;
     this.pacer = d.pacer ?? new HistoricalPacer({ now: this.now });
     this.scheduler = new Scheduler({ now: this.now, onChange: () => this.emit() });
-    this.scheduler.pause();
     this.supervisor = new TwsSupervisor({
       connector: d.connector, settings: d.settings, log: d.log,
       onSession: (s) => this.onSession(s),
       onChange: () => this.onConnectionChange(),
     });
+    this.scheduler.pause();   // until a TWS session exists
   }
 
   start(): void {

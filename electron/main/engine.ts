@@ -131,8 +131,10 @@ export class EngineSupervisor {
     this.stderrTail.length = 0;
     this.spawnError = null;
     this.set(this.restarts ? "restarting" : "starting");
+    // The engine's Python must not pick up a PYTHONHOME/PYTHONPATH from the user's shell.
+    const { PYTHONHOME: _home, PYTHONPATH: _path, ...inherited } = process.env;
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...inherited,
       ...this.o.command.env,
       OPTIONLENS_HOST: "127.0.0.1",
       OPTIONLENS_API_TOKEN: this.token,
