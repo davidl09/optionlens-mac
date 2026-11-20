@@ -83,4 +83,7 @@ describe("durationFor", () => {
     expect(durationFor("2025-06-01", today)).toBe("2 Y");
     expect(durationFor("2010-01-01", today)).toBe("10 Y");
   });
+  it("counts days to the New York date, not the UTC one", () => {
+    expect(durationFor("2026-11-01", new Date("2026-11-21T02:00:00Z"))).toBe("20 D");   // 21:00 ET on the 20th
+  });
 });

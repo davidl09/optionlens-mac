@@ -2,6 +2,7 @@
 // optional section is "nothing wanted") and planning (what to enqueue now, given freshness and the
 // attempt ledger so a symbol IBKR has no data for is not re-requested on every poll).
 import type { ChainShape } from "./chain";
+import { nyDate } from "./ny";
 
 export interface Wants {
   ivHistory: { symbol: string; from: string }[];
@@ -143,9 +144,9 @@ export function planWants(w: Wants, c: PlanContext): Plan {
   };
 }
 
-/** IBKR duration string covering `from` → `today` (≤ 365 days in D, else whole years, max 10 Y). */
-export function durationFor(from: string, today: Date): string {
-  const days = Math.floor((Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+/** IBKR duration string covering `from` → `now`'s New York date (≤ 365 days in D, else whole years, max 10 Y). */
+export function durationFor(from: string, now: Date): string {
+  const days = Math.round((Date.parse(`${nyDate(now)}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
   if (days <= 1) return "2 D";
   if (days <= 365) return `${days} D`;
   return `${Math.min(10, Math.ceil(days / 365))} Y`;

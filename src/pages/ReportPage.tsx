@@ -8,6 +8,7 @@ import { useApi } from "../api/useApi";
 import { DataTable, inferColumns, SortState, TableState } from "../components/DataTable";
 import { ParamForm } from "../components/ParamForm";
 import { AsOf, Async, Card, ErrorBox, InfoBox, Spinner } from "../components/ui";
+import { todayNY } from "../lib/dates";
 import { ParamStrings, resolveParams, stringToValue, valueToString } from "../lib/params";
 
 const K_SORT = "_sort", K_FILTER = "_f", K_HIDE = "_hide", K_WL = "_wl";
@@ -163,7 +164,7 @@ function ReportView({ def }: { def: ReportDef }) {
       {!result.data && result.loading && <Spinner label="Running report…" />}
       {result.data && (
         <Card className={`flush ${result.loading ? "refetching" : ""}`}>
-          <DataTable columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${new Date().toISOString().slice(0, 10)}`}
+          <DataTable columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${todayNY()}`}
             toolbar={<><WatchlistFilter value={wl} onChange={setWl} /><PresetBar def={def} params={applied} table={table} onApply={applyPreset} /></>} maxHeight="70vh" />
         </Card>
       )}

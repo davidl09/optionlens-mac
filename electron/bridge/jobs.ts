@@ -30,11 +30,6 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("cancelled");
 }
 
-/** America/New_York calendar date (the engine's session date convention). */
-export function nyDate(d: Date): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-}
-
 // ---------------- market data ----------------
 
 export interface CollectOptions { genericTicks: string; complete: (a: TickAccumulator) => boolean; minDwellMs?: number }

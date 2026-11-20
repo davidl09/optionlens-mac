@@ -1,6 +1,7 @@
 // Option-chain planning and assembly (pure): which underlying contract, which expiries and strikes,
 // and how accumulated ticks become the POST /api/ingest/chain body (INTEGRATION.md §6).
 import type { IngestChain, IngestContract, IngestUnderlying } from "./ingest";
+import { nyYmd } from "./ny";
 import { bestPrice, type QuoteSnapshot } from "./ticks";
 import type { OptionParams, TwsContract } from "./tws";
 
@@ -23,16 +24,14 @@ export const FULL_CHAIN: ChainShape = { expiries: 8, moneyness: 0.25 };
 
 export interface ExpiryPick { expiry: string; tradingClass: string; multiplier: string }
 
-const ymd = (d: Date) => `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
-
 /**
- * First `count` expiries on or after `today` (YYYYMMDD compare) from the SMART listing. When an expiry is
+ * First `count` expiries on or after `now`'s New York date (YYYYMMDD compare) from the SMART listing. When an expiry is
  * listed under several trading classes (SPX monthly AM vs SPXW PM) the class named like the symbol wins.
  */
-export function pickExpiries(params: OptionParams[], symbol: string, today: Date, count: number): ExpiryPick[] {
+export function pickExpiries(params: OptionParams[], symbol: string, now: Date, count: number): ExpiryPick[] {
   const smart = params.filter((p) => p.exchange === "SMART");
   const rows = smart.length ? smart : params;
-  const todayKey = ymd(today);
+  const todayKey = nyYmd(now);
   const best = new Map<string, ExpiryPick>();
   for (const p of rows) {
     for (const e of p.expirations) {

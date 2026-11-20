@@ -70,6 +70,12 @@ describe("chain planning", () => {
     expect(picks.map((p) => `${p.expiry}/${p.tradingClass}`)).toEqual(["20261120/SPXW", "20261123/SPXW", "20261218/SPX"]);
   });
 
+  it("keeps today's (0DTE) expiry in the evening, when the UTC date is already tomorrow", () => {
+    const params = [{ exchange: "SMART", tradingClass: "SPXW", multiplier: "100", expirations: ["20261120", "20261123"], strikes: [] }];
+    // 19:30 ET on 2026-11-20 = 00:30 UTC on 2026-11-21 (closing chains run until 20:00 ET).
+    expect(pickExpiries(params, "SPX", new Date("2026-11-21T00:30:00Z"), 1).map((p) => p.expiry)).toEqual(["20261120"]);
+  });
+
   it("selects strikes within ±moneyness of spot, de-duplicated and sorted", () => {
     const all = [opt("20261218", 130, "C"), opt("20261218", 100, "P"), opt("20261218", 100, "C"), opt("20261218", 74, "C"), opt("20261218", 100, "C"), opt("20261211", 125, "P")];
     const sel = selectContracts(all, 100, 0.25);
