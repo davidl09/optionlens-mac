@@ -93,9 +93,11 @@ async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
     syms = symbols or await asyncio.to_thread(symbols_repo.universe_symbols)
     t0 = _time.monotonic()
     done: list[str] = []
+    skipped: set[str] = set()
 
     async def one(sym: str) -> None:
         if net.blocked_until(cboe.BASE_HOST):  # blocked mid-sweep: skip quietly, the job reports it
+            skipped.add(sym)
             return
         if await refresh_chain(sym, final) is not None:
             done.append(sym)
@@ -106,8 +108,9 @@ async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
     if failed:  # second pass for transient failures (e.g. a rate-limit burst)
         ok2, failed = await run_bounded(failed, one, get_settings().cboe_concurrency, "sweep-retry")
         ok += ok2
-    detail = (f"{len(done)} chains, {ok - len(done)} not optionable, {len(failed)} failed, "
-              f"{_time.monotonic() - t0:.0f}s")
+    blocked = f"{len(skipped)} skipped (CDN block), " if skipped else ""
+    detail = (f"{len(done)} chains, {ok - len(done) - len(skipped)} not optionable, {blocked}"
+              f"{len(failed)} failed, {_time.monotonic() - t0:.0f}s")
     if failed:
         detail += f" (failed: {','.join(failed[:20])})"
     if net.blocked_until(cboe.BASE_HOST):

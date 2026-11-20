@@ -8,6 +8,7 @@ Retries with exponential backoff on 5xx/timeouts/connection errors (3x) and on 4
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -52,11 +53,37 @@ def _family(host: str) -> str | None:
 
 
 # Process-wide (shared by every event loop / worker thread): host family -> (blocked_until, last pause).
+# Persisted in DATA_DIR/net_blocks.json so a service restart does not forget a block and re-probe.
 _blocks: dict[str, tuple[float, float]] = {}
+_blocks_loaded = False
+
+
+def _blocks_file():
+    return get_settings().data_dir / "net_blocks.json"
+
+
+def _load_blocks() -> None:
+    global _blocks_loaded
+    if _blocks_loaded:
+        return
+    _blocks_loaded = True
+    try:
+        raw = json.loads(_blocks_file().read_text())
+        _blocks.update({k: (float(v[0]), float(v[1])) for k, v in raw.items()})
+    except (OSError, ValueError, TypeError, IndexError):
+        pass
+
+
+def _save_blocks() -> None:
+    try:
+        _blocks_file().write_text(json.dumps(_blocks))
+    except OSError as e:
+        log.warning("could not persist host block state: %s", e)
 
 
 def blocked_until(host: str) -> float | None:
     """time.time() until which requests to this host family are suspended, or None."""
+    _load_blocks()
     fam = _family(host)
     until = _blocks.get(fam, (0.0, 0.0))[0] if fam else 0.0
     return until if until > time.time() else None
@@ -64,11 +91,12 @@ def blocked_until(host: str) -> float | None:
 
 def _register_block(host: str) -> None:
     fam = _family(host)
-    if fam is None:
+    if fam is None or blocked_until(host):  # concurrent block pages count once (no double escalation)
         return
     _, last = _blocks.get(fam, (0.0, 0.0))
     pause = min(last * 2, BLOCK_PAUSE_MAX_S) if last else BLOCK_PAUSE_S
     _blocks[fam] = (time.time() + pause, pause)
+    _save_blocks()
     log.error("%s refused this host with a CDN block page; suspending its requests for %.0f min",
               fam, pause / 60)
 
@@ -77,6 +105,7 @@ def _clear_block_escalation(host: str) -> None:
     fam = _family(host)
     if fam in _blocks and _blocks[fam][0] <= time.time():
         del _blocks[fam]
+        _save_blocks()
 
 
 def _is_block_page(r: httpx.Response) -> bool:

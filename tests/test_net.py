@@ -58,6 +58,8 @@ def test_cdn_block_page_suspends_host_and_is_not_treated_as_unlisted(monkeypatch
         return httpx.Response(403, headers={"content-type": "text/html"}, text="<html>blocked</html>")
 
     net._blocks.clear()
+    net._blocks_loaded = True
+    monkeypatch.setattr(net, "_save_blocks", lambda: None)
 
     async def run():
         n = net._net()
@@ -87,6 +89,8 @@ def test_json_403_is_not_a_block(monkeypatch):
     from optionlens import net
 
     net._blocks.clear()
+    net._blocks_loaded = True
+    monkeypatch.setattr(net, "_save_blocks", lambda: None)
 
     async def run():
         n = net._net()
@@ -100,3 +104,25 @@ def test_json_403_is_not_a_block(monkeypatch):
 
     err = asyncio.run(run())
     assert err.status == 403 and not err.blocked and net.blocked_until("cdn.cboe.com") is None
+
+
+def test_concurrent_block_pages_escalate_once_and_state_survives_restart(tmp_path, monkeypatch):
+    from optionlens import config, net
+
+    monkeypatch.setenv("OPTIONLENS_DATA_DIR", str(tmp_path))
+    config.get_settings.cache_clear()
+    net._blocks.clear()
+    net._blocks_loaded = True
+    try:
+        net._register_block("cdn.cboe.com")
+        net._register_block("cdn-api.cboe.com")          # second in-flight block page: no doubling
+        until, pause = net._blocks["cboe.com"]
+        assert pause == net.BLOCK_PAUSE_S
+        assert (tmp_path / "net_blocks.json").exists()
+        net._blocks.clear()                               # simulate a restart
+        net._blocks_loaded = False
+        assert net.blocked_until("cdn.cboe.com") == until
+    finally:
+        net._blocks.clear()
+        net._blocks_loaded = False
+        config.get_settings.cache_clear()
