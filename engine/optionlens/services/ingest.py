@@ -38,8 +38,12 @@ def _sweep_done(day: date, symbols: list[str]) -> None:
 
 
 # ----------------------------------------------------------------------------- chains
-def _quote(symbol: str, u: dict, fetched_at: datetime, delayed: bool) -> Quote:
-    price, prev = u["price"], u.get("prev_close")
+def _quote(symbol: str, u: dict, fetched_at: datetime, delayed: bool, final: bool) -> Quote:
+    """The underlying quote of a pushed chain. A closing snapshot uses the regular-session close
+    (`rth_close`) when given: after 16:00 the live price is an extended-hours trade, which must not
+    become the session's close, the archive's underlying or the moneyness reference."""
+    prev = u.get("prev_close")
+    price = u["rth_close"] if final and u.get("rth_close") else u["price"]
     change = price - prev if prev else None
     return Quote(symbol=symbol, ts=u.get("ts") or fetched_at, price=price, change=change,
                  change_pct=change / prev if change is not None else None, open=u.get("open"), high=u.get("high"),
@@ -77,7 +81,7 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     if fetched > now + CLOCK_SKEW:
         raise BadRequest(f"fetched_at {fetched.isoformat()} is in the future")
     day = _check_final(body.get("session_date"), fetched) if body.get("final") else None
-    snap = ChainSnapshot(_quote(sym, body["underlying"], fetched, body["delayed"]),
+    snap = ChainSnapshot(_quote(sym, body["underlying"], fetched, body["delayed"], day is not None),
                          tuple(_contract(sym, c) for c in body["contracts"]), fetched, body["delayed"])
     chains.store_chain(snap, fetched, final=day is not None, source=source)
     if day is not None:

@@ -104,6 +104,19 @@ describe("pushChain", () => {
     expect(body.contracts).toHaveLength(11 * 2 * 2);
   });
 
+  it("centres a closing chain on the session's regular close (not the after-hours last) and sends it as rth_close", async () => {
+    const m = aaplMarket();
+    m.historical = (c, r) => (c.secType === "STK" && r.whatToShow === "TRADES" && r.useRth
+      ? [{ time: "20261119", open: 96, high: 99, low: 95, close: 97, volume: 1 }, { time: "20261120", open: 97, high: 121, low: 96, close: 120, volume: 1 }]
+      : []);
+    const ctx = ctxFor(new FakeSession(m), { now: () => new Date("2026-11-20T21:30:00Z") });   // 16:30 ET, last = 100 after hours
+    await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: true, sessionDate: "2026-11-20" });
+    const body = ctx.ingest.calls.chain[0] as { final: boolean; underlying: { price: number; rth_close: number | null }; contracts: { strike: number }[] };
+    expect(body.final).toBe(true);
+    expect(body.underlying).toMatchObject({ price: 100, rth_close: 120 });
+    expect(Math.min(...body.contracts.map((c) => c.strike))).toBe(110);   // ±10% of 120, not of 100
+  });
+
   it("never archives a closing chain with < 95% of its contracts quoted: posts it live and fails (retry)", async () => {
     const m = aaplMarket();
     const base = m.ticks;

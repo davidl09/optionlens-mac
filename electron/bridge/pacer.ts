@@ -44,6 +44,12 @@ export class HistoricalPacer implements Gate {
     return Math.max(now, this.lastStart + this.spacing, this.backoffUntil);
   }
 
+  /** How long (ms) until the next request may start. */
+  delayMs(): number {
+    const now = this.now();
+    return this.readyAt(now) - now;
+  }
+
   /** Current minimum spacing between starts (ms). */
   get spacingMs(): number { return this.spacing; }
 

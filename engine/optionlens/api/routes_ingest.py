@@ -36,6 +36,7 @@ class UnderlyingIn(_In):
     prev_close: Price | None = None
     volume: Count | None = None
     ts: AwareDatetime | None = None
+    rth_close: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None   # regular-session close (final chains)
 
 
 class ContractIn(_In):

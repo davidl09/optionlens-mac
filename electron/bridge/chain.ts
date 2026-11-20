@@ -66,10 +66,11 @@ export function isoDate(twsDate: string): string | null {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
-export function assembleUnderlying(q: QuoteSnapshot, ts: string): IngestUnderlying | null {
-  const price = bestPrice(q);
+/** `rthClose`: the regular-session close, sent with closing chains (the engine archives with it). */
+export function assembleUnderlying(q: QuoteSnapshot, ts: string, rthClose: number | null = null): IngestUnderlying | null {
+  const price = bestPrice(q) ?? rthClose;
   if (price === null) return null;
-  return { price, bid: q.bid, ask: q.ask, open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts };
+  return { price, bid: q.bid, ask: q.ask, open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts, rth_close: rthClose };
 }
 
 /** One contract row, or null when TWS gave nothing usable (no quote, no IV). */

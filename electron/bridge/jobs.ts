@@ -128,13 +128,14 @@ async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
 
 export interface ResolvedChain { underlying: QuoteSnapshot; spot: number; contracts: TwsContract[] }
 
-export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape): Promise<ResolvedChain> {
+/** Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. */
+export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape, spotOverride: number | null = null): Promise<ResolvedChain> {
   const und = underlyingContract(symbol);
   const [details] = await ctx.session.contractDetails(und, ctx.signal);
   if (!details?.conId) throw new Error(`${symbol}: not found at IBKR`);
   const resolved: TwsContract = { ...und, conId: details.conId };
   const quote = await underlyingQuote(ctx, resolved);
-  const spot = bestPrice(quote);
+  const spot = spotOverride ?? bestPrice(quote);
   if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
   const params = await ctx.session.optionParams({ symbol: und.symbol, secType: und.secType, conId: details.conId }, ctx.signal);
   const expiries = pickExpiries(params, und.symbol, ctx.now(), shape.expiries);
@@ -177,14 +178,35 @@ async function optionQuotes(ctx: JobContext, contracts: TwsContract[]): Promise<
 }
 
 /**
- * Fetches and posts one chain (only the contracts that got data). A closing chain below
+ * The underlying's regular-session close of `sessionDate` from a daily TRADES bar with useRTH (null when
+ * TWS has none). After 16:00 ET the last price is an extended-hours trade, and tick 9 (close) is still the
+ * previous session's close until IBKR's overnight reset, so neither is the session's close.
+ */
+export async function sessionClose(ctx: JobContext, symbol: string, sessionDate: string): Promise<number | null> {
+  const wait = ctx.pacer.delayMs();   // chain tasks are not gated by the pacer: wait for it here (timers may fire a ms early)
+  if (wait > 0) await sleep(wait + 5, ctx.signal);
+  throwIfAborted(ctx.signal);
+  try {
+    const bars = await pacedHistorical(ctx, underlyingContract(symbol), { duration: "2 D", whatToShow: "TRADES", useRth: true });
+    const bar = bars.find((b) => isoDate(b.time) === sessionDate && validBar(b));
+    return bar ? bar.close : null;
+  } catch (e) {
+    if (ctx.signal.aborted) throw e;
+    return null;   // pacing, timeout, permission: fall back to the live price (the chain matters more)
+  }
+}
+
+/**
+ * Fetches and posts one chain (only the contracts that got data). A closing chain is centred on the
+ * session's regular close and carries it as underlying.rth_close. A closing chain below
  * FINAL_MIN_COVERAGE is never archived: it is posted as a live chain and the task fails, so it is retried.
  */
 export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed> {
-  const r = await resolveOptionContracts(ctx, req.symbol, req.shape);
+  const rthClose = req.final && req.sessionDate ? await sessionClose(ctx, req.symbol, req.sessionDate) : null;
+  const r = await resolveOptionContracts(ctx, req.symbol, req.shape, rthClose);
   const quotes = await optionQuotes(ctx, r.contracts);
   const fetchedAt = ctx.now().toISOString();
-  const underlying = assembleUnderlying(r.underlying, fetchedAt);
+  const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
   const rows = r.contracts.map((contract, i) => ({ contract, quote: quotes[i] }));
   const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed };
@@ -192,7 +214,7 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
   if (!body.contracts.length) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
   const coverage = body.contracts.length / r.contracts.length;
   const incompleteFinal = req.final && coverage < FINAL_MIN_COVERAGE;
-  if (incompleteFinal) body = assembleChain({ ...meta, final: false, sessionDate: null }, underlying, rows);
+  if (incompleteFinal) body = assembleChain({ ...meta, final: false, sessionDate: null }, { ...underlying, rth_close: null }, rows);
   await ctx.ingest.chain(body);
   if (incompleteFinal) {
     throw new Error(`${req.symbol}: closing chain incomplete (${body.contracts.length} of ${r.contracts.length} contracts quoted); posted as a live chain, not archived — will retry`);

@@ -145,6 +145,18 @@ def test_ingest_final_chain_archives_the_session(client):
     assert len(eod["osi"]) == 6 and float(eod["underlying"][0]) == 120.0
 
 
+def test_ingest_final_chain_uses_the_regular_session_close(client):
+    from optionlens.repo import metrics, options
+    close = datetime(2026, 11, 16, 21, 25, tzinfo=timezone.utc)   # 16:25 ET: price 120 is an after-hours trade
+    body = _chain(final=True, session_date="2026-11-16", fetched_at=close.isoformat(),
+                  underlying={"price": 120.0, "prev_close": 118.0, "rth_close": 119.0})
+    assert client.post("/api/ingest/chain", json=body).status_code == 200
+    eod = options.eod_for_date(date(2026, 11, 16), ["DELL"])
+    assert float(eod["underlying"][0]) == 119.0
+    assert metrics.get_metrics("DELL", date(2026, 11, 16))["close"] == 119.0
+    client.post("/api/ingest/chain", json=_chain())                               # restore the latest chain
+
+
 @pytest.mark.parametrize("body,msg", [
     (_chain(final=True), "session_date is required"),
     (_chain(final=True, session_date="2026-11-19"), "is not after the close"),

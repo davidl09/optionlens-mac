@@ -5,7 +5,11 @@ export interface JsonHttp { get<T>(path: string): Promise<T>; post<T>(path: stri
 
 type N = number | null;
 
-export interface IngestUnderlying { price: number; bid: N; ask: N; open: N; high: N; low: N; prev_close: N; volume: N; ts: string }
+export interface IngestUnderlying {
+  price: number; bid: N; ask: N; open: N; high: N; low: N; prev_close: N; volume: N; ts: string;
+  /** Regular-session close of session_date (closing chains; null when unknown or not final). */
+  rth_close: N;
+}
 export interface IngestContract {
   expiry: string; strike: number; right: "C" | "P";
   bid: N; ask: N; last: N; volume: N; oi: N; iv: N; delta: N; gamma: N; theta: N; vega: N;

@@ -118,7 +118,7 @@ describe("chain assembly (ticks → ingest JSON)", () => {
 
   it("drops contracts with nothing usable and requires a session date for final chains", () => {
     const empty = ticksFor([]);
-    const und = { price: 349.1, bid: 349, ask: 349.2, open: null, high: null, low: null, prev_close: 351, volume: 1e6, ts: "2026-11-20T21:00:00.000Z" };
+    const und = { price: 349.1, bid: 349, ask: 349.2, open: null, high: null, low: null, prev_close: 351, volume: 1e6, ts: "2026-11-20T21:00:00.000Z", rth_close: null };
     const body = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: "2026-11-20", underlyingDelayed: false }, und, [
       { contract: opt("20261218", 350, "C"), quote: empty },
       { contract: opt("20261218", 350, "P"), quote: ticksFor([{ kind: "price", field: TICK.BID, value: 1 }]) },

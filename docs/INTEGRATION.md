@@ -63,12 +63,21 @@ POST /api/ingest/chain
   "final": false,                       // true = closing snapshot for session `session_date`
   "session_date": "2026-11-20",         // required when final
   "underlying": { "price": 349.1, "bid": 349.0, "ask": 349.2, "open": ..., "high": ..., "low": ...,
-                  "prev_close": ..., "volume": 123, "ts": "..." },
+                  "prev_close": ..., "volume": 123, "ts": "...",
+                  "rth_close": 348.7 },             // final chains: regular-session close of session_date
+                                                    // (daily TRADES bar, useRTH); optional, null if unknown
   "contracts": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C",
                    "bid": 9.1, "ask": 9.3, "last": 9.2, "volume": 812, "oi": 15321,
                    "iv": 0.251, "delta": 0.52, "gamma": 0.011, "theta": -0.12, "vega": 0.41 } ] }
 → 200 {"stored": n_contracts, "symbol": "AAPL"}
 ```
+For `final` chains the engine uses `rth_close` (when given) as the underlying price of the snapshot: the
+session's close in metrics, the archive's `underlying` and the moneyness reference. After 16:00 ET the live
+`price` is an extended-hours trade and tick 9 is still the previous session's close, so neither is the
+session's close. The bridge centres a closing chain's strikes on `rth_close` too. Greeks (`iv`, `delta`, ...)
+are TWS's model values computed from the live underlying, i.e. possibly an after-hours price; the engine
+stores them as sent.
+
 Server builds OSI codes, stores through the same pipeline as any other chain source (latest chain,
 quote, today's metrics row; `final` also writes the end-of-day archive for `session_date`). A chain from
 IBKR wins over a chain from any other source for the same session. The bridge posts only contracts that got
