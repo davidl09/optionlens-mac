@@ -169,11 +169,9 @@ test("earnings strategy drill-down", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/s/AAPL/earnings");
   await page.waitForLoadState("networkidle");
-  // The summary table can re-render once more after networkidle on slow runners: retry the click.
-  await expect(async () => {
-    await page.getByRole("cell", { name: "Long straddle", exact: true }).click();
-    await expect(page.getByText(/Trades · Long straddle/)).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 15_000 });
+  await page.getByRole("cell", { name: "Long straddle", exact: true }).click();
+  await expect(page.getByText(/Trades · Long straddle/)).toBeVisible();
+  await expect(page.getByText("+1 C 230 / +1 P 230").first()).toBeVisible();
   clean(p);
 });
 

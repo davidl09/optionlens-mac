@@ -73,7 +73,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
       case "vol-seasonality": return ok(s.volSeasonality(sym));
       case "earnings":
         if (tail === "earnings") return ok(s.earnings(sym));
-        if (parts[5] === "trades") return ok(s.trades(sym, lookback));
+        if (parts[6] === "trades") return ok(s.trades(sym, lookback));
         return ok(s.earningsStrategies(sym, lookback, entry, exit));
       case "dividends": return ok(s.dividends(sym));
       case "seasonality": return ok(s.seasonality(sym));
