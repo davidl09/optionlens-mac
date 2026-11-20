@@ -41,7 +41,7 @@ export const WEIGHT: Record<Exclude<JobKind, typeof URGENT>, number> = {
   "eod-chains": 8, "chain-universe": 4, "underlying-stats": 3, index: 2, "option-bars": 1, "iv-history": 1,
 };
 
-export interface CancelFilter { kind?: JobKind; key?: string; group?: string }
+export interface CancelFilter { kind?: JobKind; key?: string; group?: string; /** Leave running / suspended tasks alone. */ queuedOnly?: boolean }
 
 /** Lexicographic a < b. */
 function before(a: readonly number[], b: readonly number[]): boolean {
@@ -98,7 +98,7 @@ export class Scheduler {
     const dropped = this.queue.filter(match);
     this.queue = this.queue.filter((e) => !match(e));
     for (const e of dropped) this.finish(e, { ok: false, cancelled: true, error: "cancelled" });
-    for (const r of this.stack) if (match(r.entry)) r.ctrl.abort(new Error("cancelled"));
+    if (!f.queuedOnly) for (const r of this.stack) if (match(r.entry)) r.ctrl.abort(new Error("cancelled"));
     this.changed();
   }
 

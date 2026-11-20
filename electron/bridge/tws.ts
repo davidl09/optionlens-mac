@@ -95,6 +95,16 @@ export function isPacingError(e: unknown): boolean {
   return e.code === 420;
 }
 
+/**
+ * The account lacks the market-data permission for this contract / data type (e.g. 162 "No market data
+ * permissions for NYSE STK"): every similar request fails the same way, so stop asking.
+ */
+export function isPermissionError(e: unknown): boolean {
+  if (!(e instanceof TwsRequestError)) return false;
+  if (NOT_SUBSCRIBED_CODES.has(e.code)) return true;
+  return e.code === CODE.HMDS_ERROR && /permission|not subscribed|subscription/i.test(e.message);
+}
+
 /** Historical request that legitimately has no data (do not retry). */
 export function isNoDataError(e: unknown): boolean {
   return e instanceof TwsRequestError && (e.code === CODE.NO_SECURITY_DEFINITION

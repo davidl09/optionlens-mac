@@ -83,6 +83,19 @@ describe("Bridge", () => {
     expect(await h.bridge.refreshSymbol("AAPL")).toMatchObject({ status: "unavailable" });
   });
 
+  it("a market-data permission error stops that symbol's option-bar catch-up (not each contract) with a status note", async () => {
+    const m = market();
+    m.historical = (c) => (c.secType === "OPT" ? new TwsRequestError(162, "Historical Market Data Service error message:No market data permissions for OPRA OPT")
+      : [{ time: "20261119", open: 0.2, high: 0.2, low: 0.2, close: 0.2, volume: null }]);
+    const h = harness({ option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 1, moneyness: 0.2 }], iv_history: [{ symbol: "KO", from: "2026-01-02" }] }, m);
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.session.historicalCalls.filter((x) => x.contract.secType === "OPT")).toHaveLength(1);   // 4 contracts planned
+    expect(h.calls.filter((c) => c === "vol:KO")).toHaveLength(2);                                   // other symbols go on
+    expect(h.bridge.status().notes.join(" ")).toMatch(/No IBKR market-data permission \(skipped\): AAPL option bars/);
+    h.bridge.stop();
+  });
+
   it("pauses work on a competing session instead of retrying", async () => {
     const m = market();
     m.streamErrors = () => new TwsRequestError(CODE.COMPETING_SESSION, "No market data during competing live session");

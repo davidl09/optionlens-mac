@@ -87,9 +87,12 @@ through the work one task at a time:
   VIX-family quotes and daily bars; **option-bar catch-up** for sessions without an end-of-day archive;
   and the **IV / HV history backfill**, up to 10 years.
 
-Historical requests follow IBKR's pacing rules: at least 10 s apart, at most 55 in any 10 minutes, and
-a growing pause after a pacing violation. Backfills can be resumed: after a restart, the bridge
-continues where it stopped. You can cancel bridge work from the menu-bar menu or from Settings.
+All historical requests are for daily bars, which IBKR does not hard-limit like small bars: they are
+sent about 1 s apart, and after a real pacing violation the bridge pauses (30 s, growing) and spaces
+requests further apart for a while. When IBKR says your account has no market-data permission for some
+data (for example option bars without OPRA), the bridge skips that symbol and kind for the day and the
+status lists it. Backfills can be resumed: after a restart or a reconnect, the bridge continues where it
+stopped. You can cancel bridge work from the menu-bar menu or from Settings.
 
 ## Notifications
 
@@ -105,7 +108,7 @@ Click a notification to open its page in OptionLens.
   another API app uses the same client ID. The bridge tries the next 3 IDs; you can change the ID in Settings.
 - **Prices but no options**: you have no OPRA subscription and delayed option data is not enabled for your
   account. Check the IBKR market data settings in the Client Portal.
-- **Pacing violation** messages in the log are expected during large backfills. The bridge pauses and
+- **Pacing violation** messages in the log can happen during large backfills. The bridge pauses and
   continues.
 
 ## Development

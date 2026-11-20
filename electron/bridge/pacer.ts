@@ -1,58 +1,64 @@
-// IBKR historical-data pacing gate. Rules respected (worst case, all bar sizes):
-//   - requests are serialized by the scheduler; starts are ≥ minSpacingMs apart (default 10 s),
-//   - at most maxPerWindow starts in any windowMs (IBKR: 60 per 10 min; default 55 for margin),
-//   - after a pacing violation, exponential backoff (30 s → 60 s → … ≤ 10 min) on top of the above.
+// IBKR historical-data pacing gate. Every historical request the bridge makes is for daily bars. IBKR's
+// hard pacing limits (60 requests per 10 minutes, identical requests within 15 s, 6 per contract within
+// 2 s) apply to bars of 30 seconds or less; daily bars are only soft-throttled. So:
+//   - requests are serialized by the scheduler; starts are ≥ the current spacing apart (default 1 s),
+//   - a real pacing violation reported by TWS backs off exponentially (30 s → 60 s → … ≤ 10 min) and
+//     doubles the spacing (≤ 10 s); every `relaxAfter` successes in a row halve it again, down to the base.
 export interface Gate { readyAt(): number }
 
 export interface PacerOptions {
   now?: () => number;
   minSpacingMs?: number;
-  maxPerWindow?: number;
-  windowMs?: number;
+  maxSpacingMs?: number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
+  /** Successes in a row after which the spacing is halved again. */
+  relaxAfter?: number;
 }
 
 export class HistoricalPacer implements Gate {
   private readonly now: () => number;
-  private readonly spacing: number;
-  private readonly maxPerWindow: number;
-  private readonly windowMs: number;
+  private readonly minSpacing: number;
+  private readonly maxSpacing: number;
   private readonly baseBackoff: number;
   private readonly maxBackoff: number;
-  private starts: number[] = [];
+  private readonly relaxAfter: number;
+  private spacing: number;
+  private lastStart = -Infinity;
   private backoffUntil = 0;
   private violations = 0;
+  private successes = 0;
 
   constructor(o: PacerOptions = {}) {
     this.now = o.now ?? Date.now;
-    this.spacing = o.minSpacingMs ?? 10_000;
-    this.maxPerWindow = o.maxPerWindow ?? 55;
-    this.windowMs = o.windowMs ?? 600_000;
+    this.minSpacing = o.minSpacingMs ?? 1000;
+    this.maxSpacing = Math.max(this.minSpacing, o.maxSpacingMs ?? 10_000);
     this.baseBackoff = o.baseBackoffMs ?? 30_000;
     this.maxBackoff = o.maxBackoffMs ?? 600_000;
+    this.relaxAfter = o.relaxAfter ?? 20;
+    this.spacing = this.minSpacing;
   }
 
   /** Earliest time (epoch ms) the next historical request may start. */
-  readyAt(): number {
-    const now = this.now();
-    this.starts = this.starts.filter((t) => t > now - this.windowMs);
-    const last = this.starts.length ? this.starts[this.starts.length - 1] : -Infinity;
-    let t = Math.max(now, last + this.spacing, this.backoffUntil);
-    if (this.starts.length >= this.maxPerWindow) t = Math.max(t, this.starts[this.starts.length - this.maxPerWindow] + this.windowMs);
-    return t;
+  readyAt(now = this.now()): number {
+    return Math.max(now, this.lastStart + this.spacing, this.backoffUntil);
   }
+
+  /** Current minimum spacing between starts (ms). */
+  get spacingMs(): number { return this.spacing; }
 
   /** Records a request start. Throws if called before readyAt (a scheduler bug, not a runtime condition). */
   begin(): void {
     const now = this.now();
-    if (now < this.readyAt()) throw new Error("historical request started before the pacer allowed it");
-    this.starts.push(now);
+    if (now < this.readyAt(now)) throw new Error("historical request started before the pacer allowed it");
+    this.lastStart = now;
   }
 
-  /** Pacing violation reported by TWS: back off exponentially. */
+  /** Pacing violation reported by TWS: back off exponentially and space requests further apart. */
   violation(): number {
     this.violations += 1;
+    this.successes = 0;
+    this.spacing = Math.min(this.maxSpacing, this.spacing * 2);
     const delay = Math.min(this.maxBackoff, this.baseBackoff * 2 ** (this.violations - 1));
     this.backoffUntil = this.now() + delay;
     return delay;
@@ -60,5 +66,10 @@ export class HistoricalPacer implements Gate {
 
   success(): void {
     this.violations = 0;
+    this.successes += 1;
+    if (this.successes >= this.relaxAfter && this.spacing > this.minSpacing) {
+      this.spacing = Math.max(this.minSpacing, this.spacing / 2);
+      this.successes = 0;
+    }
   }
 }

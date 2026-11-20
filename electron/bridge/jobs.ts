@@ -244,7 +244,8 @@ export async function pushIndexQuotes(ctx: JobContext, symbols: string[]): Promi
 
 // ---------------- historical ----------------
 
-/** One paced historical request. Pacing violations back off and re-queue; "no data" yields []. */
+/** One paced historical request. Pacing violations back off and re-queue; "no data" yields []; permission
+ * errors are rethrown as they are (the caller stops the whole symbol/kind). */
 export async function pacedHistorical(ctx: JobContext, contract: TwsContract, req: HistoricalRequest): Promise<HistBar[]> {
   ctx.pacer.begin();
   try {

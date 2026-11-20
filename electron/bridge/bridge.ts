@@ -13,8 +13,8 @@ import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater, Scheduler, type Task } from "./scheduler";
-import { isCompetingSession, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
-import { ledgerKey, parseWants, planWants, type Wants } from "./wants";
+import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
+import { HIST_RETRY_MS, ledgerKey, parseWants, planWants, type Wants } from "./wants";
 
 export interface BridgeDeps {
   connector: TwsConnector;
@@ -33,6 +33,14 @@ export interface BridgeDeps {
 
 const HISTORICAL_KINDS: JobKind[] = ["option-bars", "iv-history"];
 const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
+
+/** Tasks that need the same market-data permission (one kind of data for one symbol). */
+interface Group { id: string; label: string }
+const group = {
+  optionBars: (s: string): Group => ({ id: `option-bars:${s}`, label: `${s} option bars` }),
+  volHistory: (s: string): Group => ({ id: `iv-history:${s}`, label: `${s} IV/HV history` }),
+  indexBars: (s: string): Group => ({ id: `index-bars:${s}`, label: `${s} daily bars` }),
+};
 
 export class Bridge {
   readonly scheduler: Scheduler;
@@ -53,6 +61,8 @@ export class Bridge {
   private backfill = { total: 0, done: 0, failed: 0 };
   /** What the last pushes revealed about the account's market data (null = not seen yet). */
   private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
+  /** Task groups (symbol + kind) TWS refused for lack of a market-data permission: when, and what. */
+  private readonly denied = new Map<string, { at: number; label: string }>();
   /** Last chain posted with less than FINAL_MIN_COVERAGE of its contracts quoted (status note). */
   private incompleteChain: { symbol: string; coverage: number } | null = null;
 
@@ -112,6 +122,8 @@ export class Bridge {
     if (this.feed.optionTicksMissing) out.push("IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown");
     const reduced = this.lines.reduced;
     if (reduced !== null) out.push(`IBKR market-data line limit reached: batches reduced to ${reduced} lines (Settings → Market data lines is ${this.d.settings().marketDataLines})`);
+    const denied = [...this.denied.values()].map((d) => d.label);
+    if (denied.length) out.push(`No IBKR market-data permission (skipped): ${denied.slice(0, 3).join(", ")}${denied.length > 3 ? ` and ${denied.length - 3} more` : ""}`);
     if (this.incompleteChain) out.push(`Incomplete IBKR chain for ${this.incompleteChain.symbol}: ${Math.round(this.incompleteChain.coverage * 100)}% of contracts quoted`);
     return out;
   }
@@ -199,14 +211,14 @@ export class Bridge {
     }
     for (const s of plan.indexBars) {
       this.enqueue(this.task("index", `index-bars:${s}`, `${s} daily bars`, async (ctx) => { await pushIndexBars(ctx, s); this.pushed(); },
-        { gate: this.pacer, ledgerKey: ledgerKey.indexBars(s) }));
+        { gate: this.pacer, ledgerKey: ledgerKey.indexBars(s), group: group.indexBars(s) }));
     }
     if (this.idle("option-bars") && this.idle("iv-history")) this.backfill = { total: 0, done: 0, failed: 0 };
     for (const o of plan.optionBars) this.enqueue(this.optionBarsPlanTask(o.symbol, o.sessions, o.shape));
     for (const v of plan.volHistory) {
       this.enqueue(this.task("iv-history", `vol:${v.kind}:${v.symbol}`, `${v.symbol} ${v.kind === "iv30" ? "IV" : "HV"} history`,
         async (ctx) => { if (await pushVolHistory(ctx, v.symbol, v.from, v.kind)) this.pushed(); },
-        { gate: this.pacer, ledgerKey: ledgerKey.vol(v.kind, v.symbol), maxAttempts: 6 }));
+        { gate: this.pacer, ledgerKey: ledgerKey.vol(v.kind, v.symbol), maxAttempts: 6, group: group.volHistory(v.symbol) }));
     }
   }
 
@@ -215,7 +227,7 @@ export class Bridge {
   }
 
   private enqueue(t: Task): void {
-    if (this.scheduler.has(t.key)) return;
+    if (this.scheduler.has(t.key) || this.isDenied(t.group)) return;
     const historical = HISTORICAL_KINDS.includes(t.kind) && t.gate !== undefined;
     if (historical) this.backfill.total += 1;
     void this.scheduler.enqueue(t).then((o) => {
@@ -223,6 +235,19 @@ export class Bridge {
       if (o.ok) this.backfill.done += 1; else this.backfill.failed += 1;
       this.emit();
     });
+  }
+
+  private isDenied(group: string | undefined): boolean {
+    const d = group === undefined ? undefined : this.denied.get(group);
+    if (d && this.now() - d.at >= HIST_RETRY_MS) this.denied.delete(group!);
+    return d !== undefined && this.denied.has(group!);
+  }
+
+  /** A permission error stops the whole group (all its queued tasks fail the same way). */
+  private deny(group: string, label: string, e: unknown): void {
+    if (!this.denied.has(group)) this.d.log.warn(`bridge: no market-data permission for ${label}; skipping it (${(e as Error).message})`);
+    this.denied.set(group, { at: this.now(), label });
+    this.scheduler.cancel({ group, queuedOnly: true });   // the failing task itself reports its error
   }
 
   private pushed(): void {
@@ -239,9 +264,9 @@ export class Bridge {
 
   /** Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. */
   private task(kind: JobKind, key: string, label: string, work: (ctx: JobContext) => Promise<void>,
-    o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number } = {}): Task {
+    o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group } = {}): Task {
     return {
-      key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts,
+      key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id,
       run: async (signal, checkpoint) => {
         try {
           await work(this.context(signal, checkpoint));
@@ -250,6 +275,7 @@ export class Bridge {
           if (signal.aborted || e instanceof RetryLater) throw e;
           if (o.ledgerKey) this.d.ledger.mark(o.ledgerKey);
           if (isCompetingSession(e)) this.supervisor.pause(COMPETING_MESSAGE, COMPETING_PAUSE_MS);
+          if (o.group && isPermissionError(e)) this.deny(o.group.id, o.group.label, e);
           this.lastError = `${label}: ${(e as Error).message}`;
           this.d.log.warn(`bridge ${this.lastError}`);
           throw e;
@@ -292,12 +318,12 @@ export class Bridge {
     return this.task("option-bars", `obars-plan:${symbol}`, `${symbol} option bars (contracts)`, async (ctx) => {
       const r = await resolveOptionContracts(ctx, symbol, shape);
       for (const c of r.contracts) this.enqueue(this.optionBarsTask(symbol, c, sessions));
-    }, { ledgerKey: ledgerKey.optionBars(symbol, sessions) });
+    }, { ledgerKey: ledgerKey.optionBars(symbol, sessions), group: group.optionBars(symbol) });
   }
 
   private optionBarsTask(symbol: string, c: TwsContract, sessions: string[]): Task {
     const label = `${symbol} ${c.lastTradeDateOrContractMonth} ${c.strike}${c.right} bars`;
     return this.task("option-bars", `obars:${symbol}:${c.conId ?? `${c.lastTradeDateOrContractMonth}${c.right}${c.strike}`}`, label,
-      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(); }, { gate: this.pacer, maxAttempts: 6 });
+      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(); }, { gate: this.pacer, maxAttempts: 6, group: group.optionBars(symbol) });
   }
 }
