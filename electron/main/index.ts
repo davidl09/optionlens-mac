@@ -45,11 +45,16 @@ async function main(): Promise<void> {
   let win: BrowserWindow | null = null;
   let quitting = false;
   const send = (channel: string, payload: unknown) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
-  const showWindow = () => {
+  const showWindow = (): BrowserWindow => {
     if (!win || win.isDestroyed()) win = createMainWindow(join(appRoot, "dist-electron", "preload.cjs"), () => quitting);
     else { win.show(); win.focus(); }
+    return win;
   };
-  const navigate = (path: string) => { showWindow(); send(IPC.navigateEvent, path); };
+  const navigate = (path: string) => {
+    const w = showWindow();
+    if (w.webContents.isLoading()) w.webContents.once("did-finish-load", () => send(IPC.navigateEvent, path));
+    else send(IPC.navigateEvent, path);
+  };
 
   // ---- engine ----
   let tray: AppTray | null = null;
@@ -146,7 +151,7 @@ async function main(): Promise<void> {
     { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
   ]));
   tray = new AppTray(join(appRoot, "resources"), {
-    open: showWindow,
+    open: () => { showWindow(); },
     openSettings: () => navigate("/settings"),
     setBridgeEnabled: (on) => saveSettings({ ...settings, bridge: { ...settings.bridge, enabled: on } }),
     cancelBridgeWork: () => bridge.cancel(),
@@ -154,8 +159,8 @@ async function main(): Promise<void> {
     quit: () => app.quit(),
   }, () => ({ engine: engine.status(), bridge: bridge.status(), launchAtLogin: settings.launchAtLogin }));
 
-  app.on("second-instance", showWindow);
-  app.on("activate", showWindow);
+  app.on("second-instance", () => { showWindow(); });
+  app.on("activate", () => { showWindow(); });
   app.on("window-all-closed", () => { /* keep running in the menu bar: collection and the bridge continue */ });
   let shutDown = false;
   app.on("before-quit", (e) => {

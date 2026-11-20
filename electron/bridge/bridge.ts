@@ -39,6 +39,8 @@ export class Bridge {
   private session: TwsSession | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private readonly lastChainPush = new Map<string, number>();
+  /** Last chain attempt (success or failure): universe refreshes wait max_age after either. */
+  private readonly lastChainAttempt = new Map<string, number>();
   private readonly lastStatsPush = new Map<string, number>();
   private lastPushAt: string | null = null;
   private lastError: string | null = null;
@@ -163,7 +165,7 @@ export class Bridge {
     const now = this.now();
     const plan = planWants(w, {
       now,
-      lastChainPush: (s) => this.lastChainPush.get(s),
+      lastChainPush: (s) => this.lastChainAttempt.get(s),
       lastStatsPush: (s) => this.lastStatsPush.get(s),
       attemptedWithin: (k, ms) => this.d.ledger.attemptedWithin(k, ms),
     });
@@ -244,6 +246,7 @@ export class Bridge {
   private chainTask(kind: JobKind, key: string, symbol: string, shape: ChainShape, sessionDate: string | null): Task {
     const final = sessionDate !== null;
     return this.task(kind, key, `${symbol} ${final ? "closing chain" : "chain"}`, async (ctx) => {
+      this.lastChainAttempt.set(symbol, this.now());
       const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
       this.feed.optionsDelayed = r.optionsDelayed;
       this.feed.stocksDelayed = r.underlyingDelayed;
