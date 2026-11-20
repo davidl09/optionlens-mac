@@ -1,4 +1,4 @@
-"""Tiny extractor of TypeScript interface shapes from web/src/api/types.ts (contract tests).
+"""Tiny extractor of TypeScript interface shapes from the app's src/api/types.ts (contract tests).
 
 Schema nodes: ("obj", {field: (schema, optional)}), ("arr", item), ("leaf",). Handles inline object
 types, arrays (`T[]`), unions with null (`T | null`), intersections (`A & { ... }`), parentheses and
@@ -6,10 +6,25 @@ references to other interfaces/aliases; anything else (primitives, Record<>, lit
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-TYPES_TS = Path(__file__).resolve().parents[3] / "web" / "src" / "api" / "types.ts"
+
+
+def find_types_ts() -> Path | None:
+    """The app's API contract: $OPTIONLENS_TYPES_TS, else src/api/types.ts of the enclosing optionlens-mac
+    checkout (engine embedded in the app repo) or of a sibling optionlens-mac checkout."""
+    if env := os.environ.get("OPTIONLENS_TYPES_TS"):
+        return Path(env)
+    for d in Path(__file__).resolve().parents:
+        for c in (d / "src" / "api" / "types.ts", d / "optionlens-mac" / "src" / "api" / "types.ts"):
+            if c.is_file():
+                return c
+    return None
+
+
+TYPES_TS = find_types_ts()
 _OPEN, _CLOSE = "{([<", "})]>"
 
 
@@ -46,8 +61,17 @@ def _block(src: str, start: int) -> tuple[str, int]:
     raise ValueError("unbalanced braces")
 
 
+def load_types() -> "Types":
+    """Types of the app contract; skips the calling test module when no optionlens-mac checkout is found."""
+    if TYPES_TS is None or not TYPES_TS.is_file():
+        import pytest
+        pytest.skip("API contract src/api/types.ts not found (no optionlens-mac checkout next to or around the "
+                    "engine; set OPTIONLENS_TYPES_TS)", allow_module_level=True)
+    return Types(TYPES_TS)
+
+
 class Types:
-    def __init__(self, path: Path = TYPES_TS):
+    def __init__(self, path: Path):
         src = _strip_comments(path.read_text())
         self.raw: dict[str, str] = {}
         for m in re.finditer(r"export interface (\w+)\s*\{", src):

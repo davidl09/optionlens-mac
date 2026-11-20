@@ -115,6 +115,9 @@ MOVERS = (*DESC, *QUOTE, Col("rel_volume", "Rel Vol", "ratio", G_TECH), Col("avg
           Col("iv_rank", "IV Rank", "pct", G_VOL), *CATALYSTS[:2])
 
 # Notes shared by every frame-derived report.
+NOTE_CHAIN_UNIVERSE = ("Needs full option chains, which are collected only for the chain universe (watchlist "
+                       "symbols, symbols opened recently and the most liquid symbols by option volume); other "
+                       "symbols are not covered.")
 NOTE_IV_RANK = ("IV rank / IV percentile need ≥ 20 stored daily IV30 values (collected since the first "
                 "sweep); they are blank until then.")
 NOTE_OPT_AVG = ("Average option volume = mean of up to 20 prior collected days (fewer while history builds — "

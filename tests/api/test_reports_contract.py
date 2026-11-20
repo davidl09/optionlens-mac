@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 
 from .seed_reports import api, seeded  # noqa: F401 - fixtures
-from .tsschema import Types, mismatches
+from .tsschema import load_types, mismatches
 
-TYPES = Types()
+TYPES = load_types()
 
 
 def check(value, iface: str) -> None:
@@ -19,7 +19,7 @@ def test_types_ts_has_the_interfaces():
                  "PresetPayload", "Alert", "Notification"):
         assert name in TYPES.raw
     assert TYPES.interface_fields("ReportResult") == {"id", "title", "asof", "params", "columns", "rows",
-                                                      "truncated", "notes", "extra"}
+                                                      "truncated", "notes", "extra", "source"}
 
 
 def test_report_defs(api):

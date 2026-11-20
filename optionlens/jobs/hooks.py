@@ -34,3 +34,34 @@ async def fire(hooks: list[Hook], day: date, symbols: list[str]) -> int:
             failed += 1
             log.exception("hook %s failed", getattr(h, "__name__", h))
     return failed
+
+
+class Debounced:
+    """Fires `hooks` at most once per `interval_s` with the days/symbols collected since the last fire
+    (coalesced), off the caller's path: `notify` only records and schedules on the running event loop;
+    the fire happens `min_delay_s` after the first notify (or when the interval allows)."""
+
+    def __init__(self, hooks: list[Hook], interval_s: float, min_delay_s: float = 5.0,
+                 clock: Callable[[], float] | None = None):
+        self.hooks, self.interval_s, self.min_delay_s = hooks, interval_s, min_delay_s
+        self.clock = clock or (lambda: asyncio.get_running_loop().time())
+        self.pending: dict[date, set[str]] = {}
+        self.last_fired: float | None = None
+        self.task: asyncio.Task | None = None
+
+    async def notify(self, day: date, symbols: list[str]) -> None:
+        self.pending.setdefault(day, set()).update(symbols)
+        if self.task is None or self.task.done():
+            due = self.min_delay_s if self.last_fired is None else \
+                max(self.min_delay_s, self.last_fired + self.interval_s - self.clock())
+            self.task = asyncio.get_running_loop().create_task(self._fire_after(due))
+
+    async def _fire_after(self, delay: float) -> None:
+        await asyncio.sleep(delay)
+        batch, self.pending = self.pending, {}
+        self.last_fired = self.clock()
+        for day in sorted(batch):
+            await fire(self.hooks, day, sorted(batch[day]))
+        if self.pending:   # notified while the hooks ran
+            self.task = asyncio.get_running_loop().create_task(
+                self._fire_after(max(self.min_delay_s, self.interval_s)))

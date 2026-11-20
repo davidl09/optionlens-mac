@@ -38,8 +38,13 @@ def test_parse_osi_rejects_malformed(bad):
         cboe.parse_osi(bad)
 
 
-def test_ticker_maps_indices():
-    assert cboe.ticker("SPX") == "_SPX" and cboe.ticker("VIX3M") == "_VIX3M" and cboe.ticker("AAPL") == "AAPL"
+def test_format_osi_builds_standard_codes():
+    from optionlens.sources.osi import format_osi, parse_osi
+    assert format_osi("AAPL", date(2026, 11, 20), "C", 100.0) == "AAPL261120C00100000"
+    assert format_osi("BRK.B", date(2026, 11, 20), "P", 512.5) == "BRKB261120P00512500"
+    assert format_osi("SPX", date(2026, 12, 18), "C", 7325.0) == "SPXW261218C07325000"     # PM root
+    assert format_osi("F", date(2027, 1, 15), "C", 12.13) == "F270115C00012130"
+    assert parse_osi(format_osi("XSP", date(2026, 12, 18), "P", 612.5)) == ("XSP", date(2026, 12, 18), "P", 612.5)
 
 
 def test_normalize_symbol():

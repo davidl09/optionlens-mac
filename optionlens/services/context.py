@@ -42,6 +42,7 @@ from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from ..repo import quotes as quotes_repo
 from ..repo import symbols as symbols_repo
+from ..repo import vol_history as vol_history_repo
 
 INDEX_DEFAULT_Q = {"SPX": 0.013, "XSP": 0.013}   # other indices: 0 (SPEC §6)
 PM_ROOTS = frozenset({"SPXW", "NDXP", "RUTW", "VIXW"})  # preferred when an AM root lists the same contract
@@ -260,31 +261,44 @@ def quote_dict(symbol: str) -> dict | None:
     q = quotes_repo.get_quote(symbol)
     if q is None or q.price is None:
         return None
-    return {f: getattr(q, f) for f in ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low",
-                                        "prev_close", "volume", "bid", "ask", "iv30")}
+    return {**{f: getattr(q, f) for f in ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low",
+                                           "prev_close", "volume", "bid", "ask", "iv30")},
+            "delayed": bool(q.delayed)}
+
+
+def iv_history(symbol: str, cols: Sequence[str]) -> dict[str, np.ndarray]:
+    """The one stored-IV history rule (docs/INTEGRATION.md §6): the symbol's metrics_daily columns
+    ({date, <cols>} ascending) whose iv30 is the server's collected value where present, else an
+    ingested (IBKR) IV30 of that date. IV rank, vol history charts and the IV proxy read this."""
+    return vol_history_repo.history_merged(normalize_symbol(symbol), cols)
+
+
+def iv_session() -> date | None:
+    """Latest date of the IV history (collected or ingested): IV rank is current only on it."""
+    return vol_history_repo.latest_iv30_date()
 
 
 def metrics_series(symbol: str, cols: list[str]) -> dict[str, dict[date, float | None]]:
-    """{col: {date: value}} of the symbol's stored metrics (NaN -> None)."""
-    h = metrics_repo.history(symbol, cols=cols)
+    """{col: {date: value}} of the symbol's stored metrics, iv30 per iv_history (NaN -> None)."""
+    h = iv_history(symbol, cols)
     dates = [as_date(d) for d in h["date"]]
     return {c: {d: (None if v != v else float(v)) for d, v in zip(dates, h[c].tolist())} for c in cols}
 
 
 # ============================================================================ IV rank / calendars
 def iv_rank_info(symbol: str) -> dict:
-    """{iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from stored iv30 history
-    (vol.iv_rank_current: last 252 rows, rank only when current)."""
-    h = metrics_repo.history(normalize_symbol(symbol), cols=["iv30"])
-    return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), metrics_repo.latest_date())
+    """{iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from the iv_history iv30
+    (vol.iv_rank_current: last 252 rows, rank only when current on iv_session)."""
+    h = iv_history(symbol, ["iv30"])
+    return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), iv_session())
 
 
 def iv_rank_all() -> dict[str, dict]:
-    """iv_rank_info for every symbol with stored metrics (one query; cached per sweep)."""
+    """iv_rank_info for every symbol with IV history (one query; cached per sweep)."""
     def build():
-        session = metrics_repo.latest_date()
+        session = iv_session()
         return {s: vol.iv_rank_current(_dates(c["date"]), c["iv30"].tolist(), session)
-                for s, c in metrics_repo.history_bulk(["iv30"], last_n=vol.IV_RANK_ROWS).items()}
+                for s, c in vol_history_repo.iv30_bulk(vol.IV_RANK_ROWS).items()}
     return _memoized("iv_rank_all", build)
 
 
@@ -548,12 +562,12 @@ def _dates(a: np.ndarray) -> list[date]:
 
 
 class _SymbolIv:
-    """Inputs of the SPEC §0.3 IV proxy for one symbol."""
+    """Inputs of the SPEC §0.3 IV proxy for one symbol (stored IVs per iv_history)."""
 
     TENORS = (30, 60, 90, 120, 180, 360)
 
     def __init__(self, symbol: str):
-        m = metrics_repo.history(symbol, cols=[f"iv{t}" for t in self.TENORS] + ["hv30"])
+        m = iv_history(symbol, [f"iv{t}" for t in self.TENORS] + ["hv30"])
         self.by_date = {d: i for i, d in enumerate(_dates(m["date"]))}
         self.iv = np.stack([m[f"iv{t}"] for t in self.TENORS], axis=1) if len(m["date"]) else np.zeros((0, 6))
         self.k = vol.iv_hv_ratio(m["iv30"], m["hv30"]) if len(m["date"]) else vol.IV_HV_DEFAULT_RATIO
@@ -577,7 +591,7 @@ class _SymbolIv:
 class DbPriceProvider:
     """analytics.optbacktest.PriceProvider on stored data: real EOD mids, spreads and listed
     expiries/strikes from option_eod; IV proxy (stored constant-maturity IV interpolated to the
-    tenor → HV30·k, k = median IV30/HV30, default 1.15) from metrics_daily and daily bars.
+    tenor → HV30·k, k = median IV30/HV30, default 1.15) from iv_history and daily bars.
     Data is loaded lazily per symbol and kept for the provider's lifetime (one request)."""
 
     def __init__(self) -> None:

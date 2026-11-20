@@ -1,5 +1,6 @@
-"""On-demand fetches triggered by API requests: chain freshness, first-visit history, cached Nasdaq
-fundamentals. Concurrent requests for the same symbol share one fetch (per-symbol lock)."""
+"""On-demand work triggered by API requests: symbol visits (chain freshness when a vendor ChainSource is
+configured), first-visit history, cached Nasdaq fundamentals. Concurrent requests for the same symbol
+share one fetch (per-symbol lock)."""
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,8 @@ from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import cache as cache_repo
 from ..repo import options as options_repo
-from ..sources import nasdaq
+from ..repo import views as views_repo
+from ..sources import chain_source, nasdaq
 from . import chains, prices
 from ._util import final_since, session_date
 from .universe import UnknownSymbol, ensure_symbol
@@ -41,16 +43,31 @@ def is_stale(fetched_at: datetime | None, now: datetime, max_age_s: float) -> bo
     return fetched_at < final
 
 
+VIEW_RECORD_INTERVAL_S = 3600   # a symbol's "opened" time is written at most this often
+_viewed: dict[str, datetime] = {}
+
+
+def _record_view(symbol: str, now: datetime) -> None:
+    """Note that the user opened `symbol` (feeds the bridge's chain universe), throttled per symbol."""
+    last = _viewed.get(symbol)
+    if last is None or (now - last).total_seconds() >= VIEW_RECORD_INTERVAL_S:
+        _viewed[symbol] = now
+        views_repo.record_view(symbol, now)
+
+
 async def ensure_fresh(symbol: str, max_age_s: float = 120) -> bool:
-    """Make sure option_latest/quotes/metrics for symbol are fresh, fetching once if stale.
-    Creates the symbols row (and backfills price history) on first visit. Returns whether a chain is stored.
-    Raises UnknownSymbol for symbols neither CBOE nor Nasdaq know."""
+    """Make sure the symbol is known (symbols row, price history on first visit) and record the visit.
+    With a server-side ChainSource configured, a stale chain (see is_stale) is refetched once; without
+    one (the default) nothing is fetched: the stored chain (pushed by the IBKR bridge) is served.
+    Returns whether a chain is stored. Raises UnknownSymbol for symbols Nasdaq does not know."""
     symbol = normalize_symbol(symbol)
     async with _lock(f"chain:{symbol}"):
         row = await ensure_symbol(symbol)
         await ensure_history(symbol, row)
+        await asyncio.to_thread(_record_view, symbol, datetime.now(timezone.utc))
         fetched = await asyncio.to_thread(options_repo.latest_fetched_at, symbol)
-        if row.get("optionable") is False or not is_stale(fetched, now_ny(), max_age_s):
+        if (chain_source.configured() is None or row.get("optionable") is False
+                or not is_stale(fetched, now_ny(), max_age_s)):
             return fetched is not None
         try:
             snap = await chains.refresh_chain(symbol)

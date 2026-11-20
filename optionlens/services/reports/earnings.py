@@ -152,7 +152,8 @@ CALENDAR = ReportDef(
     "Upcoming earnings with timing, estimates, the options-implied move vs the average historical move.",
     CAL_PARAMS, CAL_COLS, run_calendar, ("market_cap", "desc"),
     (NOTE_TIMING, NOTE_HIST, "Events whose reaction session has already started show no implied move.",
-     C.NOTE_IV_RANK))
+     "Implied moves need a stored option chain: only chain-universe symbols (watchlists, recently opened, most "
+     "liquid by option volume) have one.", C.NOTE_IV_RANK))
 
 
 # ============================================================================ results

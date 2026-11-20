@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from ...analytics import strategies as st
 from .. import context
+from . import columns as C
 from .base import Col, Output, Param, ReportDef, RunParams, group
 from .common import KIND, SCOPE, base_mask, frame, p_int, p_num, p_select
 
@@ -173,7 +174,8 @@ NOTES = ("Probabilities and EVs use a lognormal model (expiry ATM IV, drift r �
          "EV is the undiscounted expected P/L at expiry.",
          "Natural pricing: buy at ask, sell at bid. Mid pricing uses (bid + ask)/2 per leg.",
          "Index option variants: set symbols=SPX,NDX,RUT,XSP.",
-         "IV rank needs ≥ 20 stored daily IV30 values (blank until then).")
+         "IV rank needs ≥ 20 stored daily IV30 values (blank until then).",
+         C.NOTE_CHAIN_UNIVERSE)
 
 
 def _screen_params(spec: Spec, p: RunParams) -> st.ScreenParams:

@@ -25,6 +25,7 @@ from ...repo import metrics as metrics_repo
 from ...repo import quotes as quotes_repo
 from ...repo import symbols as symbols_repo
 from ...repo import user as user_repo
+from .. import context
 
 FRAME_TTL_S = 900
 BARS_LOOKBACK_DAYS = 400          # calendar days of bars (52w highs, SMA200, 1y return, beta)
@@ -265,6 +266,7 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
     for k in derived:
         C[k] = _nan(n)
     hist = metrics_repo.history_bulk(_HIST_COLS, last_n=HISTORY_ROWS, symbols=syms) if mdate else {}
+    ranks = context.iv_rank_all() if mdate else {}
     md = np.datetime64(mdate) if mdate else None
     for s, h in hist.items():
         i = pos.get(s)
@@ -273,11 +275,12 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
         dts = h["date"]
         has_today = len(dts) and dts[-1] == md
         iv = h["iv30"]
-        C["iv_history_days"][i] = int(np.isfinite(iv).sum())
+        r = ranks.get(s)   # the symbol page's IV rank (context.iv_history: collected, else ingested IV30)
+        C["iv_history_days"][i] = r["history_days"] if r else int(np.isfinite(iv).sum())
         if has_today:
-            r = vol.iv_rank_current(dts.astype("datetime64[D]").astype(object).tolist(), iv.tolist(), mdate)
-            C["iv_rank"][i], C["iv_pct"][i] = _f(r["iv_rank"]), _f(r["iv_percentile"])
-            C["iv_high_52w"][i], C["iv_low_52w"][i] = _f(r["iv_high_52w"]), _f(r["iv_low_52w"])
+            if r:
+                C["iv_rank"][i], C["iv_pct"][i] = _f(r["iv_rank"]), _f(r["iv_percentile"])
+                C["iv_high_52w"][i], C["iv_low_52w"][i] = _f(r["iv_high_52w"]), _f(r["iv_low_52w"])
             prev = iv[:-1]
             if len(prev) and np.isfinite(prev[-1]) and np.isfinite(iv[-1]):
                 C["iv30_prev"][i] = prev[-1]

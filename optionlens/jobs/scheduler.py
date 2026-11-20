@@ -17,8 +17,9 @@ from .. import net
 from ..analytics.calendar import NY, close_time, is_trading_day, now_ny
 from ..config import get_settings
 from ..repo import jobs as jobs_repo
+from ..sources import chain_source
 from . import calendars, chains, maintenance, marketdata, prices, universe
-from ._util import FINAL_DELAY_MIN, current_run_id
+from ._util import EOD_DEADLINE, FINAL_DELAY_MIN, current_run_id
 
 log = logging.getLogger("optionlens.scheduler")
 
@@ -85,6 +86,11 @@ def intraday(interval_min: int, first: time = time(9, 45)) -> Schedule:
     return Schedule(times, f"trading days every {interval_min}m {first:%H:%M}-close")
 
 
+def manual() -> Schedule:
+    """Never fires on its own: the job only runs when asked (CLI `run-job`)."""
+    return Schedule(lambda d: [], "manual only")
+
+
 def after_close(minutes: int) -> Schedule:
     """Trading days at close + minutes (16:20, or 13:20 on early-close days for minutes=20)."""
     def times(d: date) -> list[time]:
@@ -106,9 +112,17 @@ class Job:
 MON, SAT, SUN = 0, 5, 6
 
 
+# Without a server-side ChainSource, closing chains are pushed by the IBKR bridge until EOD_DEADLINE:
+# the EOD job (archive leftovers, daily bars, report snapshots, digest) runs just after it.
+EOD_AFTER_PUSHES = (datetime.combine(date.min, EOD_DEADLINE) + timedelta(minutes=5)).time()
+
+
 def build_jobs() -> dict[str, Job]:
-    """All scheduled jobs (SPEC §5), keyed by name, in bootstrap order."""
+    """All jobs (SPEC §5), keyed by name, in bootstrap order. Chain sweeps are scheduled only when a
+    server-side ChainSource is configured (else `sweep` is manual-only and fails without a source).
+    CBOE is not collected: `vix` (CBOE history CSVs) is manual-only."""
     s = get_settings()
+    vendor = chain_source.configured() is not None
     jobs = [
         Job("universe", universe.universe, daily(time(6, 0), {MON})),
         Job("prices_backfill", prices.prices_backfill, daily(time(6, 10))),
@@ -117,10 +131,11 @@ def build_jobs() -> dict[str, Job]:
         Job("earnings_backfill", calendars.earnings_backfill, daily(time(4, 0))),  # no-op once complete
         Job("dividends", calendars.dividends, daily(time(5, 45))),
         Job("dividends_history", calendars.dividends_history, daily(time(6, 30), {SUN})),
-        Job("vix", marketdata.vix, daily(time(17, 0))),
+        Job("vix", marketdata.vix, manual(), catch_up=False),
         Job("rates", marketdata.rates, daily(time(17, 5))),
-        Job("sweep", chains.sweep, intraday(s.sweep_interval_min)),
-        Job("eod", chains.eod, after_close(FINAL_DELAY_MIN)),   # final sweep sees the closing data
+        Job("sweep", chains.sweep, intraday(s.sweep_interval_min) if vendor else manual(), catch_up=vendor),
+        Job("eod", chains.eod, after_close(FINAL_DELAY_MIN) if vendor   # final sweep sees the closing data
+            else daily(EOD_AFTER_PUSHES, trading_only=True)),
         Job("prune", maintenance.prune, daily(time(3, 0))),
     ]
     return {j.name: j for j in jobs}

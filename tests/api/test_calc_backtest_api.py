@@ -79,7 +79,8 @@ def test_options_backtest(client):
 
 
 def test_system_endpoints(client):
-    assert client.get("/api/health").json() == {"ok": True}
+    h = client.get("/api/health").json()
+    assert h["ok"] is True and h["auth"] is False and set(h) == {"ok", "version", "auth", "server_id"}
     st = client.get("/api/status").json()
     assert st["universe_size"] == 2 and st["iv_history_days"] == 1 and st["option_eod_days"] == 1
     assert st["row_counts"]["option_latest"] > 3000 and st["last_eod_date"] == "2026-11-18"
@@ -89,22 +90,8 @@ def test_system_endpoints(client):
     assert client.get("/api/compare/volatility?symbols=").status_code == 422
 
 
-def test_spa_fallback_and_api_404(client):
-    r = client.get("/s/AAPL/summary")
-    assert r.status_code == 200 and "not built" in r.text
-    r = client.get("/api/nope")
-    assert r.status_code == 404 and r.json() == {"detail": "not found"}
-
-
-def test_spa_serves_assets_and_history_fallback(tmp_path):
-    from fastapi.testclient import TestClient
-
-    from optionlens.api.app import create_app
-    (tmp_path / "assets").mkdir()
-    (tmp_path / "index.html").write_text("<html>app</html>")
-    (tmp_path / "assets" / "main.js").write_text("console.log(1)")
-    c = TestClient(create_app(web_dist=tmp_path))      # no lifespan: static routes only
-    assert c.get("/").text == "<html>app</html>"
-    assert c.get("/backtest/stock").text == "<html>app</html>"
-    assert c.get("/assets/main.js").text == "console.log(1)"
-    assert c.get("/../../etc/passwd").text == "<html>app</html>"
+def test_api_only_unknown_paths_404_json(client):
+    for path in ("/", "/s/AAPL/summary", "/assets/main.js", "/api/nope"):
+        r = client.get(path)
+        assert r.status_code == 404 and r.headers["content-type"].startswith("application/json")
+        assert r.json() == {"detail": "Not Found"}

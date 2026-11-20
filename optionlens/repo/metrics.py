@@ -1,23 +1,26 @@
-"""metrics_daily: one row per (date, symbol) of chain/vol metrics; today's row upserted every sweep."""
+"""metrics_daily: one row per (date, symbol) of chain/vol metrics; today's row upserted every sweep.
+`source` says who supplied the chain-derived values (see schema.sql)."""
 from __future__ import annotations
 
 from datetime import date
 from functools import lru_cache
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
 from .. import db
-from ._sql import columns, now_utc, query, scalar, split_by
+from ._sql import columns, insert_arrow, now_utc, query, scalar, split_by
+
+_NON_VALUE = ("date", "symbol", "updated_at", "source")
 
 
 @lru_cache(maxsize=1)
 def metric_columns() -> tuple[str, ...]:
-    """Value columns of metrics_daily (everything except date, symbol, updated_at), from the schema."""
+    """Value columns of metrics_daily (everything except date, symbol, updated_at, source), from the schema."""
     rows = db.cursor().execute(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'metrics_daily' "
         "ORDER BY ordinal_position").fetchall()
-    return tuple(r[0] for r in rows if r[0] not in ("date", "symbol", "updated_at"))
+    return tuple(r[0] for r in rows if r[0] not in _NON_VALUE)
 
 
 def _clean(v):
@@ -28,18 +31,49 @@ def _clean(v):
     return v.item() if isinstance(v, np.generic) else v
 
 
-def upsert_metrics(day: date, symbol: str, values: dict) -> None:
-    """Insert or replace the (day, symbol) row. Unknown keys raise ValueError; missing keys become NULL;
-    NaN/inf stored as NULL."""
-    cols = metric_columns()
-    unknown = set(values) - set(cols)
+def _check(values: Mapping) -> None:
+    unknown = set(values) - set(metric_columns())
     if unknown:
         raise ValueError(f"unknown metrics columns: {sorted(unknown)}")
-    names = ["date", "symbol", *cols, "updated_at"]
-    vals = [day, symbol, *(_clean(values.get(c)) for c in cols), now_utc()]
+
+
+def upsert_metrics(day: date, symbol: str, values: dict, source: str | None = None) -> None:
+    """Insert or replace the (day, symbol) row, tagged `source`. Unknown keys raise ValueError; missing
+    keys become NULL; NaN/inf stored as NULL."""
+    upsert_metrics_many(day, {symbol: (values, source)})
+
+
+def upsert_metrics_many(day: date, rows: Mapping[str, tuple[Mapping, str | None]]) -> int:
+    """upsert_metrics for many symbols in one write: {symbol: (values, source)}. Returns rows written."""
+    cols = metric_columns()
+    for values, _ in rows.values():
+        _check(values)
+    syms = list(rows)
+    data: dict[str, list] = {"date": [day] * len(syms), "symbol": syms}
+    for c in cols:
+        data[c] = [_clean(rows[s][0].get(c)) for s in syms]
+    data["updated_at"] = [now_utc()] * len(syms)
+    data["source"] = [rows[s][1] for s in syms]
     with db.write() as cur:
-        cur.execute(f"INSERT OR REPLACE INTO metrics_daily ({', '.join(names)}) "
-                    f"VALUES ({', '.join('?' * len(names))})", vals)
+        return insert_arrow(cur, "metrics_daily", data, "INSERT OR REPLACE")
+
+
+def source_of(day: date, symbol: str) -> str | None:
+    """`source` of the (day, symbol) row (None when absent or unknown)."""
+    return scalar("SELECT source FROM metrics_daily WHERE date = ? AND symbol = ?", [day, symbol])
+
+
+def top_by_option_volume(n: int, last_n: int = 5, symbols: Sequence[str] | None = None) -> list[str]:
+    """The n symbols (among `symbols`, default all) with the highest mean call+put volume over their
+    last `last_n` stored rows, highest first."""
+    syms = None if symbols is None else list(symbols)
+    return [r["symbol"] for r in query("""
+        SELECT symbol FROM (
+          SELECT symbol, COALESCE(call_volume, 0) + COALESCE(put_volume, 0) AS v,
+                 row_number() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+          FROM metrics_daily WHERE (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))
+            AND (call_volume IS NOT NULL OR put_volume IS NOT NULL))
+        WHERE rn <= ? GROUP BY symbol ORDER BY avg(v) DESC, symbol LIMIT ?""", [syms, syms, last_n, n])]
 
 
 def metrics_on(day: date | None = None) -> dict[str, dict]:

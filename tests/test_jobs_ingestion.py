@@ -49,10 +49,15 @@ def snap_at(payload, fetched: datetime, price: float | None = None):
 
 
 # ----------------------------------------------------------------------------- #22 final-data boundary
-def test_final_boundary_is_close_plus_feed_delay_everywhere():
+def test_final_boundary_is_close_plus_feed_delay_everywhere(monkeypatch):
     assert _util.final_since(FRI) == ny(2026, 11, 20, 16, 20)
     assert _util.final_since(date(2026, 11, 27)) == ny(2026, 11, 27, 13, 20)        # early close
-    eod = scheduler.JOBS["eod"].schedule                                           # eod fires at the boundary
+    eod = scheduler.JOBS["eod"].schedule              # no vendor source: after the bridge's push window
+    assert eod.next_after(ny(2026, 11, 20, 12, 0)) == _util.eod_deadline(FRI) + timedelta(minutes=5)
+    assert eod.next_after(ny(2026, 11, 20, 21, 0)) == ny(2026, 11, 23, 20, 5)
+    from optionlens.sources import chain_source
+    monkeypatch.setattr(chain_source, "configured", lambda: object())
+    eod = scheduler.build_jobs()["eod"].schedule      # vendor sweeps: eod fires at the boundary
     assert eod.next_after(ny(2026, 11, 20, 12, 0)) == _util.final_since(FRI)
     assert eod.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 27))
 
@@ -134,21 +139,22 @@ def test_eod_bars_replace_on_demand_bar_but_keep_universe_bar(tmpdb, payload):
 
 
 # ----------------------------------------------------------------------------- #6 close-only index history
-async def test_close_only_refresh_keeps_eod_ohlc(tmpdb, monkeypatch):
-    spx = {"symbol": "SPX", "kind": "index"}
+def test_close_only_bars_keep_eod_ohlc(tmpdb):
     bars_repo.upsert_bars([Bar("SPX", FRI, 6000.0, 6050.0, 5990.0, 6040.0, None)])  # EOD-built OHLC
-    monkeypatch.setattr(prices, "now_ny", lambda: ny(2026, 11, 21, 7, 0))
-
-    async def csv(symbol):
-        return [Bar("SPX", FRI, None, None, None, 6041.5, None),
-                Bar("SPX", date(2026, 11, 19), None, None, None, 6001.0, None)]
-    monkeypatch.setattr(cboe, "fetch_history", csv)
-    assert await prices.refresh_symbol(spx) == "refreshed"
+    prices.store_bars([Bar("SPX", FRI, None, None, None, 6041.5, None),
+                       Bar("SPX", date(2026, 11, 19), None, None, None, 6001.0, None)])
     b = bars_repo.bars_on(FRI)["SPX"]
     assert (b.open, b.high, b.low, b.close) == (6000.0, 6050.0, 5990.0, 6041.5)
     assert bars_repo.bars_on(date(2026, 11, 19))["SPX"].close == 6001.0            # missing date inserted
-    assert await prices.backfill_symbol(spx, date(2026, 11, 1)) == 2               # catch-up path too
-    assert bars_repo.bars_on(FRI)["SPX"].open == 6000.0
+
+
+async def test_index_history_is_not_fetched_from_cboe(tmpdb, monkeypatch):
+    async def boom(symbol):
+        raise AssertionError("CBOE must not be fetched")
+    monkeypatch.setattr(cboe, "fetch_history", boom)
+    monkeypatch.setattr(prices, "now_ny", lambda: ny(2026, 11, 21, 7, 0))
+    assert await prices.fetch_bars("SPX", "index", date(2026, 11, 1), FRI) == []
+    assert await prices.refresh_symbol({"symbol": "SPX", "kind": "index"}) == "refreshed"
 
 
 # ----------------------------------------------------------------------------- #8 split refetch safety

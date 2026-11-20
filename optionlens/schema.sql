@@ -26,25 +26,30 @@ CREATE TABLE IF NOT EXISTS daily_bars (
 CREATE TABLE IF NOT EXISTS quotes_latest (
     symbol VARCHAR PRIMARY KEY, ts TIMESTAMP NOT NULL,
     price DOUBLE, change DOUBLE, change_pct DOUBLE, open DOUBLE, high DOUBLE, low DOUBLE,
-    prev_close DOUBLE, volume BIGINT, bid DOUBLE, ask DOUBLE, iv30 DOUBLE
+    prev_close DOUBLE, volume BIGINT, bid DOUBLE, ask DOUBLE, iv30 DOUBLE,
+    source VARCHAR                             -- who supplied it (docs/INTEGRATION.md §5)
 );
 
--- Replaced per symbol on every chain fetch. ts = fetch time.
+-- Replaced per symbol on every chain fetch (a chain older than the stored one is ignored). ts = fetch time.
 CREATE TABLE IF NOT EXISTS option_latest (
     symbol VARCHAR NOT NULL, osi VARCHAR PRIMARY KEY, expiry DATE NOT NULL, strike DOUBLE NOT NULL,
     "right" VARCHAR NOT NULL, bid DOUBLE, ask DOUBLE, last DOUBLE, change DOUBLE,
     volume BIGINT, oi BIGINT, iv DOUBLE, delta DOUBLE, gamma DOUBLE, theta DOUBLE, vega DOUBLE,
-    rho DOUBLE, theo DOUBLE, ts TIMESTAMP NOT NULL
+    rho DOUBLE, theo DOUBLE, ts TIMESTAMP NOT NULL,
+    source VARCHAR                             -- 'ibkr' | 'vendor' | 'cboe' (legacy)
 );
 
 -- Final sweep of each trading day. Logical key (date, osi); no PK index on purpose (billions of rows
 -- at full retention; an ART index would not fit in memory). Uniqueness is kept by delete-then-insert
--- per (date, symbol) in repo.options.write_option_eod.
+-- per (date, symbol) in repo.options. source: 'ibkr' | 'vendor' | 'cboe' (legacy) | 'reconstructed' (from
+-- historical contract bars: bid/ask/oi NULL, IV/greeks computed). An IBKR archive is never replaced by
+-- another source's, and a reconstructed archive never replaces any other.
 CREATE TABLE IF NOT EXISTS option_eod (
     date DATE NOT NULL, symbol VARCHAR NOT NULL, osi VARCHAR NOT NULL, expiry DATE NOT NULL,
     strike DOUBLE NOT NULL, "right" VARCHAR NOT NULL, bid DOUBLE, ask DOUBLE, last DOUBLE,
     volume BIGINT, oi BIGINT, iv DOUBLE, delta DOUBLE, gamma DOUBLE, theta DOUBLE, vega DOUBLE,
-    underlying DOUBLE
+    underlying DOUBLE,
+    source VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS metrics_daily (
@@ -61,6 +66,8 @@ CREATE TABLE IF NOT EXISTS metrics_daily (
     put_prem_otm DOUBLE, put_prem_atm DOUBLE, put_prem_itm DOUBLE,
     net_delta_volume DOUBLE, straddle30_pct DOUBLE, expected_move30_pct DOUBLE,
     updated_at TIMESTAMP,
+    source VARCHAR,     -- chain source of the chain-derived values ('ibkr', 'vendor', 'cboe'), or
+                        -- '<source>:stats' while the row holds only pushed underlying stats
     PRIMARY KEY (date, symbol)
 );
 
@@ -127,3 +134,41 @@ CREATE TABLE IF NOT EXISTS job_runs (
     id INTEGER PRIMARY KEY DEFAULT nextval('seq_job_runs'),
     job VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL, finished_at TIMESTAMP, ok BOOLEAN, detail VARCHAR
 );
+
+-- Daily volatility series pushed by data clients (docs/INTEGRATION.md §6): kind 'iv30' | 'hv30',
+-- source e.g. 'ibkr'. Kept beside the server's own metrics_daily.iv30 (collected values win on read).
+CREATE TABLE IF NOT EXISTS vol_history (
+    symbol VARCHAR NOT NULL, kind VARCHAR NOT NULL, source VARCHAR NOT NULL, date DATE NOT NULL,
+    value DOUBLE NOT NULL, updated_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (symbol, kind, source, date)
+);
+
+-- IBKR bridge state: the latest heartbeat (single row, id = 1) and the latest ingest push.
+CREATE TABLE IF NOT EXISTS bridge_status (
+    id INTEGER PRIMARY KEY, client VARCHAR, ibkr_connected BOOLEAN, account_type VARCHAR,
+    heartbeat_at TIMESTAMP, last_push_at TIMESTAMP
+);
+
+-- Symbols the user opened recently (part of the bridge's chain universe). One row per symbol.
+CREATE TABLE IF NOT EXISTS symbol_views (symbol VARCHAR PRIMARY KEY, viewed_at TIMESTAMP NOT NULL);
+
+-- Missing end-of-day archives offered to the bridge as option-bars catch-up (bounded re-offers).
+CREATE TABLE IF NOT EXISTS eod_catchup (
+    date DATE NOT NULL, symbol VARCHAR NOT NULL, offered_at TIMESTAMP NOT NULL, offers INTEGER NOT NULL,
+    PRIMARY KEY (date, symbol)
+);
+
+-- Migration of databases created before the `source` columns: existing rows came from CBOE. The default
+-- only back-fills those rows; new rows always state their source (NULL when unknown).
+ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'cboe';
+ALTER TABLE quotes_latest ALTER COLUMN source DROP DEFAULT;
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'cboe';
+ALTER TABLE option_latest ALTER COLUMN source DROP DEFAULT;
+ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'cboe';
+ALTER TABLE option_eod ALTER COLUMN source DROP DEFAULT;
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'cboe';
+ALTER TABLE metrics_daily ALTER COLUMN source DROP DEFAULT;
+-- `delayed` (docs/INTEGRATION.md §6): the data was pushed from delayed market data; NULL = unknown/older data.
+ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS delayed BOOLEAN;

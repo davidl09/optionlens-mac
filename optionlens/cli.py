@@ -53,16 +53,17 @@ def _status() -> int:
     return 0
 
 
-def _serve() -> int:
-    """uvicorn on HOST:PORT, one worker (DuckDB single process; the app lifespan opens the DB)."""
-    import uvicorn
+def _serve(port: int | None) -> int:
+    """The app's sidecar: API + scheduler on loopback (see optionlens.sidecar); --port overrides
+    OPTIONLENS_PORT, 0 picks a free port."""
+    from dataclasses import replace
 
+    from . import sidecar
     from .api.app import create_app
     from .config import get_settings
 
-    s = get_settings()
-    uvicorn.run(create_app(), host=s.host, port=s.port, workers=1, log_level="info")
-    return 0
+    s = get_settings() if port is None else replace(get_settings(), port=port)
+    return sidecar.serve(create_app(s), s)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,7 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("eod").add_argument("--symbols")
     sub.add_parser("prune")
     sub.add_parser("status")
-    sub.add_parser("serve", help="run the API + scheduler (uvicorn, single worker)")
+    sv = sub.add_parser("serve", help="run the API + scheduler on loopback (prints `LISTENING <port>` when ready)")
+    sv.add_argument("--port", type=int, help="port (default OPTIONLENS_PORT; 0 = pick a free port)")
     r = sub.add_parser("run-job")
     r.add_argument("name", choices=sorted(scheduler.JOBS))
     a = p.parse_args(argv)
@@ -97,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if a.cmd == "serve":
-        return _serve()
+        return _serve(a.port)
     db.connect()
     try:
         match a.cmd:

@@ -191,4 +191,4 @@ def api(seeded):
     from fastapi.testclient import TestClient
 
     from optionlens.api.app import create_app
-    return TestClient(create_app(web_dist=Path("/nonexistent")))   # no lifespan: keeps the seeded connection
+    return TestClient(create_app())   # no lifespan: keeps the seeded connection

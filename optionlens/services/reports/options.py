@@ -9,7 +9,7 @@ import numpy as np
 
 from ...analytics import probability as prob
 from ...analytics import stats
-from ...analytics.calendar import next_trading_day
+from ...analytics.calendar import next_trading_day, trading_days
 from ...repo import metrics as metrics_repo
 from ...repo import options as options_repo
 from ...repo import report_snapshots as snaps_repo
@@ -253,7 +253,12 @@ def run_oi_changes(p: RunParams) -> Output:
                     dte=_dte(cols["expiry"], t), moneyness_pct=cols["strike"] / cols["underlying"] - 1.0)
     cols["_abs"] = np.abs(chg)
     rows, trunc = columnar_rows(cols, [c.key for c in OI_COLS], ("_abs", True))
-    return Output(rows, [f"OI change vs end-of-day {prior}."], truncated=trunc, presorted=True)
+    notes = [f"OI change vs end-of-day {prior}."]
+    gap = len(trading_days(prior, day)) - 2          # sessions between the prior archive and the current one
+    if gap > 0:
+        notes.append(f"Gap: the previous end-of-day open interest ({prior}) is {gap + 1} sessions old "
+                     f"({gap} session(s) without an archive), so changes span several sessions.")
+    return Output(rows, notes, truncated=trunc, presorted=True)
 
 
 OI_CHANGES = ReportDef(
@@ -263,7 +268,8 @@ OI_CHANGES = ReportDef(
                                                               (("both", "Both"), ("increase", "Increases"), ("decrease", "Decreases"))),
      p_int("dte_min", "Min DTE", 0, 0), p_int("dte_max", "Max DTE", 730, 0), *SCOPE),
     OI_COLS, run_oi_changes, None,
-    ("Contracts not present in the prior end-of-day snapshot are skipped.", "OCC open interest updates once per day."))
+    ("Contracts not present in the prior end-of-day snapshot are skipped.", "OCC open interest updates once per day.",
+     C.NOTE_CHAIN_UNIVERSE))
 
 
 # ============================================================================ large-volume contracts
@@ -305,7 +311,7 @@ LARGE_VOLUME = ReportDef(
      RIGHT, p_int("dte_min", "Min DTE", 0, 0), p_int("dte_max", "Max DTE", 365, 0), *SCOPE),
     LVC_COLS, run_large_volume, ("volume", "desc"),
     ("Proxy for large trades: per-contract daily volume, not individual prints (no trade tape is available); "
-     "side is unknown.",))
+     "side is unknown.", C.NOTE_CHAIN_UNIVERSE))
 
 
 # ============================================================================ option screener
@@ -383,7 +389,8 @@ OPTION_SCREENER = ReportDef(
      p_num("max_spread_pct", "Max spread % of mid", 0.25, 0, step=0.05), p_num("min_bid", "Min bid", 0.05, 0),
      *SCOPE),
     OS_COLS, run_option_screener, ("volume", "desc"),
-    ("SPX/SPXW, NDX/NDXP and RUT/RUTW duplicates are collapsed to the PM-settled weekly root.",))
+    ("SPX/SPXW, NDX/NDXP and RUT/RUTW duplicates are collapsed to the PM-settled weekly root.",
+     C.NOTE_CHAIN_UNIVERSE))
 
 
 # ============================================================================ broad view
@@ -494,7 +501,7 @@ PUT_PROTECTION = ReportDef(
      p_int("min_oi", "Min OI", 0, 0), KIND, UNIVERSE_ONLY, *SCOPE),
     PP_COLS, run_put_protection, ("annualized_cost", "asc"),
     ("Uses the listed expiry nearest the target DTE and the listed strike nearest spot × (1 − % OTM); "
-     "cost at the ask.",))
+     "cost at the ask.", C.NOTE_CHAIN_UNIVERSE))
 
 REPORTS = (UOV, IV_RANKINGS, IV_MOVERS, VOLUME_LEADERS, OI_CHANGES, LARGE_VOLUME, OPTION_SCREENER, BROAD_VIEW,
            PUT_PROTECTION)

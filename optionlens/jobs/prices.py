@@ -1,7 +1,7 @@
 """Daily price history: 10y backfill (resumable), catch-up of stale symbols, weekly 30-day refresh.
 
-Stocks/ETFs come from Nasdaq. Indices come from CBOE daily_prices CSVs (SPX and RUT close-only,
-XSP OHLC; NDX is not published -> its history starts with the first EOD run).
+Stocks/ETFs come from Nasdaq. Indices have no source here (CBOE is not collected): their bars come from
+the IBKR bridge's pushes and the EOD job's stored quotes.
 """
 from __future__ import annotations
 
@@ -13,11 +13,10 @@ import numpy as np
 from ..analytics.calendar import last_completed_session, now_ny
 from ..config import get_settings
 from ..models import Bar
-from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import symbols as symbols_repo
-from ..sources import cboe, nasdaq
-from ._util import log, run_bounded
+from ..sources import nasdaq
+from ._util import run_bounded
 
 HISTORY_YEARS = 10
 REFRESH_DAYS = 30
@@ -38,12 +37,7 @@ def _asset(kind: str) -> nasdaq.AssetClass:
 async def fetch_bars(symbol: str, kind: str, start: date, end: date) -> list[Bar]:
     """Daily bars in [start, end] from the right source for the symbol kind ([] if unavailable)."""
     if kind == "index":
-        try:
-            bars = await cboe.fetch_history(symbol)
-        except FetchError as e:
-            log.info("no CBOE history for %s (%s)", symbol, e.status)
-            return []
-        return [b for b in bars if start <= b.date <= end]
+        return []
     return await nasdaq.fetch_history(symbol, _asset(kind), start, end)
 
 

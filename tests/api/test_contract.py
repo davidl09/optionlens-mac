@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from .tsschema import Types, mismatches
+from .tsschema import load_types, mismatches
 
-TYPES = Types()
+TYPES = load_types()
 S = "/api/symbol/AAPL"
 OSI = "AAPL261218C00350000"
 

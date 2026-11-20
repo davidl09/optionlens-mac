@@ -35,7 +35,7 @@ TERM = ReportDef(
     "Constant-maturity IV30/60/90/180, slope and backwardation flag (IV30 > IV90 × 1.05).",
     (Param("backwardation_only", "Backwardation only", "bool", False), MIN_OPT_VOL, KIND, *SCOPE),
     TERM_COLS, run_term, ("term_ratio", "desc"),
-    ("Constant-maturity IVs interpolate ATM IV in total variance between listed expiries.",))
+    ("Constant-maturity IVs interpolate ATM IV in total variance between listed expiries.", C.NOTE_CHAIN_UNIVERSE))
 
 SKEW_COLS = (*C.DESC_SHORT, *pick(C.QUOTE, "price", "change_pct"),
              *group(C.G_VOL, (Col("skew25_30", "25Δ skew (put − call)", "vol"),
@@ -55,7 +55,8 @@ def run_skew(p: RunParams) -> Output:
 SKEW = ReportDef(
     "skew-screener", "Skew Screener", "Volatility", "30-day 25-delta skew, put skew and its historic rank.",
     (MIN_OPT_VOL, KIND, *SCOPE), SKEW_COLS, run_skew, ("skew25_30", "desc"),
-    ("Skew uses feed deltas, interpolated to 30 days in variance.", "Skew rank needs ≥ 20 stored days."))
+    ("Skew uses feed deltas, interpolated to 30 days in variance.", "Skew rank needs ≥ 20 stored days.",
+     C.NOTE_CHAIN_UNIVERSE))
 
 PREM_COLS = (*C.DESC_SHORT, *pick(C.QUOTE, "price", "change_pct"),
              *group(C.G_VOL, (Col("iv30", "IV30", "vol"), Col("hv20", "HV20", "vol"), Col("hv30", "HV30", "vol"),
@@ -124,7 +125,7 @@ ZERO_DTE = ReportDef(
     "At-the-money straddles expiring today for SPX, XSP, SPY, QQQ, IWM and any symbol with an expiry today.",
     (Param("include_all", "Include every symbol with an expiry today", "bool", True), *SCOPE),
     ZDTE_COLS, run_zero_dte, ("straddle_pct", "desc"),
-    ("Straddle at the listed strike nearest spot, mid prices.",))
+    ("Straddle at the listed strike nearest spot, mid prices.", C.NOTE_CHAIN_UNIVERSE))
 
 COMPARE_COLS = (*STRADDLE_COLS, Col("iv30", "IV30", "vol", C.G_VOL), Col("hv20", "HV20", "vol", C.G_VOL),
                 Col("iv_rank", "IV Rank", "pct", C.G_VOL), Col("earnings_in_window", "Earnings before expiry", "bool", C.G_CAT),
@@ -161,6 +162,7 @@ COMPARE_STRADDLE = ReportDef(
     "compare-straddle", "Straddle Comparison", "Volatility",
     "ATM straddle (implied move) of the expiry nearest the target DTE for each symbol.",
     (Param("symbols", "Symbols", "symbols", None), p_int("dte", "Target DTE", 30, 0, 900)),
-    COMPARE_COLS, run_compare_straddle, None, ("Straddle at the listed strike nearest spot, mid prices.",))
+    COMPARE_COLS, run_compare_straddle, None, ("Straddle at the listed strike nearest spot, mid prices.",
+                                               C.NOTE_CHAIN_UNIVERSE))
 
 REPORTS = (TERM, SKEW, PREMIUM, ZERO_DTE)

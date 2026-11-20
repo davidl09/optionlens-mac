@@ -24,6 +24,7 @@ class Quote:
     bid: float | None
     ask: float | None
     iv30: float | None  # fraction
+    delayed: bool | None = None  # pushed from delayed (not real-time) market data; None = unknown
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,7 @@ class ChainSnapshot:
     quote: Quote
     contracts: tuple[OptionContract, ...]
     fetched_at: datetime
+    delayed: bool | None = None  # see Quote.delayed
 
 
 @dataclass(frozen=True, slots=True)

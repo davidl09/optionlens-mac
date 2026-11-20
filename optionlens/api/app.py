@@ -1,29 +1,41 @@
-"""FastAPI application: API routers, error mapping, scheduler lifespan and the built SPA (web/dist)."""
+"""FastAPI application (API only): routers, error mapping, bearer auth, CORS, body-size limit and
+the scheduler lifespan. Unknown paths answer 404 JSON."""
 from __future__ import annotations
 
 import logging
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
-from starlette.responses import FileResponse, PlainTextResponse, Response
+from starlette.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .. import db
-from ..config import PACKAGE_DIR
+from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
 from ..services import alerts
 from ..services.errors import BadRequest, NotFound
-from . import routes_backtest, routes_calc, routes_market, routes_reports, routes_symbol, routes_system, routes_user
+from . import (
+    routes_backtest,
+    routes_calc,
+    routes_ingest,
+    routes_market,
+    routes_reports,
+    routes_symbol,
+    routes_system,
+    routes_user,
+)
+from .auth import BearerAuth
 from .json import ApiJSON
 
 log = logging.getLogger("optionlens.api")
-WEB_DIST = PACKAGE_DIR.parent.parent / "web" / "dist"
-NO_SPA = "OptionLens API is running, but the web app is not built.\nBuild it with: cd web && npm ci && npm run build\n"
+MAX_BODY_BYTES = 64 * 1024 * 1024   # a 50k-contract ingest chain is ~15 MB
+CORS_METHODS = ("GET", "POST", "PUT", "DELETE", "OPTIONS")
+CORS_HEADERS = ("Authorization", "Content-Type")
 
 
 def scheduler_enabled() -> bool:
@@ -83,27 +95,34 @@ def _install_errors(app: FastAPI) -> None:
         return _detail(exc.status_code, str(exc.detail))
 
 
-def _install_spa(app: FastAPI, dist: Path) -> None:
-    root = dist.resolve()
+class BodyLimit:
+    """ASGI middleware: 413 when a request declares a body larger than `limit` bytes."""
 
-    @app.get("/{path:path}", include_in_schema=False)
-    async def spa(path: str) -> Response:
-        if path == "api" or path.startswith("api/"):
-            return _detail(404, "not found")
-        index = root / "index.html"
-        if not index.is_file():
-            return PlainTextResponse(NO_SPA)
-        f = (root / path).resolve()
-        if path and f.is_file() and f.is_relative_to(root):
-            return FileResponse(f)
-        return FileResponse(index)
+    def __init__(self, app: ASGIApp, limit: int = MAX_BODY_BYTES):
+        self.app, self.limit = app, limit
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            length = next((v for k, v in scope["headers"] if k == b"content-length"), b"0")
+            if length.isdigit() and int(length) > self.limit:
+                await _detail(413, f"request body over {self.limit} bytes")(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
 
 
-def create_app(web_dist: Path = WEB_DIST) -> FastAPI:
-    app = FastAPI(title="OptionLens", lifespan=lifespan, default_response_class=ApiJSON)
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """The API app (bearer auth when settings carry a token)."""
+    s = settings or get_settings()
+    app = FastAPI(title="OptionLens", lifespan=lifespan, default_response_class=ApiJSON,
+                  docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
+    app.state.settings = s
     _install_errors(app)
     for module in (routes_system, routes_symbol, routes_calc, routes_backtest,
-                   routes_reports, routes_market, routes_user):
+                   routes_reports, routes_market, routes_user, routes_ingest):
         app.include_router(module.router)
-    _install_spa(app, web_dist)
+    app.add_middleware(BodyLimit)
+    if s.auth_enabled:
+        app.add_middleware(BearerAuth, token=s.api_token)
+    app.add_middleware(CORSMiddleware, allow_origins=list(s.cors_origins), allow_methods=list(CORS_METHODS),
+                       allow_headers=list(CORS_HEADERS), allow_credentials=False)   # outermost: preflights skip auth
     return app

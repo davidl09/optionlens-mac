@@ -75,7 +75,7 @@ def client(tmp_path_factory):
     db.close()
     context.invalidate()
     from optionlens.api.app import create_app
-    with TestClient(create_app(web_dist=data / "no-dist")) as c:
+    with TestClient(create_app()) as c:
         yield c
     context.invalidate()
     mp.undo()

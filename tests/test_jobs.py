@@ -20,7 +20,7 @@ from optionlens.repo import metrics as metrics_repo
 from optionlens.repo import options as options_repo
 from optionlens.repo import status as status_repo
 from optionlens.repo import symbols as symbols_repo
-from optionlens.sources import cboe, nasdaq
+from optionlens.sources import cboe, chain_source, nasdaq
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -75,7 +75,29 @@ def test_all_spec_jobs_defined():
             "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests
     assert set(scheduler.JOBS) - {"digest_morning"} == spec
-    assert scheduler.next_run_at("eod", ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
+    # no vendor ChainSource (default): no chain sweeps, no CBOE collection, eod after the bridge's pushes
+    assert scheduler.next_run_at("eod", ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 20, 5)
+    for name in ("sweep", "vix"):
+        assert scheduler.next_run_at(name, ny(2026, 11, 19, 12, 0)) is None
+        assert not scheduler.JOBS[name].catch_up
+
+
+def test_vendor_source_schedules_sweeps(monkeypatch):
+    monkeypatch.setattr(chain_source, "configured", lambda: object())
+    jobs = scheduler.build_jobs()
+    assert jobs["sweep"].catch_up and jobs["sweep"].schedule.next_after(ny(2026, 11, 19, 9, 0)) == ny(2026, 11, 19, 9, 45)
+    assert jobs["eod"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
+
+
+def test_chain_source_registry(monkeypatch):
+    assert chain_source.configured() is None                       # default "none"
+    from optionlens import config
+    monkeypatch.setattr(config, "get_settings", lambda: type("S", (), {"chain_source": "acme"})())
+    monkeypatch.setattr(chain_source, "get_settings", config.get_settings)
+    with pytest.raises(ValueError, match="acme"):
+        chain_source.configured()
+    monkeypatch.setitem(chain_source.REGISTRY, "acme", lambda: "SRC")
+    assert chain_source.configured() == "SRC"
 
 
 # ----------------------------------------------------------------------------- run_job
@@ -106,22 +128,32 @@ async def test_run_job_records_success_failure_and_no_overlap(tmpdb, monkeypatch
 FETCHED = ny(2026, 11, 19, 16, 25)
 
 
-@pytest.fixture
-def mocked_cboe(monkeypatch):
-    payload = json.loads((FIX / "cboe_chain_AAPL.json").read_text())
+class FakeVendor:
+    """A ChainSource serving the recorded AAPL chain (CBOE fixture parsed offline)."""
+    name = "fake"
 
-    async def fake_fetch(symbol):
+    def __init__(self):
+        self.payload = json.loads((FIX / "cboe_chain_AAPL.json").read_text())
+        self.calls: list[str] = []
+        self.delay = 0.0
+
+    async def fetch_chain(self, symbol):
+        self.calls.append(symbol)
+        await asyncio.sleep(self.delay)
         if symbol == "AAPL":
-            return cboe.parse_chain(payload, "AAPL", fetched_at=FETCHED)
-        if symbol == "NOPE":
-            raise FetchError("u", 403)
+            return cboe.parse_chain(self.payload, "AAPL", fetched_at=FETCHED)
         if symbol == "EMPTY":
-            p = {**payload, "data": {**payload["data"], "options": []}}
+            p = {**self.payload, "data": {**self.payload["data"], "options": []}}
             return cboe.parse_chain(p, "EMPTY", fetched_at=FETCHED)
-        raise FetchError("u", 503)
+        raise FetchError("u", 403 if symbol == "NOPE" else 503)
 
-    monkeypatch.setattr(cboe, "fetch_chain", fake_fetch)
+
+@pytest.fixture
+def mocked_vendor(monkeypatch):
+    v = FakeVendor()
+    monkeypatch.setattr(chain_source, "configured", lambda: v)
     monkeypatch.setattr(chains, "now_ny", lambda: FETCHED)
+    return v
 
 
 def _seed_symbols_and_bars():
@@ -131,7 +163,12 @@ def _seed_symbols_and_bars():
     bars_repo.upsert_bars(hist)          # through 2026-11-18
 
 
-async def test_sweep_pipeline(tmpdb, mocked_cboe, monkeypatch):
+async def test_sweep_needs_a_chain_source(tmpdb):
+    with pytest.raises(RuntimeError, match="no server-side chain source"):
+        await chains.sweep(["AAPL"])
+
+
+async def test_sweep_pipeline(tmpdb, mocked_vendor, monkeypatch):
     _seed_symbols_and_bars()
     monkeypatch.setattr(chains, "now_ny", lambda: ny(2026, 11, 19, 15, 50))   # intraday sweep writes metrics
     seen = []
@@ -140,14 +177,15 @@ async def test_sweep_pipeline(tmpdb, mocked_cboe, monkeypatch):
         detail = await chains.sweep()
     finally:
         hooks.on_sweep_complete.clear()
-    assert detail.startswith("1 chains, 2 not optionable, 1 failed")
+    assert detail.startswith("1 chains, 1 not optionable, 2 failed")
     assert seen == [(date(2026, 11, 19), ["AAPL"])]
     assert status_repo.row_counts()["option_latest"] == 3386
     assert symbols_repo.get_symbol("AAPL")["optionable"] is True
-    assert symbols_repo.get_symbol("NOPE")["optionable"] is False
+    assert symbols_repo.get_symbol("NOPE")["optionable"] is None     # an error never marks unoptionable
     assert symbols_repo.get_symbol("EMPTY")["optionable"] is False
     assert symbols_repo.get_symbol("FLAKY")["optionable"] is None   # transient failure: unchanged
-    assert symbols_repo.universe_symbols() == ["AAPL", "FLAKY"]
+    assert symbols_repo.universe_symbols() == ["AAPL", "FLAKY", "NOPE"]
+    assert options_repo.latest_source("AAPL") == "vendor" and metrics_repo.source_of(date(2026, 11, 19), "AAPL") == "vendor"
     m = metrics_repo.get_metrics("AAPL", date(2026, 11, 19))
     assert 0.15 < m["iv30"] < 0.6 and m["iv30_cboe"] == pytest.approx(0.25007)
     assert m["close"] == pytest.approx(348.515) and m["volume"] == 18174222
@@ -158,7 +196,7 @@ async def test_sweep_pipeline(tmpdb, mocked_cboe, monkeypatch):
     assert m["hv20"] == pytest.approx(vol.hv_snapshot(closes)["hv20"])
 
 
-async def test_eod_writes_archive_and_bars(tmpdb, mocked_cboe, monkeypatch):
+async def test_eod_writes_archive_and_bars(tmpdb, mocked_vendor, monkeypatch):
     _seed_symbols_and_bars()
     monkeypatch.setattr(chains, "is_market_open", lambda now: False)
     got = []
@@ -198,14 +236,9 @@ def test_is_stale():
     assert ondemand.is_stale(ny(2026, 11, 20, 15, 0), weekend, 120)       # intraday Friday data
 
 
-async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_cboe, monkeypatch):
-    calls = []
-    real = cboe.fetch_chain
-
-    async def counting(symbol):
-        calls.append(symbol)
-        await asyncio.sleep(0.02)
-        return await real(symbol)
+async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_vendor, monkeypatch):
+    mocked_vendor.delay = 0.02
+    ondemand._viewed.clear()
 
     async def no_history(row, start=None):
         return 0
@@ -213,12 +246,13 @@ async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_cboe, monke
     async def info(symbol, asset="stocks"):
         return {"name": "Apple Inc."} if asset == "stocks" else None
 
-    monkeypatch.setattr(cboe, "fetch_chain", counting)
     monkeypatch.setattr(prices, "backfill_symbol", no_history)
     monkeypatch.setattr(nasdaq, "fetch_info", info)
     monkeypatch.setattr(ondemand, "now_ny", lambda: ny(2026, 11, 19, 16, 30))
     res = await asyncio.gather(*(ondemand.ensure_fresh("aapl") for _ in range(5)))
-    assert all(res) and calls == ["AAPL"]
+    assert all(res) and mocked_vendor.calls == ["AAPL"]
+    from optionlens.repo import views as views_repo
+    assert views_repo.viewed_since(datetime(2000, 1, 1, tzinfo=timezone.utc)) == ["AAPL"]
     row = symbols_repo.get_symbol("AAPL")
     assert row["kind"] == "stock" and row["in_universe"] is False and row["optionable"] is True
 

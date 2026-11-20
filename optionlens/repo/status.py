@@ -6,7 +6,7 @@ from ._sql import scalar
 
 TABLES = ("symbols", "daily_bars", "quotes_latest", "option_latest", "option_eod", "metrics_daily",
           "earnings", "dividends", "index_bars", "rates", "report_snapshots", "watchlists", "presets",
-          "alerts", "notifications", "http_cache", "job_runs")
+          "alerts", "notifications", "http_cache", "job_runs", "vol_history", "bridge_status")
 
 
 def row_counts() -> dict[str, int]:

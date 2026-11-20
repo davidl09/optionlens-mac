@@ -1,5 +1,8 @@
 """Settings from environment variables `OPTIONLENS_*` (read once, immutable, validated: a bad value
-raises ValueError naming the variable at startup)."""
+raises ValueError naming the variable at startup).
+
+The engine runs as the Mac app's local sidecar (docs/INTEGRATION.md §1): it binds loopback only, the
+app passes a per-launch API token, data dir, port (0 = pick a free one) and its own pid."""
 from __future__ import annotations
 
 import os
@@ -11,6 +14,8 @@ from typing import Callable, TypeVar
 T = TypeVar("T")
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+MIN_TOKEN_LEN = 16
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -26,8 +31,12 @@ def _num(name: str, default: str, cast: Callable[[str], T]) -> T:
         raise ValueError(f"OPTIONLENS_{name}={raw!r} is not a valid {cast.__name__}") from None
 
 
+def _opt_int(name: str) -> int | None:
+    return _num(name, "", int) if _env(name) is not None else None
+
+
 # numeric settings that schedules/limiters divide by or loop on: must be > 0
-_POSITIVE = ("port", "sweep_interval_min", "option_eod_retention_days", "cboe_concurrency", "cboe_rps",
+_POSITIVE = ("sweep_interval_min", "option_eod_retention_days", "cboe_concurrency", "cboe_rps",
              "nasdaq_rps", "smtp_port")
 
 
@@ -35,7 +44,7 @@ _POSITIVE = ("port", "sweep_interval_min", "option_eod_retention_days", "cboe_co
 class Settings:
     data_dir: Path
     host: str
-    port: int
+    port: int                              # 0: bind a free port (serve prints `LISTENING <port>`)
     universe_stocks: int
     etf_file: Path
     sweep_interval_min: int
@@ -51,18 +60,38 @@ class Settings:
     smtp_password: str | None
     smtp_from: str | None
     smtp_to: str | None
+    api_token: str | None = None           # per-launch token from the app; None = auth off (development)
+    cors_origins: tuple[str, ...] = ("app://optionlens",)
+    parent_pid: int | None = None          # exit when this process (the app) disappears
+    chain_universe_size: int = 150         # most-liquid symbols in the chain universe (besides watchlists)
+    chain_source: str = "none"             # server-side vendor ChainSource; "none": chains come from ingest
     tz: str = "America/New_York"
 
     def __post_init__(self) -> None:
         bad = [f"OPTIONLENS_{n.upper()}={getattr(self, n)} must be > 0" for n in _POSITIVE if getattr(self, n) <= 0]
+        if self.host not in LOOPBACK_HOSTS:
+            bad.append(f"OPTIONLENS_HOST={self.host} must be loopback ({', '.join(LOOPBACK_HOSTS)}): "
+                       "the engine only serves the local app")
+        if not 0 <= self.port <= 65535:
+            bad.append(f"OPTIONLENS_PORT={self.port} must be in 0..65535")
         if self.universe_stocks < 0:
             bad.append(f"OPTIONLENS_UNIVERSE_STOCKS={self.universe_stocks} must be >= 0")
+        if self.chain_universe_size < 0:
+            bad.append(f"OPTIONLENS_CHAIN_UNIVERSE_SIZE={self.chain_universe_size} must be >= 0")
+        if self.api_token is not None and len(self.api_token) < MIN_TOKEN_LEN:
+            bad.append(f"OPTIONLENS_API_TOKEN must be at least {MIN_TOKEN_LEN} characters")
+        if self.parent_pid is not None and self.parent_pid <= 0:
+            bad.append(f"OPTIONLENS_PARENT_PID={self.parent_pid} must be > 0")
         if bad:
             raise ValueError("invalid settings: " + "; ".join(bad))
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "optionlens.duckdb"
+
+    @property
+    def auth_enabled(self) -> bool:
+        return self.api_token is not None
 
 
 def load_settings() -> Settings:
@@ -86,6 +115,11 @@ def load_settings() -> Settings:
         smtp_password=_env("SMTP_PASSWORD"),
         smtp_from=_env("SMTP_FROM"),
         smtp_to=_env("SMTP_TO"),
+        api_token=_env("API_TOKEN"),
+        cors_origins=tuple(o.strip() for o in _env("CORS_ORIGINS", "app://optionlens").split(",") if o.strip()),
+        parent_pid=_opt_int("PARENT_PID"),
+        chain_universe_size=_num("CHAIN_UNIVERSE_SIZE", "150", int),
+        chain_source=_env("CHAIN_SOURCE", "none").lower(),
     )
 
 

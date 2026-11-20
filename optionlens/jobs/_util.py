@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextvars import ContextVar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Awaitable, Callable, Iterable, TypeVar
 
 from ..analytics.calendar import NY, OPEN, close_time, is_trading_day, now_ny, prev_trading_day
@@ -17,6 +17,7 @@ T = TypeVar("T")
 # CBOE data is ~15 min delayed; a fetch this long after the close (5 min margin) carries the closing
 # snapshot. The one boundary for "final" session data: EOD schedule/archive, daily bars, freshness.
 FINAL_DELAY_MIN = 20
+EOD_DEADLINE = time(20, 0)
 
 # Set by scheduler.run_job so long collectors can publish progress into job_runs.detail.
 current_run_id: ContextVar[int | None] = ContextVar("current_run_id", default=None)
@@ -37,6 +38,11 @@ def session_close(day: date) -> datetime:
 def final_since(day: date) -> datetime:
     """Earliest fetch time whose (delayed) data is the session's closing snapshot: close + FINAL_DELAY_MIN."""
     return session_close(day) + timedelta(minutes=FINAL_DELAY_MIN)
+
+
+def eod_deadline(day: date) -> datetime:
+    """Until when a data client (the IBKR bridge) may push closing chains of session `day`: 20:00 ET."""
+    return datetime.combine(day, EOD_DEADLINE, NY)
 
 
 async def report_progress(detail: str) -> None:

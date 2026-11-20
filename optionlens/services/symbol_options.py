@@ -71,6 +71,7 @@ def chain(symbol: str, expiry: str | None = None) -> dict:
         "expiries": expiry_infos(ca), "expiry": exp,
         "strikes": sorted({r["strike"] for r in rows}),
         "calls": [r for r in rows if r["right"] == "C"], "puts": [r for r in rows if r["right"] == "P"],
+        "delayed": options_repo.latest_delayed(ca.symbol),
     }
 
 
