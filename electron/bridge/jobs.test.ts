@@ -6,7 +6,7 @@ import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import { TICK } from "./ticks";
-import { CODE, TwsRequestError, type TwsContract } from "./tws";
+import { CODE, TwsRequestError, TwsTimeoutError, type TwsContract } from "./tws";
 
 function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
@@ -179,6 +179,16 @@ describe("delayed data (no real-time subscription)", () => {
 });
 
 describe("historical", () => {
+  it("retries a request TWS did not answer in time without treating it as a pacing violation", async () => {
+    const m = emptyMarket();
+    m.historical = () => new TwsTimeoutError("AAPL historical TRADES", 120_000);
+    const pacer = new HistoricalPacer({ minSpacingMs: 0 });
+    const violation = vi.spyOn(pacer, "violation");
+    await expect(pacedHistorical(ctxFor(new FakeSession(m), { pacer }), { symbol: "AAPL", secType: "STK", exchange: "SMART", currency: "USD" }, { duration: "1 Y", whatToShow: "TRADES", useRth: true }))
+      .rejects.toBeInstanceOf(RetryLater);
+    expect(violation).not.toHaveBeenCalled();
+  });
+
   it("backs off and asks to retry on pacing violations; treats 'no data' as empty", async () => {
     const m = emptyMarket();
     let mode: "pacing" | "nodata" | "ok" = "pacing";

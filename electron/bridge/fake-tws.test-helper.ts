@@ -8,7 +8,7 @@ export interface FakeMarket {
   streamErrors: (id: string) => TwsRequestError | undefined;
   details: (c: TwsContract) => TwsContract[];
   optionParams: OptionParams[];
-  historical: (c: TwsContract, r: HistoricalRequest) => HistBar[] | TwsRequestError;
+  historical: (c: TwsContract, r: HistoricalRequest) => HistBar[] | Error;
 }
 
 export const contractId = (c: TwsContract) =>
@@ -32,7 +32,7 @@ export class FakeSession implements TwsSession {
   async historical(contract: TwsContract, req: HistoricalRequest): Promise<HistBar[]> {
     this.historicalCalls.push({ contract, req });
     const r = this.market.historical(contract, req);
-    if (r instanceof TwsRequestError) throw r;
+    if (r instanceof Error) throw r;
     return r;
   }
   async contractDetails(c: TwsContract): Promise<TwsContract[]> { return this.market.details(c); }

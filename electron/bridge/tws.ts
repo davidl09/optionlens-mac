@@ -40,6 +40,11 @@ export class TwsRequestError extends Error {
   constructor(readonly code: number, message: string) { super(`TWS ${code}: ${message}`); this.name = "TwsRequestError"; }
 }
 
+/** TWS did not answer a request in time (a bridge-side timeout, not an IBKR error code). */
+export class TwsTimeoutError extends Error {
+  constructor(what: string, ms: number) { super(`${what}: no answer from TWS within ${Math.round(ms / 1000)} s`); this.name = "TwsTimeoutError"; }
+}
+
 /** A connection-level message (reqId -1): 1100 lost, 1101/1102 restored, 10197 competing session, 21xx farm status. */
 export interface TwsSystemMessage { code: number; message: string }
 
@@ -71,7 +76,6 @@ export const CODE = {
   MAX_TICKERS: 101,                // market-data line limit reached: the subscription was refused
   NO_SECURITY_DEFINITION: 200,
   HMDS_ERROR: 162,                 // pacing violation, or "query returned no data", or competing session
-  NO_HIST_QUERY: 366,
   MKT_DATA_NOT_SUBSCRIBED: 354,
   CLIENT_ID_IN_USE: 326,
   CONNECTIVITY_LOST: 1100,
@@ -88,7 +92,7 @@ export const NOT_SUBSCRIBED_CODES = new Set<number>([354, 10089, 10090, 10168]);
 export function isPacingError(e: unknown): boolean {
   if (!(e instanceof TwsRequestError)) return false;
   if (e.code === CODE.HMDS_ERROR) return /pacing/i.test(e.message);
-  return e.code === CODE.NO_HIST_QUERY || e.code === 420;
+  return e.code === 420;
 }
 
 /** Historical request that legitimately has no data (do not retry). */

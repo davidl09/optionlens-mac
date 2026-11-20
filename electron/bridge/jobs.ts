@@ -7,7 +7,7 @@ import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import type { LineBudget } from "./line-budget";
 import { bestPrice, changeFromClose, emptySnapshot, livePrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
-import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
+import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, TwsTimeoutError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
 import { durationFor } from "./wants";
 
 export interface JobContext {
@@ -115,6 +115,14 @@ async function underlyingQuote(ctx: JobContext, c: TwsContract): Promise<QuoteSn
 
 // ---------------- option contracts ----------------
 
+/** One more try when TWS did not answer in time (large option contract-details lists can be slow). */
+async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) {
+    if (!(e instanceof TwsTimeoutError)) throw e;
+    return fn();
+  }
+}
+
 export interface ResolvedChain { underlying: QuoteSnapshot; spot: number; contracts: TwsContract[] }
 
 export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape): Promise<ResolvedChain> {
@@ -131,10 +139,11 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
   const all: TwsContract[] = [];
   for (const e of expiries) {
     throwIfAborted(ctx.signal);
-    all.push(...await ctx.session.contractDetails({
+    const req: TwsContract = {
       symbol: und.symbol, secType: "OPT", exchange: "SMART", currency: "USD",
       lastTradeDateOrContractMonth: e.expiry, tradingClass: e.tradingClass, multiplier: e.multiplier,
-    }, ctx.signal));
+    };
+    all.push(...await retryOnTimeout(() => ctx.session.contractDetails(req, ctx.signal)));
   }
   return { underlying: quote, spot, contracts: selectContracts(all, spot, shape.moneyness) };
 }
@@ -241,6 +250,7 @@ export async function pacedHistorical(ctx: JobContext, contract: TwsContract, re
     return bars;
   } catch (e) {
     if (isPacingError(e)) { const ms = ctx.pacer.violation(); throw new RetryLater(`pacing violation; backing off ${Math.round(ms / 1000)} s`); }
+    if (e instanceof TwsTimeoutError) throw new RetryLater(e.message);   // a slow answer is not a pacing violation
     if (isNoDataError(e)) return [];
     throw e;
   }
