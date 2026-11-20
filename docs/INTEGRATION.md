@@ -2,7 +2,7 @@
 
 Two repos:
 - **optionlens-server** — Python service (FastAPI + DuckDB + in-process scheduler). Runs 24/7 on any
-  Linux/macOS box. Collects data (Alpaca option chains, Nasdaq prices/calendars, Treasury rates),
+  Linux/macOS box. Collects data (Nasdaq prices/calendars, Treasury rates; option data pushed by the IBKR bridge or an optional vendor source),
   archives end-of-day, serves the analytics API. API-only: it no longer serves the web UI.
 - **optionlens-mac** — Electron app: the UI (React, formerly `web/`), server connection settings,
   and the **IBKR bridge** (talks to the user's running TWS / IB Gateway on the Mac and pushes data
@@ -22,7 +22,7 @@ built in: every request carries a token; HTTPS with a pinned self-signed certifi
 | `OPTIONLENS_TLS` | `auto` | `auto`: HTTPS with a self-signed cert when HOST is not loopback, plain HTTP on loopback. `on` / `off` force it. |
 | `OPTIONLENS_TLS_CERT`, `OPTIONLENS_TLS_KEY` | — | Use your own cert/key instead of the generated one |
 | `OPTIONLENS_CORS_ORIGINS` | `app://optionlens` | Comma list of allowed browser origins (the Electron renderer origin) |
-| `OPTIONLENS_ALPACA_KEY_ID`, `OPTIONLENS_ALPACA_SECRET_KEY` | — | Alpaca market-data credentials (paper account keys are fine) |
+| `OPTIONLENS_CHAIN_UNIVERSE_SIZE` | `150` | Most-liquid symbols (by option volume) included in the chain universe besides watchlists and recently opened symbols |
 | `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database + TLS material |
 
 Generated TLS material lives in `DATA_DIR/tls/{cert.pem,key.pem}` (EC P-256, 10-year validity,
@@ -56,7 +56,7 @@ Content-Type). No cookies.
 
 Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths, same JSON), except:
 - `ReportResult`, `Chain`, `Quote`, `ExpiryInfo` and per-row data may carry `source` where known:
-  `"alpaca" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed"`.
+  `"vendor" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed"`.
 - `Status` gains `sources: { name: string; ok: boolean | null; last_success_at: string | null; detail: string | null }[]`
   and `bridge: { connected: boolean; last_push_at: string | null; client: string | null }`.
 
@@ -78,7 +78,7 @@ POST /api/ingest/chain
 ```
 Server builds OSI codes, stores through the same pipeline as any other chain source (latest chain,
 quote, today's metrics row; `final` also writes the end-of-day archive for `session_date`). A chain from
-IBKR wins over an Alpaca chain fetched earlier for the same session (real OPRA quotes beat indicative).
+IBKR wins over a chain from any other source for the same session.
 
 ```
 POST /api/ingest/iv-history
@@ -98,17 +98,48 @@ POST /api/ingest/heartbeat
 → 200 {"server_time": "..."}
 ```
 
+```
+POST /api/ingest/underlying-stats          // universe-wide per-underlying option stats (IBKR generic ticks
+                                           // 100 option volume, 101 option OI, 104 HV, 106 IV on the stock)
+{ "source": "ibkr", "session_date": "2026-11-20", "ts": "...",
+  "stats": [ { "symbol": "AAPL", "price": 349.1, "change_pct": -0.0098, "volume": 4.1e7,
+               "call_volume": 338000, "put_volume": 251000, "call_oi": 2960000, "put_oi": 2730000,
+               "iv30": 0.251, "hv30": 0.27 } ] }
+→ 200 {"stored": n}   // fills that session's metrics row fields where no chain-derived value exists
+                      // (chain-derived values for the same session win); iv30 also feeds IV history
+POST /api/ingest/option-bars               // historical daily bars of individual contracts (gap catch-up)
+{ "source": "ibkr", "symbol": "AAPL",
+  "bars": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C", "date": "2026-11-19",
+              "open": .., "high": .., "low": .., "close": 9.2, "volume": 812 } ] }
+→ 200 {"stored": n}   // stored as end-of-day rows with source "reconstructed" (bid/ask/oi null, IV and delta
+                      // computed server-side from close + underlying close); never overwrite real rows
+```
+
 `GET /api/ingest/wants` → what the server would like the bridge to fetch now (the bridge polls it every
-5 min while connected, and immediately after connecting):
+5 min while connected, and immediately after connecting). The bridge works through these in priority
+order: on-demand refreshes (user-triggered) → eod_chains → chain_universe → underlying_stats →
+option_bars (catch-up) → iv_history (backfill), always within IBKR pacing.
 ```
 { "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // symbols whose stored IV history is
                                                                 // missing or older than the last session
+  "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, during the session
+  "chain_universe": { "symbols": ["AAPL", ...], "max_age_s": 3600,       // watchlists + most liquid N (config,
+                      "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols
   "eod_chains": { "session_date": "2026-11-20", "symbols": ["AAPL", ...], "not_before": "...", "deadline": "..." },
-                                                                // watchlists + indices (SPX, NDX, RUT, XSP)
+                                                                // chain_universe + indices (SPX, NDX, RUT, XSP)
                                                                 // after close+20m until 20:00 ET
+  "option_bars": [ {"symbol": "AAPL", "sessions": ["2026-11-18"], "expiries": 6, "moneyness": 0.15} ],
+                                                                // sessions missing an end-of-day archive
   "index_symbols": ["VIX", "VIX9D", "VIX3M", "VIX6M"],
   "chains_on_demand_max_age_s": 120 }
 ```
+
+Coverage: there is no free, licensed source of full option chains for the whole universe that this user can
+use (CBOE's website feed is blocked and not licensed for collection; Alpaca does not serve Canadian
+residents). Server-side scheduled chain sweeps therefore run only if a vendor ChainSource is configured
+(none by default). Reports that need full chains (strategy screeners, option screener, OI changes, large
+volume contracts) cover the chain universe; their `notes` say so. Universe-level reports (unusual volume,
+IV rankings, put/call, broad view) use underlying-stats for every symbol.
 
 IV history semantics: values ingested via `/api/ingest/iv-history` populate a per-symbol daily IV30
 series used for IV rank/percentile, vol history charts and the model-pricing IV proxy, wherever the
@@ -118,4 +149,4 @@ server's own collected IV30 for that date is missing (collected values win; both
 
 When the user opens a symbol page the app (renderer → main) asks the bridge to fetch that symbol's chain
 from IBKR (if connected) and POST it, then reloads the page data from the server. Without IBKR the server
-serves its own most recent chain (Alpaca).
+serves the most recent chain it has stored (from an earlier IBKR push or a vendor source).

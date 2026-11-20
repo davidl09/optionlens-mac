@@ -1,2 +1,9 @@
+node_modules/
+dist/
+dist-electron/
+release/
+build/python/
+build/engine/
 test-results/
 e2e/screenshots/
+*.tsbuildinfo
