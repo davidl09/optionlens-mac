@@ -56,7 +56,7 @@ def _contract(symbol: str, c: dict) -> OptionContract:
     return OptionContract(
         osi=format_osi(symbol, c["expiry"], c["right"], c["strike"]), symbol=symbol, expiry=c["expiry"],
         strike=float(c["strike"]), right=c["right"], bid=c.get("bid"), ask=c.get("ask"), last=c.get("last"),
-        change=None, volume=int(c.get("volume") or 0), oi=int(c.get("oi") or 0),
+        change=None, volume=ctx.count(c.get("volume")), oi=ctx.count(c.get("oi")),
         iv=iv if iv and iv > 0 else None, delta=c.get("delta"), gamma=c.get("gamma"), theta=c.get("theta"),
         vega=c.get("vega"), rho=None, theo=None)
 

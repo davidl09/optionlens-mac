@@ -92,7 +92,7 @@ export interface PriceAction {
 export interface OptionRow {
   osi: string; expiry: ISODate; strike: number; right: Right;
   bid: number | null; ask: number | null; mid: number | null; last: number | null; change: number | null;
-  volume: number; oi: number; iv: number | null;
+  volume: number | null; oi: number | null; iv: number | null;   // null = unknown (never 0)
   delta: number | null; gamma: number | null; theta: number | null; vega: number | null; rho: number | null; theo: number | null;
   itm: boolean;
   source?: DataSource;
@@ -129,7 +129,7 @@ export interface OpenInterest {
 export interface ContractHistory {
   osi: string; symbol: string; expiry: ISODate; strike: number; right: Right;
   latest: OptionRow | null;
-  history: { date: ISODate; bid: number | null; ask: number | null; mid: number | null; iv: number | null; volume: number; oi: number; delta: number | null; underlying: number | null }[];
+  history: { date: ISODate; bid: number | null; ask: number | null; mid: number | null; iv: number | null; volume: number | null; oi: number | null; delta: number | null; underlying: number | null }[];
 }
 
 // ---------------- volatility ----------------

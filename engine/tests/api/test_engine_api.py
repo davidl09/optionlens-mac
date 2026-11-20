@@ -130,6 +130,12 @@ def test_ingest_delayed_flag_is_required_and_exposed(client):
                    underlying={"price": 120.0, "bid": None, "volume": None, "prev_close": None})
     r = client.post("/api/ingest/chain", json=nulls)
     assert r.status_code == 200, r.text
+    # unknown volume / OI stays unknown end to end (stored NULL, served null), never 0
+    from optionlens.analytics.chain import option_row
+    from optionlens.repo import options
+    (c,) = options.get_chain("DELL").contracts
+    assert (c.volume, c.oi) == (None, None)
+    assert {k: option_row(c, 120.0)[k] for k in ("volume", "oi")} == {"volume": None, "oi": None}
     client.post("/api/ingest/chain", json=_chain())
 
 

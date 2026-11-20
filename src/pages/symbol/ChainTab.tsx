@@ -66,7 +66,7 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
       );
     }
     if (c.key === "volume") {
-      const hot = row.volume > row.oi && row.volume > 0;
+      const hot = row.volume !== null && row.volume > 0 && row.volume > (row.oi ?? 0);
       return <td key={c.key} className={`${base} ${hot ? "hot" : ""}`} title={hot ? "Volume exceeds open interest" : undefined}>{fmt(v, "int")}</td>;
     }
     if (c.key === "last") {

@@ -146,7 +146,7 @@ def contract(symbol: str, osi: str) -> dict:
     mid = np.where(both, (bid + ask) / 2.0, last)
     history = [{"date": ctx.as_date(d), "bid": ctx.num(bid[i]), "ask": ctx.num(ask[i]), "mid": ctx.num(mid[i]),
                 "iv": ctx.num(h["iv"][i]) if (h["iv"][i] or 0) > 0 else None,
-                "volume": int(ctx.num(h["volume"][i]) or 0), "oi": int(ctx.num(h["oi"][i]) or 0),
+                "volume": ctx.count(h["volume"][i]), "oi": ctx.count(h["oi"][i]),
                 "delta": ctx.num(h["delta"][i]), "underlying": ctx.num(h["underlying"][i])}
                for i, d in enumerate(h["date"])]
     return {"osi": osi, "symbol": sym, "expiry": exp, "strike": strike, "right": right,

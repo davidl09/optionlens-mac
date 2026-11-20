@@ -379,6 +379,12 @@ def num(v: Any) -> float | None:
     return f if np.isfinite(f) else None
 
 
+def count(v: Any) -> int | None:
+    """Integer count (volume, OI) or None when unknown (None/NaN): unknown is never 0."""
+    f = num(v)
+    return None if f is None else int(f)
+
+
 def _contracts(symbol: str, cols: dict[str, np.ndarray], expiries: list[date]) -> list[OptionContract]:
     g = {f: cols[f].tolist() for f in _SRC_FIELDS if f not in ("expiry",)}
     out = []
@@ -387,7 +393,7 @@ def _contracts(symbol: str, cols: dict[str, np.ndarray], expiries: list[date]) -
         out.append(OptionContract(
             osi=g["osi"][i], symbol=symbol, expiry=expiries[i], strike=float(g["strike"][i]), right=g["right"][i],
             bid=num(g["bid"][i]), ask=num(g["ask"][i]), last=num(g["last"][i]), change=num(g["change"][i]),
-            volume=int(num(g["volume"][i]) or 0), oi=int(num(g["oi"][i]) or 0),
+            volume=count(g["volume"][i]), oi=count(g["oi"][i]),
             iv=num(iv) if iv and iv == iv and iv > 0 else None,
             delta=num(g["delta"][i]), gamma=num(g["gamma"][i]), theta=num(g["theta"][i]),
             vega=num(g["vega"][i]), rho=num(g["rho"][i]), theo=num(g["theo"][i])))

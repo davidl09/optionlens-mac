@@ -38,8 +38,8 @@ class OptionContract:
     ask: float | None
     last: float | None
     change: float | None
-    volume: int
-    oi: int
+    volume: int | None  # None = unknown (never 0)
+    oi: int | None      # None = unknown (never 0)
     iv: float | None  # None when the feed reports 0
     delta: float | None
     gamma: float | None

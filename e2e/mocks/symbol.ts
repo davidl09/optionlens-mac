@@ -85,7 +85,7 @@ function strikeAggs(withChange: boolean) {
 
 export function activity(sym: string, expiry: string | null): Activity {
   const c = chain(sym, expiry === "all" ? null : expiry);
-  const top = [...c.calls, ...c.puts].sort((a, b) => b.volume - a.volume).slice(0, 20).map((r) => ({ ...r, vol_oi: r.oi ? round(r.volume / r.oi) : null, premium: round(r.volume * (r.mid ?? 0) * 100, 0) }));
+  const top = [...c.calls, ...c.puts].sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0)).slice(0, 20).map((r) => ({ ...r, vol_oi: r.oi ? round((r.volume ?? 0) / r.oi) : null, premium: round((r.volume ?? 0) * (r.mid ?? 0) * 100, 0) }));
   return {
     symbol: sym, asof: NOW, expiry: expiry === "all" || !expiry ? null : c.expiry, by_expiry: c.expiries, by_strike: strikeAggs(false), top_contracts: top,
     totals: { call_volume: 412_300, put_volume: 288_100, call_oi: 3_100_000, put_oi: 2_400_000, pc_volume: 0.7, pc_oi: 0.77, call_premium: 98_000_000, put_premium: 61_000_000 },
@@ -96,7 +96,7 @@ export function activity(sym: string, expiry: string | null): Activity {
 
 export function openInterest(sym: string, expiry: string | null): OpenInterest {
   const c = chain(sym, expiry);
-  const rows = [...c.calls, ...c.puts].slice(0, 10).map((r, i) => ({ ...r, oi_prev: r.oi - (i - 4) * 300, oi_change: (i - 4) * 300 }));
+  const rows = [...c.calls, ...c.puts].slice(0, 10).map((r, i) => ({ ...r, oi_prev: (r.oi ?? 0) - (i - 4) * 300, oi_change: (i - 4) * 300 }));
   return {
     symbol: sym, expiry: c.expiry, prior_date: "2026-11-18", expiries: c.expiries, by_strike: strikeAggs(true),
     max_pain: c.expiries.map((e, i) => ({ expiry: e.expiry, strike: i === 7 ? null : 225 + (i % 3) * 5 })),

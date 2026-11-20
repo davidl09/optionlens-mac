@@ -159,7 +159,7 @@ def option_row(c: Any, spot: float) -> dict:
     return {
         "osi": c.osi, "expiry": c.expiry, "strike": float(c.strike), "right": c.right,
         "bid": c.bid, "ask": c.ask, "mid": mid, "last": c.last, "change": c.change,
-        "volume": int(c.volume or 0), "oi": int(c.oi or 0), "iv": c.iv,
+        "volume": None if c.volume is None else int(c.volume), "oi": None if c.oi is None else int(c.oi), "iv": c.iv,
         "delta": c.delta, "gamma": c.gamma, "theta": c.theta, "vega": c.vega, "rho": c.rho,
         "theo": c.theo, "itm": bool(itm),
     }
