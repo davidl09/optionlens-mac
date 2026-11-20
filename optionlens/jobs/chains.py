@@ -9,9 +9,10 @@ from datetime import date, datetime, timedelta
 import numpy as np
 
 from ..analytics import chainmetrics, vol
-from ..analytics.calendar import is_market_open, last_completed_session, now_ny
+from ..analytics.calendar import NY, is_market_open, last_completed_session, now_ny
 from ..config import get_settings
 from ..models import Bar, ChainSnapshot
+from .. import net
 from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import metrics as metrics_repo
@@ -71,7 +72,7 @@ async def refresh_chain(symbol: str, final: bool = False) -> ChainSnapshot | Non
     try:
         snap = await cboe.fetch_chain(symbol)
     except FetchError as e:
-        if e.status in NOT_LISTED:
+        if e.status in NOT_LISTED and not e.blocked:
             await asyncio.to_thread(symbols_repo.set_optionable, symbol, False)
             return None
         raise
@@ -86,11 +87,16 @@ async def refresh_chain(symbol: str, final: bool = False) -> ChainSnapshot | Non
 async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
     """Refresh chains for the universe (or given symbols), then fire on_sweep_complete.
     `final`: the EOD closing sweep (it writes the session's final metrics rows)."""
+    if until := net.blocked_until(cboe.BASE_HOST):
+        raise RuntimeError(f"CBOE requests suspended after a CDN block until "
+                           f"{datetime.fromtimestamp(until, NY):%H:%M} ET; sweep skipped")
     syms = symbols or await asyncio.to_thread(symbols_repo.universe_symbols)
     t0 = _time.monotonic()
     done: list[str] = []
 
     async def one(sym: str) -> None:
+        if net.blocked_until(cboe.BASE_HOST):  # blocked mid-sweep: skip quietly, the job reports it
+            return
         if await refresh_chain(sym, final) is not None:
             done.append(sym)
         if len(done) % 100 == 0 and done:
@@ -104,6 +110,8 @@ async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
               f"{_time.monotonic() - t0:.0f}s")
     if failed:
         detail += f" (failed: {','.join(failed[:20])})"
+    if net.blocked_until(cboe.BASE_HOST):
+        raise RuntimeError(f"CBOE refused requests (CDN block) mid-sweep; partial: {detail}")
     await refresh_index_quotes(VIX_FAMILY)
     await hooks.fire(hooks.on_sweep_complete, session_date(now_ny()), sorted(done))
     return detail

@@ -13,7 +13,8 @@ from ..analytics.calendar import NY
 from ..models import Bar, ChainSnapshot, OptionContract, Quote, Right
 from .. import net
 
-BASE = "https://cdn.cboe.com/api/global"
+BASE_HOST = "cdn.cboe.com"
+BASE = f"https://{BASE_HOST}/api/global"
 # Tickers CBOE serves with a leading underscore (cash-settled indices).
 INDEX_SYMBOLS = frozenset({
     "SPX", "NDX", "RUT", "XSP", "DJX", "OEX", "XEO", "MRUT",

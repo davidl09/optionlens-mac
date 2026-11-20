@@ -28,16 +28,59 @@ RETRIES_429 = 6
 BACKOFF_S = 0.5
 COOLDOWN_MIN_S = 30.0
 COOLDOWN_MAX_S = 240.0
+# A CDN block page (HTTP 403 with an HTML body, e.g. Cloudflare) means this IP is refused. Stop all
+# traffic to that host family (fail fast) for a long pause, doubling while blocks persist.
+BLOCK_PAUSE_S = 3600.0
+BLOCK_PAUSE_MAX_S = 6 * 3600.0
+RATE_LIMITED_HOSTS = ("nasdaq.com", "cboe.com")
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
 class FetchError(Exception):
-    """A remote fetch failed permanently. `status` is the HTTP status (None for transport errors)."""
+    """A remote fetch failed permanently. `status` is the HTTP status (None for transport errors);
+    `blocked` is True when the host refused us with a CDN block page (or we are pausing after one)."""
 
-    def __init__(self, url: str, status: int | None, message: str = ""):
+    def __init__(self, url: str, status: int | None, message: str = "", blocked: bool = False):
         super().__init__(f"{status or 'error'} {url} {message}".strip())
         self.url = url
         self.status = status
+        self.blocked = blocked
+
+
+def _family(host: str) -> str | None:
+    return next((h for h in RATE_LIMITED_HOSTS if host.endswith(h)), None)
+
+
+# Process-wide (shared by every event loop / worker thread): host family -> (blocked_until, last pause).
+_blocks: dict[str, tuple[float, float]] = {}
+
+
+def blocked_until(host: str) -> float | None:
+    """time.time() until which requests to this host family are suspended, or None."""
+    fam = _family(host)
+    until = _blocks.get(fam, (0.0, 0.0))[0] if fam else 0.0
+    return until if until > time.time() else None
+
+
+def _register_block(host: str) -> None:
+    fam = _family(host)
+    if fam is None:
+        return
+    _, last = _blocks.get(fam, (0.0, 0.0))
+    pause = min(last * 2, BLOCK_PAUSE_MAX_S) if last else BLOCK_PAUSE_S
+    _blocks[fam] = (time.time() + pause, pause)
+    log.error("%s refused this host with a CDN block page; suspending its requests for %.0f min",
+              fam, pause / 60)
+
+
+def _clear_block_escalation(host: str) -> None:
+    fam = _family(host)
+    if fam in _blocks and _blocks[fam][0] <= time.time():
+        del _blocks[fam]
+
+
+def _is_block_page(r: httpx.Response) -> bool:
+    return r.status_code == 403 and "html" in r.headers.get("content-type", "").lower()
 
 
 class _TokenBucket:
@@ -164,6 +207,8 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
     last: FetchError | None = None
     attempt = throttles = 0
     while attempt <= RETRIES and throttles <= RETRIES_429:
+        if blocked_until(host):
+            raise FetchError(url, 403, "host suspended after a CDN block", blocked=True)
         if attempt:
             await asyncio.sleep(BACKOFF_S * 2 ** (attempt - 1))
         try:
@@ -178,7 +223,11 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
         if r.is_success:
             if gate:
                 gate.succeeded()
+            _clear_block_escalation(host)
             return r
+        if _is_block_page(r):
+            _register_block(host)
+            raise FetchError(str(r.url), 403, "CDN block page", blocked=True)
         last = FetchError(str(r.url), r.status_code)
         if r.status_code == 429:
             throttles += 1
