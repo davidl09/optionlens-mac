@@ -17,6 +17,7 @@ const api: DesktopApi = {
   saveSettings: (s) => ipcRenderer.invoke(IPC.saveSettings, s),
   bridgeStatus: () => ipcRenderer.invoke(IPC.bridgeStatus),
   refreshSymbol: (symbol) => ipcRenderer.invoke(IPC.refreshSymbol, symbol),
+  cancelRefresh: (symbol) => ipcRenderer.invoke(IPC.cancelRefresh, symbol),
   cancelJobs: (kind) => ipcRenderer.invoke(IPC.cancelJobs, kind),
   onEngineStatus: (cb) => subscribe(IPC.engineEvent, cb),
   onBridgeStatus: (cb) => subscribe(IPC.bridgeEvent, cb),

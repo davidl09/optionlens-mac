@@ -2,7 +2,8 @@
 (docs/INTEGRATION.md §6) that depend on stored data. Plain values out; the API layer serializes.
 
 - chain_universe: watchlists + symbols opened recently + the most liquid N by stored option volume
-  (N = settings.chain_universe_size). Reports that need full chains cover only these symbols.
+  (N = settings.chain_universe_size), wanted from 09:00 to 20:00 ET on trading days. Reports that need
+  full chains cover only these symbols.
 - underlying_stats: the whole universe, during the session (open .. eod_deadline).
 - eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR.
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
@@ -10,7 +11,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from ..analytics.calendar import NY, OPEN, is_trading_day, now_ny
 from ..config import get_settings
@@ -29,6 +30,7 @@ CHAIN_MAX_AGE_S = 3600
 CHAIN_EXPIRIES = 6
 CHAIN_MONEYNESS = 0.20
 STATS_MAX_AGE_S = 1800
+CHAIN_HOURS = (time(9, 0), time(20, 0))   # ET, trading days: pre-market until the closing-chain deadline
 MAX_OFFERS = 3
 REOFFER_AFTER = timedelta(hours=6)
 
@@ -47,7 +49,11 @@ def chain_universe(now: datetime | None = None) -> list[str]:
 
 
 def chain_universe_want(now: datetime | None = None) -> dict:
-    return {"symbols": chain_universe(now), "max_age_s": CHAIN_MAX_AGE_S,
+    """The chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on trading days, else no symbols
+    (outside those hours quotes do not move: refreshing would only take TWS time from other work)."""
+    now = (now or now_ny()).astimezone(NY)
+    live = is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]
+    return {"symbols": chain_universe(now) if live else [], "max_age_s": CHAIN_MAX_AGE_S,
             "expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
 
 

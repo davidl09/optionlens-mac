@@ -32,6 +32,7 @@ export interface BridgeDeps {
 }
 
 const HISTORICAL_KINDS: JobKind[] = ["option-bars", "iv-history"];
+const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
 
 export class Bridge {
   readonly scheduler: Scheduler;
@@ -90,7 +91,10 @@ export class Bridge {
     this.supervisor.restart();
   }
 
-  cancel(kind?: JobKind): void { this.scheduler.cancel(kind); }
+  cancel(kind?: JobKind): void { this.scheduler.cancel({ kind }); }
+
+  /** The page that asked for this refresh went away: drop it if it has not finished. */
+  cancelRefresh(symbol: string): void { this.scheduler.cancel({ key: onDemandKey(symbol) }); }
 
   status(): BridgeStatus {
     const c = this.supervisor.state();
@@ -120,7 +124,7 @@ export class Bridge {
     if (c.paused) return { status: "unavailable", message: c.paused };
     const last = this.lastChainPush.get(sym);
     if (last !== undefined && this.now() - last < (this.wants?.onDemandMaxAgeS ?? 120) * 1000) return { status: "fresh" };
-    const outcome = await this.scheduler.enqueue(this.chainTask("on-demand", `ondemand:${sym}`, sym, FULL_CHAIN, null));
+    const outcome = await this.scheduler.enqueue(this.chainTask("on-demand", onDemandKey(sym), sym, FULL_CHAIN, null));
     if (outcome.ok) return { status: "refreshed" };
     return outcome.cancelled ? { status: "unavailable", message: "Refresh cancelled." } : { status: "failed", message: outcome.error };
   }
@@ -227,10 +231,10 @@ export class Bridge {
 
   // ---------------- task factories ----------------
 
-  private context(signal: AbortSignal): JobContext {
+  private context(signal: AbortSignal, checkpoint: () => Promise<void>): JobContext {
     const session = this.session;
     if (!session) throw new Error("not connected to IB Gateway / TWS");
-    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, batchTimeoutMs: this.d.batchTimeoutMs };
+    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs };
   }
 
   /** Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. */
@@ -238,9 +242,9 @@ export class Bridge {
     o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number } = {}): Task {
     return {
       key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts,
-      run: async (signal) => {
+      run: async (signal, checkpoint) => {
         try {
-          await work(this.context(signal));
+          await work(this.context(signal, checkpoint));
           if (o.ledgerKey) this.d.ledger.mark(o.ledgerKey);
         } catch (e) {
           if (signal.aborted || e instanceof RetryLater) throw e;

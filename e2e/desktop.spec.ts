@@ -23,6 +23,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
     };
     const w = window as unknown as Record<string, unknown>;
     w.__refreshCalls = [] as string[];
+    w.__cancelRefreshCalls = [] as string[];
     w.__emit = (ch: string, v: unknown) => (listeners[ch] ?? []).forEach((cb) => cb(v));
     w.__startEngine = () => { (w.__emit as (c: string, v: unknown) => void)("engine", { ...engine, state: "running", connection: { baseUrl: base, token } }); };
     w.optionlens = {
@@ -31,6 +32,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       saveSettings: async (s: { bridge: { clientId: number } }) => (s.bridge.clientId >= 0 ? { ok: true } : { ok: false, error: "Client ID must be a whole number ≥ 0." }),
       bridgeStatus: async () => bridge,
       refreshSymbol: async (sym: string) => { (w.__refreshCalls as string[]).push(sym); return { status: "refreshed" }; },
+      cancelRefresh: async (sym: string) => { (w.__cancelRefreshCalls as string[]).push(sym); },
       cancelJobs: async () => undefined,
       onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"),
     };
@@ -78,6 +80,10 @@ test("opening a symbol asks the bridge for an IBKR refresh", async ({ page }) =>
   await page.goto("/s/AAPL/chain");
   await expect(page.locator(".refresh-chip")).toHaveText("IBKR ✓");
   expect(await page.evaluate(() => (window as unknown as { __refreshCalls: string[] }).__refreshCalls)).toEqual(["AAPL"]);
+  // Leaving the symbol drops its refresh if it is still waiting behind other bridge work.
+  await page.evaluate(() => (window as unknown as { __emit: (c: string, v: unknown) => void }).__emit("navigate", "/settings"));
+  await expect(page.getByText("IB Gateway (live) · port 4001")).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __cancelRefreshCalls: string[] }).__cancelRefreshCalls)).toEqual(["AAPL"]);
 });
 
 test("settings page shows engine, bridge status and saves bridge settings", async ({ page }) => {

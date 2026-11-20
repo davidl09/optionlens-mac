@@ -75,7 +75,8 @@ function useIbkrRefresh(sym: string): RefreshResult | "pending" | null {
       setState(r);
       if (r.status === "refreshed") { invalidate(`/api/symbol/${sym}`); reloadAll(); }
     }, (e: unknown) => { if (alive) setState({ status: "failed", message: e instanceof Error ? e.message : String(e) }); });
-    return () => { alive = false; };
+    // Leaving the page: a refresh still queued behind other bridge work is no longer wanted.
+    return () => { alive = false; void desktop?.cancelRefresh(sym).catch(() => undefined); };
   }, [sym]);
   return state;
 }

@@ -75,16 +75,17 @@ bridge tries again later.
 ### What the bridge does
 
 It polls the engine's `GET /api/ingest/wants` every 5 minutes and right after connecting, then works
-through the work in this priority order, one task at a time:
+through the work one task at a time:
 
-1. **On-demand refresh**: when you open a symbol page, the app fetches that symbol's chain (first 8
-   expiries, strikes within ±25%) and reloads the page.
-2. **Closing chains** for watchlists and the chain universe, after the close.
-3. **Chain universe** refresh (near-the-money chains for the most liquid symbols and your watchlists).
-4. **Underlying stats** for the whole universe (option volume, open interest, IV, HV per stock).
-5. VIX-family quotes and daily bars.
-6. **Option-bar catch-up** for sessions that have no end-of-day archive.
-7. **IV / HV history backfill**, up to 10 years.
+- **On-demand refresh** always goes first: when you open a symbol page, the app fetches that symbol's
+  chain (first 8 expiries, strikes within ±25%) and reloads the page. It does not wait for a long task
+  to finish (it runs between that task's batches), and it is dropped when you leave the page before it ran.
+- Everything else shares IBKR time, so each kind makes progress all the time (largest share first):
+  **closing chains** for watchlists and the chain universe after the close; the **chain universe**
+  refresh (near-the-money chains for the most liquid symbols and your watchlists, 09:00–20:00 ET);
+  **underlying stats** for the whole universe (option volume, open interest, IV, HV per stock);
+  VIX-family quotes and daily bars; **option-bar catch-up** for sessions without an end-of-day archive;
+  and the **IV / HV history backfill**, up to 10 years.
 
 Historical requests follow IBKR's pacing rules: at least 10 s apart, at most 55 in any 10 minutes, and
 a growing pause after a pacing violation. Backfills can be resumed: after a restart, the bridge

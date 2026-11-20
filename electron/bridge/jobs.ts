@@ -18,6 +18,8 @@ export interface JobContext {
   lines: LineBudget;
   now: () => Date;
   signal: AbortSignal;
+  /** Lets waiting on-demand work run first; called only while no market-data lines are held. */
+  checkpoint: () => Promise<void>;
   /** How long one subscription waits for its data, from the moment its request is sent (or its first tick). */
   batchTimeoutMs?: number;
 }
@@ -93,6 +95,7 @@ export async function collectQuotes(ctx: JobContext, contracts: TwsContract[], o
   let pending = contracts.map((_, i) => i);
   let notSubscribed = 0;
   while (pending.length) {
+    await ctx.checkpoint();
     throwIfAborted(ctx.signal);
     const batch = pending.slice(0, ctx.lines.size);
     const r = await streamBatch(ctx, batch.map((i) => contracts[i]), o);

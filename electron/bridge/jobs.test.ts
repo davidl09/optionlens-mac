@@ -17,7 +17,7 @@ function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
 
 function ctxFor(session: FakeSession, o: Partial<JobContext> = {}): JobContext & { ingest: ReturnType<typeof fakeIngest> } {
   return { session, ingest: fakeIngest(), pacer: new HistoricalPacer({ minSpacingMs: 0 }), lines: new LineBudget(() => 50), now: () => new Date("2026-11-20T15:00:00Z"),
-    signal: new AbortController().signal, batchTimeoutMs: 300, ...o } as JobContext & { ingest: ReturnType<typeof fakeIngest> };
+    signal: new AbortController().signal, checkpoint: async () => undefined, batchTimeoutMs: 300, ...o } as JobContext & { ingest: ReturnType<typeof fakeIngest> };
 }
 
 /** AAPL at 100 with weekly options 50..150 step 5 for two expiries; every option fully quoted. */

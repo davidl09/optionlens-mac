@@ -138,6 +138,7 @@ async function main(): Promise<void> {
     saveSettings,
     bridgeStatus: () => bridge.status(),
     refreshSymbol: (sym) => bridge.refreshSymbol(sym),
+    cancelRefresh: (sym) => bridge.cancelRefresh(sym),
     cancelJobs: (kind?: JobKind) => bridge.cancel(kind),
   });
 

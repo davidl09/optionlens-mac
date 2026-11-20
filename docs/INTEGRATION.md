@@ -118,15 +118,18 @@ classes stay real-time). Unknown values are sent as null, never 0 (delayed data 
 exposes it as `delayed: boolean` on `Quote` and `Chain` JSON so the UI can badge delayed data.
 
 `GET /api/ingest/wants` → what the server would like the bridge to fetch now (the bridge polls it every
-5 min while connected, and immediately after connecting). The bridge works through these in priority
-order: on-demand refreshes (user-triggered) → eod_chains → chain_universe → underlying_stats →
-option_bars (catch-up) → iv_history (backfill), always within IBKR pacing.
+5 min while connected, and immediately after connecting). The bridge runs one task at a time, always
+within IBKR pacing: on-demand refreshes (user-triggered) first — they even run between the market-data
+batches of a longer task — and every other kind gets a weighted share of TWS time (eod_chains 8,
+chain_universe 4, underlying_stats 3, index quotes/bars 2, option_bars 1, iv_history 1), so each kind with
+work makes progress in every cycle.
 ```
 { "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // symbols whose stored IV history is
                                                                 // missing or older than the last session
   "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, during the session
   "chain_universe": { "symbols": ["AAPL", ...], "max_age_s": 3600,       // watchlists + most liquid N (config,
-                      "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols
+                      "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols;
+                                                                // 09:00-20:00 ET on trading days, else []
   "eod_chains": { "session_date": "2026-11-20", "symbols": ["AAPL", ...], "not_before": "...", "deadline": "..." },
                                                                 // chain_universe + indices (SPX, NDX, RUT, XSP)
                                                                 // after close+20m until 20:00 ET

@@ -234,6 +234,10 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
     assert bridge_plan.chain_universe(now) == ["F", "TSLA", "NVDA", "AAPL"]
     cu = bridge_plan.chain_universe_want(now)
     assert cu["expiries"] == 6 and cu["moneyness"] == 0.20 and cu["max_age_s"] == 3600
+    assert cu["symbols"] == []                                                     # 20:30 ET: after the window
+    assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 19, 59))["symbols"] == ["F", "TSLA", "NVDA", "AAPL"]
+    assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 8, 59))["symbols"] == []
+    assert bridge_plan.chain_universe_want(ny(2026, 11, 21, 12, 0))["symbols"] == []  # Saturday
     # eod chains: chain universe + indices, minus closing chains already archived from IBKR
     chains.store_chain(snap(payload, ny(2026, 11, 20, 16, 30)), ny(2026, 11, 20, 16, 30), final=True, source="ibkr")
     e = bridge_plan.eod_chains_want(ny(2026, 11, 20, 17, 0))

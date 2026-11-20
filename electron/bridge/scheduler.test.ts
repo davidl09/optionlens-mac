@@ -9,7 +9,7 @@ describe("Scheduler", () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("runs one task at a time in priority order (§6), FIFO within a kind", async () => {
+  it("runs one task at a time: on-demand first, then a fair share per kind (ties in §6 order), FIFO within a kind", async () => {
     const s = new Scheduler();
     s.pause();
     const order: string[] = [];
@@ -29,8 +29,60 @@ describe("Scheduler", () => {
     s.resume();
     await vi.runAllTimersAsync();
     await Promise.all(all);
-    expect(order).toEqual(["od1", "eod1", "cu1", "cu2", "st1", "ob1", "iv1"]);
+    expect(order).toEqual(["od1", "eod1", "cu1", "st1", "ob1", "iv1", "cu2"]);
     expect(maxActive).toBe(1);
+  });
+
+  it("never starves lower kinds behind a long chain-universe round", async () => {
+    let now = 0;
+    const s = new Scheduler({ now: () => now });
+    s.pause();
+    const order: string[] = [];
+    const mk = (kind: JobKind, key: string, ms: number) => task(kind, key, async () => { order.push(key); now += ms; });
+    const all = Array.from({ length: 100 }, (_, i) => s.enqueue(mk("chain-universe", `cu${i}`, 30_000)));
+    all.push(s.enqueue(mk("underlying-stats", "stats", 5_000)), s.enqueue(mk("index", "vix", 1_000)), s.enqueue(mk("iv-history", "iv", 1_000)));
+    s.resume();
+    await vi.runAllTimersAsync();
+    await Promise.all(all);
+    for (const k of ["stats", "vix", "iv"]) expect(order.indexOf(k)).toBeLessThan(5);
+    // A kind that gets work later starts at the others' level: it shares, it does not monopolize.
+    const late = Array.from({ length: 5 }, (_, i) => s.enqueue(mk("option-bars", `ob${i}`, 30_000)));
+    const more = Array.from({ length: 5 }, (_, i) => s.enqueue(mk("chain-universe", `cu-b${i}`, 30_000)));
+    await vi.runAllTimersAsync();
+    await Promise.all([...late, ...more]);
+    expect(order.slice(103, 106).some((k) => k.startsWith("cu-b"))).toBe(true);
+  });
+
+  it("runs a waiting on-demand task at the running task's checkpoint", async () => {
+    const s = new Scheduler();
+    const order: string[] = [];
+    let releaseBatch!: () => void;
+    const long = s.enqueue(task("chain-universe", "long", async (_signal, checkpoint) => {
+      order.push("long:batch1");
+      await new Promise<void>((r) => { releaseBatch = r; });
+      await checkpoint();
+      order.push("long:batch2");
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    const od = s.enqueue(task("on-demand", "od", async (_signal, checkpoint) => { await checkpoint(); order.push("od"); }));
+    const other = s.enqueue(task("index", "idx", async () => { order.push("idx"); }));
+    expect(s.current()?.kind).toBe("chain-universe");
+    releaseBatch();
+    await vi.runAllTimersAsync();
+    await Promise.all([long, od, other]);
+    expect(order).toEqual(["long:batch1", "od", "long:batch2", "idx"]);
+  });
+
+  it("cancels by key, including a task waiting in the queue", async () => {
+    const s = new Scheduler();
+    s.pause();
+    const a = s.enqueue(task("on-demand", "ondemand:AAPL"));
+    const b = s.enqueue(task("on-demand", "ondemand:MSFT"));
+    s.cancel({ key: "ondemand:AAPL" });
+    s.resume();
+    await vi.runAllTimersAsync();
+    expect(await a).toMatchObject({ ok: false, cancelled: true });
+    expect(await b).toEqual({ ok: true });
   });
 
   it("de-duplicates by key and shares the outcome", async () => {
@@ -79,7 +131,7 @@ describe("Scheduler", () => {
     const queued = s.enqueue(task("iv-history", "b"));
     const other = s.enqueue(task("index", "c"));
     await vi.advanceTimersByTimeAsync(0);
-    s.cancel("iv-history");
+    s.cancel({ kind: "iv-history" });
     await vi.runAllTimersAsync();
     expect(sawAbort).toBe(true);
     expect(await running).toMatchObject({ ok: false, cancelled: true });

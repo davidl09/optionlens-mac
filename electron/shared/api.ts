@@ -27,7 +27,7 @@ export interface AppSettings {
   launchAtLogin: boolean;
 }
 
-/** Bridge work kinds in priority order (highest first), per INTEGRATION.md §6. */
+/** Bridge work kinds in §6 order: on-demand first, the rest share time by weight (bridge/scheduler.ts). */
 export const JOB_KINDS = ["on-demand", "eod-chains", "chain-universe", "underlying-stats", "index", "option-bars", "iv-history"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -68,6 +68,8 @@ export interface DesktopApi {
   saveSettings(s: AppSettings): Promise<Result>;
   bridgeStatus(): Promise<BridgeStatus>;
   refreshSymbol(symbol: string): Promise<RefreshResult>;
+  /** The page that asked for refreshSymbol(symbol) went away: drop the refresh if it has not finished. */
+  cancelRefresh(symbol: string): Promise<void>;
   cancelJobs(kind?: JobKind): Promise<void>;
   onEngineStatus(cb: (s: EngineStatus) => void): () => void;
   onBridgeStatus(cb: (s: BridgeStatus) => void): () => void;
@@ -83,6 +85,7 @@ export const IPC = {
   saveSettings: "settings:save",
   bridgeStatus: "bridge:status",
   refreshSymbol: "bridge:refresh",
+  cancelRefresh: "bridge:cancel-refresh",
   cancelJobs: "bridge:cancel",
   engineEvent: "event:engine",
   bridgeEvent: "event:bridge",

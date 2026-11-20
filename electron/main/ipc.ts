@@ -12,6 +12,7 @@ export interface IpcBackend {
   saveSettings(s: unknown): Result;
   bridgeStatus(): BridgeStatus;
   refreshSymbol(symbol: string): Promise<RefreshResult>;
+  cancelRefresh(symbol: string): void;
   cancelJobs(kind?: JobKind): void;
 }
 
@@ -37,6 +38,10 @@ export function registerIpc(b: IpcBackend): void {
   handle(IPC.refreshSymbol, (sym) => {
     if (typeof sym !== "string" || !SYMBOL_RE.test(sym)) return { status: "failed", message: "invalid symbol" } satisfies RefreshResult;
     return b.refreshSymbol(sym);
+  });
+  handle(IPC.cancelRefresh, (sym) => {
+    if (typeof sym !== "string" || !SYMBOL_RE.test(sym)) throw new Error("invalid symbol");
+    b.cancelRefresh(sym);
   });
   handle(IPC.cancelJobs, (kind) => {
     if (kind !== undefined && !(JOB_KINDS as readonly unknown[]).includes(kind)) throw new Error("invalid job kind");

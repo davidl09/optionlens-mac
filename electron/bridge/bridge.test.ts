@@ -51,12 +51,13 @@ describe("Bridge", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("on connect: heartbeats, polls wants and works through them in §6 priority order", async () => {
+  it("on connect: heartbeats, polls wants and works through all of them (chains first)", async () => {
     const h = harness(WANTS);
     h.bridge.start();
     await vi.advanceTimersByTimeAsync(5_000);
     const work = h.calls.filter((c) => c !== "heartbeat");
-    expect(work).toEqual(["chain:MSFT", "stats", "quotes", "bars:VIX", "vol:AAPL", "vol:AAPL"]);
+    expect(work[0]).toBe("chain:MSFT");
+    expect([...work].sort()).toEqual(["bars:VIX", "chain:MSFT", "quotes", "stats", "vol:AAPL", "vol:AAPL"]);
     expect(h.calls.filter((c) => c === "heartbeat").length).toBeGreaterThanOrEqual(1);
     const last = h.statuses[h.statuses.length - 1];
     expect(last).toMatchObject({ tws: "connected", endpoint: "IB Gateway (live)", accountType: "paper", current: null });
