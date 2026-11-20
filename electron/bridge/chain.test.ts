@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { assembleChain, assembleContract, isoDate, pickExpiries, selectContracts, underlyingContract } from "./chain";
-import { TICK, TickAccumulator } from "./ticks";
+import { bestPrice, TICK, TickAccumulator } from "./ticks";
 import type { TwsContract } from "./tws";
 
 const opt = (expiry: string, strike: number, right: "C" | "P"): TwsContract => ({ symbol: "AAPL", secType: "OPT", exchange: "SMART", currency: "USD", lastTradeDateOrContractMonth: expiry, strike, right, conId: strike * 10 + (right === "C" ? 1 : 2) });
@@ -41,6 +41,18 @@ describe("tick sanitizing", () => {
     const live = new TickAccumulator();
     live.apply({ kind: "price", field: TICK.BID, value: 1 });
     expect(live.snapshot().delayed).toBe(false);
+  });
+
+  it("a previous close alone is not a current price (waits for last or bid/ask; close only as the fallback)", () => {
+    const a = new TickAccumulator();
+    a.apply({ kind: "price", field: TICK.CLOSE, value: 98 });
+    expect(a.priceComplete()).toBe(false);
+    expect(bestPrice(a.snapshot())).toBe(98);
+    a.apply({ kind: "price", field: TICK.BID, value: 99.9 });
+    expect(a.priceComplete()).toBe(false);
+    a.apply({ kind: "price", field: TICK.ASK, value: 100.1 });
+    expect(a.priceComplete()).toBe(true);
+    expect(bestPrice(a.snapshot())).toBeCloseTo(100, 9);
   });
 
   it("ignores unknown fields and never throws on odd events", () => {

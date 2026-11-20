@@ -18,7 +18,12 @@ export class FakeSession implements TwsSession {
   readonly streams: { contract: TwsContract; generic: string; cancelled: boolean }[] = [];
   readonly historicalCalls: { contract: TwsContract; req: HistoricalRequest }[] = [];
   maxConcurrentStreams = 0;
+  /** Outgoing messages per second, like the real API client's queue (null = sent instantly, ticks synchronous). */
+  msgRate: number | null = null;
+  /** Live subscriptions TWS allows; beyond it a subscription is refused with error 101. */
+  lineLimit: number | null = null;
   private open = 0;
+  private queueFreeAt = 0;
   private sys: ((m: TwsSystemMessage) => void)[] = [];
   private closers: ((r: string) => void)[] = [];
 
@@ -33,16 +38,37 @@ export class FakeSession implements TwsSession {
   async contractDetails(c: TwsContract): Promise<TwsContract[]> { return this.market.details(c); }
   async optionParams(): Promise<OptionParams[]> { return this.market.optionParams; }
 
+  /** Runs `fn` when the message would reach TWS (immediately without msgRate). */
+  private send(fn: () => void): void {
+    if (this.msgRate === null) { fn(); return; }
+    this.queueFreeAt = Math.max(Date.now(), this.queueFreeAt) + 1000 / this.msgRate;
+    setTimeout(fn, this.queueFreeAt - Date.now());
+  }
+
+  sendBacklogMs(): number {
+    return this.msgRate === null ? 0 : Math.max(0, this.queueFreeAt - Date.now());
+  }
+
   stream(contract: TwsContract, generic: string, h: TickHandlers): () => void {
     const rec = { contract, generic, cancelled: false };
     this.streams.push(rec);
-    this.open += 1;
-    this.maxConcurrentStreams = Math.max(this.maxConcurrentStreams, this.open);
-    const id = contractId(contract);
-    const err = this.market.streamErrors(id);
-    if (err) h.onError(err);
-    else for (const t of this.market.ticks(id) ?? []) h.onTick(t);
-    return () => { if (!rec.cancelled) { rec.cancelled = true; this.open -= 1; } };
+    let live = false;
+    this.send(() => {
+      if (rec.cancelled) return;
+      if (this.lineLimit !== null && this.open >= this.lineLimit) { h.onError(new TwsRequestError(101, "Max number of tickers has been reached")); return; }
+      live = true;
+      this.open += 1;
+      this.maxConcurrentStreams = Math.max(this.maxConcurrentStreams, this.open);
+      const id = contractId(contract);
+      const err = this.market.streamErrors(id);
+      if (err) h.onError(err);
+      else for (const t of this.market.ticks(id) ?? []) h.onTick(t);
+    });
+    return () => {
+      if (rec.cancelled) return;
+      rec.cancelled = true;
+      this.send(() => { if (live) { live = false; this.open -= 1; } });
+    };
   }
 
   onSystemMessage(cb: (m: TwsSystemMessage) => void): void { this.sys.push(cb); }

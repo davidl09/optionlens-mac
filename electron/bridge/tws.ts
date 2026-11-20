@@ -50,6 +50,11 @@ export interface TwsSession {
   optionParams(underlying: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal): Promise<OptionParams[]>;
   /** Streams market data; returns a cancel function. Never throws for bad ticks. */
   stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers): () => void;
+  /**
+   * Estimated time (ms) until every message issued so far has actually been sent: the API client paces
+   * outgoing messages (requests and cancels alike), so a request issued now reaches TWS this much later.
+   */
+  sendBacklogMs(): number;
   onSystemMessage(cb: (m: TwsSystemMessage) => void): void;
   onClose(cb: (reason: string) => void): void;
   close(): void;
@@ -63,6 +68,7 @@ export interface TwsConnector {
 
 // ---- error classification (IBKR message codes) ----
 export const CODE = {
+  MAX_TICKERS: 101,                // market-data line limit reached: the subscription was refused
   NO_SECURITY_DEFINITION: 200,
   HMDS_ERROR: 162,                 // pacing violation, or "query returned no data", or competing session
   NO_HIST_QUERY: 366,

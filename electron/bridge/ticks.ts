@@ -114,9 +114,10 @@ export class TickAccumulator {
     return this.dead || (this.s.bid !== null && this.s.ask !== null && this.greeksFromModel);
   }
 
-  /** Underlying has a usable price. */
+  /** Underlying has a current price (last, or a two-sided quote). The previous close alone is not one: it is
+   * only the fallback once the subscription timed out (bestPrice). */
   priceComplete(): boolean {
-    return this.dead || this.s.last !== null || (this.s.bid !== null && this.s.ask !== null) || this.s.close !== null;
+    return this.dead || this.s.last !== null || (this.s.bid !== null && this.s.ask !== null);
   }
 
   /** Underlying stats: price plus the option-volume / OI / vol generic ticks. */
@@ -125,9 +126,21 @@ export class TickAccumulator {
   }
 }
 
-/** Best single price for an underlying: last, else mid, else previous close. */
-export function bestPrice(q: QuoteSnapshot): number | null {
+/** Current price: last, else mid; null when TWS sent neither. */
+export function livePrice(q: QuoteSnapshot): number | null {
   if (q.last !== null && q.last > 0) return q.last;
   if (q.bid !== null && q.ask !== null && q.bid > 0 && q.ask >= q.bid) return (q.bid + q.ask) / 2;
-  return q.close !== null && q.close > 0 ? q.close : null;
+  return null;
+}
+
+/** Best single price for an underlying: the current price, else the previous close. */
+export function bestPrice(q: QuoteSnapshot): number | null {
+  return livePrice(q) ?? (q.close !== null && q.close > 0 ? q.close : null);
+}
+
+/** Change vs. the previous close (tick 9), only against a current price (never close vs. close). */
+export function changeFromClose(q: QuoteSnapshot): { change: number; changePct: number } | null {
+  const live = livePrice(q);
+  if (live === null || q.close === null || !(q.close > 0)) return null;
+  return { change: live - q.close, changePct: live / q.close - 1 };
 }

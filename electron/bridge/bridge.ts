@@ -7,8 +7,9 @@ import { batchLines } from "../main/settings";
 import { FULL_CHAIN, type ChainShape } from "./chain";
 import { COMPETING_MESSAGE, COMPETING_PAUSE_MS, TwsSupervisor } from "./connection";
 import type { IngestApi } from "./ingest";
-import { pushChain, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { FINAL_MIN_COVERAGE, pushChain, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
+import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater, Scheduler, type Task } from "./scheduler";
@@ -36,6 +37,7 @@ export class Bridge {
   readonly scheduler: Scheduler;
   private readonly supervisor: TwsSupervisor;
   private readonly pacer: HistoricalPacer;
+  private readonly lines: LineBudget;
   private readonly now: () => number;
   private session: TwsSession | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
@@ -50,10 +52,13 @@ export class Bridge {
   private backfill = { total: 0, done: 0, failed: 0 };
   /** What the last pushes revealed about the account's market data (null = not seen yet). */
   private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
+  /** Last chain posted with less than FINAL_MIN_COVERAGE of its contracts quoted (status note). */
+  private incompleteChain: { symbol: string; coverage: number } | null = null;
 
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
     this.pacer = d.pacer ?? new HistoricalPacer({ now: this.now });
+    this.lines = new LineBudget(() => batchLines(d.settings()));
     this.scheduler = new Scheduler({ now: this.now, onChange: () => this.emit() });
     this.supervisor = new TwsSupervisor({
       connector: d.connector, settings: d.settings, log: d.log,
@@ -81,6 +86,7 @@ export class Bridge {
   /** Apply changed settings (reconnects). */
   reconfigure(): void {
     this.scheduler.cancel();
+    this.lines.reset();
     this.supervisor.restart();
   }
 
@@ -100,6 +106,9 @@ export class Bridge {
     if (this.feed.optionsDelayed) out.push("IBKR delayed (no OPRA subscription)");
     if (this.feed.stocksDelayed) out.push("IBKR delayed stock quotes (no real-time US stock subscription)");
     if (this.feed.optionTicksMissing) out.push("IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown");
+    const reduced = this.lines.reduced;
+    if (reduced !== null) out.push(`IBKR market-data line limit reached: batches reduced to ${reduced} lines (Settings → Market data lines is ${this.d.settings().marketDataLines})`);
+    if (this.incompleteChain) out.push(`Incomplete IBKR chain for ${this.incompleteChain.symbol}: ${Math.round(this.incompleteChain.coverage * 100)}% of contracts quoted`);
     return out;
   }
 
@@ -120,6 +129,7 @@ export class Bridge {
 
   private onSession(s: TwsSession | null): void {
     this.session = s;
+    this.lines.reset();
     if (!s) { this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
     this.onConnectionChange();
     void this.heartbeat();
@@ -177,7 +187,7 @@ export class Bridge {
     for (const s of plan.universe.symbols) this.enqueue(this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null));
     if (plan.stats.length && this.idle("underlying-stats")) {
       const day = w.eodChains?.sessionDate ?? nyDate(new Date(now));
-      const n = batchLines(this.d.settings());
+      const n = this.lines.size;
       for (let i = 0; i < plan.stats.length; i += n) this.enqueue(this.statsTask(plan.stats.slice(i, i + n), day));
     }
     if (plan.indexQuotes.length) {
@@ -220,7 +230,7 @@ export class Bridge {
   private context(signal: AbortSignal): JobContext {
     const session = this.session;
     if (!session) throw new Error("not connected to IB Gateway / TWS");
-    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: batchLines(this.d.settings()), now: () => new Date(this.now()), signal, batchTimeoutMs: this.d.batchTimeoutMs };
+    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, batchTimeoutMs: this.d.batchTimeoutMs };
   }
 
   /** Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. */
@@ -249,6 +259,10 @@ export class Bridge {
     return this.task(kind, key, `${symbol} ${final ? "closing chain" : "chain"}`, async (ctx) => {
       this.lastChainAttempt.set(symbol, this.now());
       const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
+      if (r.coverage < FINAL_MIN_COVERAGE) {
+        this.incompleteChain = { symbol, coverage: r.coverage };
+        this.d.log.warn(`bridge: ${symbol} chain incomplete (${Math.round(r.coverage * 100)}% of contracts quoted)`);
+      } else if (this.incompleteChain?.symbol === symbol) this.incompleteChain = null;
       this.feed.optionsDelayed = r.optionsDelayed;
       this.feed.stocksDelayed = r.underlyingDelayed;
       this.lastChainPush.set(symbol, this.now());

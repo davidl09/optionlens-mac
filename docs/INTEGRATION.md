@@ -71,7 +71,9 @@ POST /api/ingest/chain
 ```
 Server builds OSI codes, stores through the same pipeline as any other chain source (latest chain,
 quote, today's metrics row; `final` also writes the end-of-day archive for `session_date`). A chain from
-IBKR wins over a chain from any other source for the same session.
+IBKR wins over a chain from any other source for the same session. The bridge posts only contracts that got
+data, and sends `final: true` only when at least 95% of the contracts it requested were quoted; a less
+complete closing chain is posted with `final: false` (live chain only, never archived) and retried later.
 
 ```
 POST /api/ingest/iv-history

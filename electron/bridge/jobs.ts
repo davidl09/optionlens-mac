@@ -1,11 +1,12 @@
 // Bridge task bodies: talk to TWS through the TwsSession contract, assemble ingest bodies and push them.
-// Market-data work is done in batches no larger than the configured line budget; every historical
+// Market-data work is done in batches no larger than the line budget; every historical
 // request goes through the pacer (begin → request → success | violation → RetryLater).
-import { assembleChain, assembleUnderlying, isoDate, pickExpiries, selectContracts, underlyingContract, type ChainShape } from "./chain";
+import { assembleChain, assembleContract, assembleUnderlying, isoDate, pickExpiries, selectContracts, underlyingContract, type ChainShape } from "./chain";
 import type { IngestApi, IngestChain, OptionBar, UnderlyingStat } from "./ingest";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
-import { bestPrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
+import type { LineBudget } from "./line-budget";
+import { bestPrice, changeFromClose, emptySnapshot, livePrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
 import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
 import { durationFor } from "./wants";
 
@@ -14,10 +15,10 @@ export interface JobContext {
   ingest: IngestApi;
   pacer: HistoricalPacer;
   /** Market-data lines one batch may use. */
-  lines: number;
+  lines: LineBudget;
   now: () => Date;
   signal: AbortSignal;
-  /** Max time a batch of subscriptions is held open. */
+  /** How long one subscription waits for its data, from the moment its request is sent (or its first tick). */
   batchTimeoutMs?: number;
 }
 
@@ -34,42 +35,72 @@ function throwIfAborted(signal: AbortSignal): void {
 
 export interface CollectOptions { genericTicks: string; complete: (a: TickAccumulator) => boolean; minDwellMs?: number }
 
+interface BatchResult { snaps: QuoteSnapshot[]; lineLimited: boolean[]; notSubscribed: number }
+
 /**
- * Streams each contract (≤ ctx.lines at a time) until every subscription in the batch is complete or the
- * batch times out, then cancels them. Per-contract rejections mark that contract dead; a competing
- * session aborts the whole collection; if every contract was refused for lack of a subscription, throws.
+ * Streams one batch until every subscription is complete or has timed out, then cancels them all. Each
+ * contract's clock starts when its request is actually sent (the API client paces outgoing messages, and
+ * the previous batch's cancels are still ahead in that queue) or at its first tick — never at enqueue.
  */
-export async function collectQuotes(ctx: JobContext, contracts: TwsContract[], o: CollectOptions): Promise<QuoteSnapshot[]> {
-  const out: QuoteSnapshot[] = [];
+async function streamBatch(ctx: JobContext, batch: TwsContract[], o: CollectOptions): Promise<BatchResult> {
   const timeout = ctx.batchTimeoutMs ?? 4000;
   const dwell = o.minDwellMs ?? 600;
+  const accs = batch.map(() => new TickAccumulator());
+  const firstTick: (number | null)[] = batch.map(() => null);
+  const sentAt: number[] = [];
+  const lineLimited = batch.map(() => false);
   let notSubscribed = 0;
-  for (let i = 0; i < contracts.length; i += ctx.lines) {
-    throwIfAborted(ctx.signal);
-    const batch = contracts.slice(i, i + ctx.lines);
-    const accs = batch.map(() => new TickAccumulator());
-    let fatal: TwsRequestError | null = null;
-    const cancels = batch.map((c, j) => ctx.session.stream(c, o.genericTicks, {
-      onTick: (e) => accs[j].apply(e),
+  let fatal: TwsRequestError | null = null;
+  const cancels = batch.map((c, j) => {
+    const cancel = ctx.session.stream(c, o.genericTicks, {
+      onTick: (e) => { firstTick[j] ??= Date.now(); accs[j].apply(e); },
       onError: (err) => {
         accs[j].dead = true;
-        if (NOT_SUBSCRIBED_CODES.has(err.code)) notSubscribed += 1;
+        if (err.code === CODE.MAX_TICKERS) lineLimited[j] = true;
+        else if (NOT_SUBSCRIBED_CODES.has(err.code)) notSubscribed += 1;
         if (isCompetingSession(err)) fatal = err;
       },
-    }));
-    const started = Date.now();
-    try {
-      while (!ctx.signal.aborted && !fatal) {
-        const elapsed = Date.now() - started;
-        if (elapsed >= timeout || (elapsed >= dwell && accs.every(o.complete))) break;
-        await sleep(100, ctx.signal);
-      }
-    } finally {
-      for (const cancel of cancels) cancel();
+    });
+    sentAt[j] = Date.now() + ctx.session.sendBacklogMs();
+    return cancel;
+  });
+  const settled = (j: number, now: number) => {
+    const t0 = firstTick[j] ?? sentAt[j];
+    return now >= t0 + timeout || (now >= t0 + dwell && o.complete(accs[j]));
+  };
+  try {
+    while (!ctx.signal.aborted && !fatal) {
+      const now = Date.now();
+      if (accs.every((_, j) => settled(j, now))) break;
+      await sleep(100, ctx.signal);
     }
-    if (fatal) throw fatal;
+  } finally {
+    for (const cancel of cancels) cancel();
+  }
+  if (fatal) throw fatal;
+  throwIfAborted(ctx.signal);
+  return { snaps: accs.map((a) => a.snapshot()), lineLimited, notSubscribed };
+}
+
+/**
+ * Streams each contract (≤ ctx.lines.size at a time) and returns one snapshot per contract, in order.
+ * Per-contract rejections leave that snapshot empty; a competing session aborts the whole collection;
+ * contracts refused for the line limit (error 101) shrink the budget and are retried; if every contract
+ * was refused for lack of a subscription, throws.
+ */
+export async function collectQuotes(ctx: JobContext, contracts: TwsContract[], o: CollectOptions): Promise<QuoteSnapshot[]> {
+  const out: QuoteSnapshot[] = contracts.map(() => emptySnapshot());
+  let pending = contracts.map((_, i) => i);
+  let notSubscribed = 0;
+  while (pending.length) {
     throwIfAborted(ctx.signal);
-    out.push(...accs.map((a) => a.snapshot()));
+    const batch = pending.slice(0, ctx.lines.size);
+    const r = await streamBatch(ctx, batch.map((i) => contracts[i]), o);
+    batch.forEach((i, j) => { out[i] = r.snaps[j]; });
+    notSubscribed += r.notSubscribed;
+    const refused = batch.filter((_, j) => r.lineLimited[j]);
+    const retry = refused.length > 0 && ctx.lines.limitHit(batch.length - refused.length);
+    pending = [...(retry ? refused : []), ...pending.slice(batch.length)];
   }
   if (contracts.length > 0 && notSubscribed === contracts.length) {
     throw new TwsRequestError(CODE.MKT_DATA_NOT_SUBSCRIBED, "no market data subscription for these contracts");
@@ -109,20 +140,52 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
 }
 
 export interface ChainRequest { symbol: string; shape: ChainShape; final: boolean; sessionDate: string | null }
-export interface ChainPushed { contracts: number; optionsDelayed: boolean; underlyingDelayed: boolean }
+export interface ChainPushed {
+  contracts: number;
+  /** Share of the requested contracts that got data (and were posted). */
+  coverage: number;
+  optionsDelayed: boolean;
+  underlyingDelayed: boolean;
+}
 
-/** Fetches and posts one chain. */
+/** A closing chain is archived only with at least this share of its requested contracts quoted. */
+export const FINAL_MIN_COVERAGE = 0.95;
+
+const OPTION_TICKS: CollectOptions = { genericTicks: "101", complete: (a) => a.optionComplete() };
+
+/** Option quotes for `contracts`; contracts that got no usable data are asked for once more. */
+async function optionQuotes(ctx: JobContext, contracts: TwsContract[]): Promise<QuoteSnapshot[]> {
+  const quotes = await collectQuotes(ctx, contracts, OPTION_TICKS);
+  const missing = contracts.flatMap((c, i) => (assembleContract(c, quotes[i]) === null ? [i] : []));
+  if (missing.length > contracts.length * (1 - FINAL_MIN_COVERAGE)) {
+    const again = await collectQuotes(ctx, missing.map((i) => contracts[i]), OPTION_TICKS);
+    missing.forEach((i, k) => { quotes[i] = again[k]; });
+  }
+  return quotes;
+}
+
+/**
+ * Fetches and posts one chain (only the contracts that got data). A closing chain below
+ * FINAL_MIN_COVERAGE is never archived: it is posted as a live chain and the task fails, so it is retried.
+ */
 export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed> {
   const r = await resolveOptionContracts(ctx, req.symbol, req.shape);
-  const quotes = await collectQuotes(ctx, r.contracts, { genericTicks: "101", complete: (a) => a.optionComplete() });
+  const quotes = await optionQuotes(ctx, r.contracts);
   const fetchedAt = ctx.now().toISOString();
   const underlying = assembleUnderlying(r.underlying, fetchedAt);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
-  const body: IngestChain = assembleChain({ symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed }, underlying,
-    r.contracts.map((contract, i) => ({ contract, quote: quotes[i] })));
+  const rows = r.contracts.map((contract, i) => ({ contract, quote: quotes[i] }));
+  const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed };
+  let body: IngestChain = assembleChain(meta, underlying, rows);
   if (!body.contracts.length) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
+  const coverage = body.contracts.length / r.contracts.length;
+  const incompleteFinal = req.final && coverage < FINAL_MIN_COVERAGE;
+  if (incompleteFinal) body = assembleChain({ ...meta, final: false, sessionDate: null }, underlying, rows);
   await ctx.ingest.chain(body);
-  return { contracts: body.contracts.length, optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed };
+  if (incompleteFinal) {
+    throw new Error(`${req.symbol}: closing chain incomplete (${body.contracts.length} of ${r.contracts.length} contracts quoted); posted as a live chain, not archived — will retry`);
+  }
+  return { contracts: body.contracts.length, coverage, optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed };
 }
 
 // ---------------- universe stats and index quotes ----------------
@@ -132,7 +195,7 @@ export function assembleStat(symbol: string, q: QuoteSnapshot): UnderlyingStat |
   const any = price ?? q.callVolume ?? q.callOi ?? q.impliedVol;
   if (any === null) return null;
   return {
-    symbol, price, change_pct: price !== null && q.close ? price / q.close - 1 : null, volume: q.volume,
+    symbol, price, change_pct: changeFromClose(q)?.changePct ?? null, volume: q.volume,
     call_volume: q.callVolume, put_volume: q.putVolume, call_oi: q.callOi, put_oi: q.putOi, iv30: q.impliedVol, hv30: q.historicalVol,
   };
 }
@@ -153,15 +216,15 @@ export async function pushUnderlyingStats(ctx: JobContext, symbols: string[], se
   return { symbols: stats.map((s) => s.symbol), delayed, optionTicks: stats.some((s) => s.call_volume !== null || s.call_oi !== null) };
 }
 
+/** VIX-family quotes: a current value and its change vs. the previous close (a symbol with only a close is skipped). */
 export async function pushIndexQuotes(ctx: JobContext, symbols: string[]): Promise<number> {
   const quotes = await collectQuotes(ctx, symbols.map(underlyingContract), { genericTicks: "", complete: (a) => a.priceComplete() && a.snapshot().close !== null });
   const ts = ctx.now().toISOString();
   const rows = symbols.flatMap((symbol, i) => {
-    const q = quotes[i];
-    const price = bestPrice(q);
+    const price = livePrice(quotes[i]);
     if (price === null) return [];
-    const change = q.close ? price - q.close : null;
-    return [{ symbol, price, change, change_pct: change !== null && q.close ? change / q.close : null, ts }];
+    const ch = changeFromClose(quotes[i]);
+    return [{ symbol, price, change: ch?.change ?? null, change_pct: ch?.changePct ?? null, ts }];
   });
   if (rows.length) await ctx.ingest.quotes({ source: "ibkr", delayed: quotes.some((q) => q.delayed), quotes: rows });
   return rows.length;

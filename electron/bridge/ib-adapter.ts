@@ -4,6 +4,8 @@
 import { BarSizeSetting, EventName, IBApi, isNonFatalError, MarketDataType, type Contract, type ContractDetails, type SecType as IbSecType } from "@stoqey/ib";
 import { CODE, TwsRequestError, type ConnectOptions, type HistBar, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
 
+/** Outgoing messages per second: @stoqey/ib queues every request and cancel and sends at this rate. */
+const MSG_RATE = 40;
 const HIST_TIMEOUT_MS = 120_000;
 const DETAILS_TIMEOUT_MS = 60_000;
 
@@ -37,6 +39,8 @@ class IbSession implements TwsSession {
   private readonly systemListeners: ((m: TwsSystemMessage) => void)[] = [];
   private readonly closeListeners: ((reason: string) => void)[] = [];
   private closed = false;
+  /** When the client's outgoing queue (paced at MSG_RATE) is estimated to be empty. */
+  private queueFreeAt = 0;
 
   constructor(private readonly ib: IBApi, readonly accounts: string[]) {
     ib.on(EventName.error, (err: Error, code: number, reqId: number) => this.safe(() => this.onError(err, code, reqId)));
@@ -52,6 +56,16 @@ class IbSession implements TwsSession {
     ib.on(EventName.tickGeneric, (reqId: number, field: number, value: number) => tick(reqId, { kind: "generic", field, value }));
     ib.on(EventName.tickOptionComputation, (reqId: number, field: number, _attrib: number | undefined, iv?: number, delta?: number, _optPrice?: number,
       _pvDiv?: number, gamma?: number, vega?: number, theta?: number, undPrice?: number) => tick(reqId, { kind: "option", field, iv, delta, gamma, vega, theta, undPrice }));
+  }
+
+  /** Issues one outgoing message (the library queues it) and books its slot in the send-queue estimate. */
+  private send(fn: () => void): void {
+    this.queueFreeAt = Math.max(Date.now(), this.queueFreeAt) + 1000 / MSG_RATE;
+    fn();
+  }
+
+  sendBacklogMs(): number {
+    return Math.max(0, this.queueFreeAt - Date.now());
   }
 
   private safe(fn: () => void): void {
@@ -94,12 +108,12 @@ class IbSession implements TwsSession {
         this.pending.delete(reqId);
         fn();
       };
-      const onAbort = () => finish(() => { try { cancel?.(reqId); } catch { /* ignore */ } reject(signal.reason instanceof Error ? signal.reason : new Error("cancelled")); });
-      const timer = setTimeout(() => finish(() => { try { cancel?.(reqId); } catch { /* ignore */ } reject(new TwsRequestError(CODE.NO_HIST_QUERY, "request timed out")); }), timeoutMs);
+      const onAbort = () => finish(() => { try { if (cancel) this.send(() => cancel(reqId)); } catch { /* ignore */ } reject(signal.reason instanceof Error ? signal.reason : new Error("cancelled")); });
+      const timer = setTimeout(() => finish(() => { try { if (cancel) this.send(() => cancel(reqId)); } catch { /* ignore */ } reject(new TwsRequestError(CODE.NO_HIST_QUERY, "request timed out")); }), timeoutMs);
       if (signal.aborted) { onAbort(); return; }
       signal.addEventListener("abort", onAbort, { once: true });
       this.pending.set(reqId, { onError: (e) => finish(() => reject(e)) });
-      start(reqId, (v) => finish(() => resolve(v)));
+      this.send(() => start(reqId, (v) => finish(() => resolve(v))));
     });
   }
 
@@ -160,10 +174,10 @@ class IbSession implements TwsSession {
     if (this.closed) { handlers.onError(new TwsRequestError(CODE.NOT_CONNECTED, "not connected")); return () => undefined; }
     const reqId = this.nextId++;
     this.ticks.set(reqId, handlers);
-    this.ib.reqMktData(reqId, toIb(contract), genericTicks, false, false);
+    this.send(() => this.ib.reqMktData(reqId, toIb(contract), genericTicks, false, false));
     return () => {
       if (!this.ticks.delete(reqId) || this.closed) return;
-      try { this.ib.cancelMktData(reqId); } catch { /* ignore */ }
+      try { this.send(() => this.ib.cancelMktData(reqId)); } catch { /* ignore */ }
     };
   }
 
@@ -179,7 +193,7 @@ class IbSession implements TwsSession {
 
 export const ibConnector: TwsConnector = {
   connect(o: ConnectOptions): Promise<TwsSession> {
-    const ib = new IBApi({ host: o.host, port: o.port, maxReqPerSec: 40 });
+    const ib = new IBApi({ host: o.host, port: o.port, maxReqPerSec: MSG_RATE });
     return new Promise<TwsSession>((resolve, reject) => {
       let accounts: string[] = [];
       let settled = false;

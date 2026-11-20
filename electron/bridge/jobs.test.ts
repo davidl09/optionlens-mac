@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { emptyMarket, FakeSession, contractId, type FakeMarket } from "./fake-tws.test-helper";
 import type { IngestApi } from "./ingest";
-import { collectQuotes, pacedHistorical, pushChain, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { collectQuotes, pacedHistorical, pushChain, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import { TICK } from "./ticks";
@@ -15,7 +16,7 @@ function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
 }
 
 function ctxFor(session: FakeSession, o: Partial<JobContext> = {}): JobContext & { ingest: ReturnType<typeof fakeIngest> } {
-  return { session, ingest: fakeIngest(), pacer: new HistoricalPacer({ minSpacingMs: 0 }), lines: 50, now: () => new Date("2026-11-20T15:00:00Z"),
+  return { session, ingest: fakeIngest(), pacer: new HistoricalPacer({ minSpacingMs: 0 }), lines: new LineBudget(() => 50), now: () => new Date("2026-11-20T15:00:00Z"),
     signal: new AbortController().signal, batchTimeoutMs: 300, ...o } as JobContext & { ingest: ReturnType<typeof fakeIngest> };
 }
 
@@ -43,10 +44,31 @@ describe("collectQuotes", () => {
   it("never holds more subscriptions than the line budget and cancels every stream", async () => {
     const s = new FakeSession(aaplMarket());
     const contracts = Array.from({ length: 23 }, (_, i): TwsContract => ({ symbol: "AAPL", secType: "OPT", exchange: "SMART", currency: "USD", lastTradeDateOrContractMonth: "20261127", strike: 80 + i, right: "C" }));
-    const q = await collectQuotes(ctxFor(s, { lines: 10 }), contracts, { genericTicks: "101", complete: (a) => a.optionComplete(), minDwellMs: 0 });
+    const q = await collectQuotes(ctxFor(s, { lines: new LineBudget(() => 10) }), contracts, { genericTicks: "101", complete: (a) => a.optionComplete(), minDwellMs: 0 });
     expect(q).toHaveLength(23);
     expect(s.maxConcurrentStreams).toBeLessThanOrEqual(10);
     expect(s.streams.every((x) => x.cancelled)).toBe(true);
+  });
+
+  it("times each contract from when its request is actually sent, so paced later batches lose nothing", async () => {
+    // The API client sends ≤ msgRate messages/s (requests and cancels): a 20-contract batch takes 100 ms to
+    // send at 200/s, longer than the 60 ms per-contract timeout, and each batch's cancels delay the next one.
+    const s = new FakeSession(aaplMarket());
+    s.msgRate = 200;
+    const contracts = Array.from({ length: 60 }, (_, i): TwsContract => ({ symbol: "AAPL", secType: "OPT", exchange: "SMART", currency: "USD", lastTradeDateOrContractMonth: "20261127", strike: 50 + i, right: "P" }));
+    const q = await collectQuotes(ctxFor(s, { lines: new LineBudget(() => 20), batchTimeoutMs: 60 }), contracts, { genericTicks: "101", complete: (a) => a.optionComplete(), minDwellMs: 0 });
+    expect(q.filter((x) => x.bid !== null)).toHaveLength(60);
+    expect(s.maxConcurrentStreams).toBeLessThanOrEqual(20);
+  });
+
+  it("shrinks the batch on the line limit (error 101) and retries the refused contracts", async () => {
+    const s = new FakeSession(aaplMarket());
+    s.lineLimit = 15;
+    const lines = new LineBudget(() => 20);
+    const contracts = Array.from({ length: 40 }, (_, i): TwsContract => ({ symbol: "AAPL", secType: "OPT", exchange: "SMART", currency: "USD", lastTradeDateOrContractMonth: "20261127", strike: 60 + i, right: "C" }));
+    const q = await collectQuotes(ctxFor(s, { lines }), contracts, { genericTicks: "101", complete: (a) => a.optionComplete(), minDwellMs: 0 });
+    expect(q.filter((x) => x.ask !== null)).toHaveLength(40);
+    expect(lines.reduced).toBe(13);
   });
 
   it("aborts on a competing session", async () => {
@@ -82,6 +104,28 @@ describe("pushChain", () => {
     expect(body.contracts).toHaveLength(11 * 2 * 2);
   });
 
+  it("never archives a closing chain with < 95% of its contracts quoted: posts it live and fails (retry)", async () => {
+    const m = aaplMarket();
+    const base = m.ticks;
+    m.ticks = (id) => (id.endsWith(":C") && Number(id.split(":")[2]) >= 110 ? [] : base(id));   // the 110 call (1 of 10) is silent
+    const ctx = ctxFor(new FakeSession(m));
+    await expect(pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: true, sessionDate: "2026-11-20" }))
+      .rejects.toThrow(/incomplete \(9 of 10 contracts quoted\)/);
+    const body = ctx.ingest.calls.chain[0] as { final: boolean; session_date?: string; contracts: unknown[] };
+    expect(body.final).toBe(false);
+    expect(body.session_date).toBeUndefined();
+    expect(body.contracts).toHaveLength(9);
+  });
+
+  it("a live chain posts the contracts that have data and reports its coverage", async () => {
+    const m = aaplMarket();
+    const base = m.ticks;
+    m.ticks = (id) => (id.endsWith(":C") && Number(id.split(":")[2]) >= 110 ? [] : base(id));
+    const r = await pushChain(ctxFor(new FakeSession(m)), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
+    expect(r.contracts).toBe(9);
+    expect(r.coverage).toBeCloseTo(0.9, 6);
+  });
+
   it("fails clearly when TWS sends no underlying price", async () => {
     const m = aaplMarket();
     const base = m.ticks;
@@ -108,6 +152,19 @@ describe("underlying stats", () => {
       symbol: "AAPL", price: 99, change_pct: expect.closeTo(-0.01, 10), volume: 4.1e7, call_volume: 338000, put_volume: 251000,
       call_oi: 2960000, put_oi: 2730000, iv30: 0.251, hv30: 0.27,
     }] });
+  });
+});
+
+describe("index quotes", () => {
+  it("posts value and change vs. the previous close; a symbol with only a close is skipped", async () => {
+    const m = emptyMarket();
+    m.ticks = (id) => id === "VIX:IND" ? [{ kind: "price", field: TICK.LAST, value: 27.8 }, { kind: "price", field: TICK.CLOSE, value: 24.54 }]
+      : id === "VIX9D:IND" ? [{ kind: "price", field: TICK.CLOSE, value: 22 }] : undefined;
+    const ctx = ctxFor(new FakeSession(m), { batchTimeoutMs: 100 });
+    expect(await pushIndexQuotes(ctx, ["VIX", "VIX9D"])).toBe(1);
+    const body = ctx.ingest.calls.quotes[0] as { quotes: { symbol: string; price: number; change: number; change_pct: number }[] };
+    expect(body.quotes).toHaveLength(1);
+    expect(body.quotes[0]).toMatchObject({ symbol: "VIX", price: 27.8, change: expect.closeTo(3.26, 6), change_pct: expect.closeTo(3.26 / 24.54, 6) });
   });
 });
 

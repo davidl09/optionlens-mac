@@ -67,7 +67,10 @@ Some generic ticks (option volume and open interest per underlying) are not sent
 The bridge then sends those values as unknown (never zero) and the status says so.
 
 **Market data lines**: IBKR limits how many instruments you can stream at once (100 by default).
-Set your limit in **Settings → Bridge connection**. The bridge uses about 90% of it in each batch.
+Set your limit in **Settings → Bridge connection**. The bridge uses about 90% of it in each batch. If TWS
+says the limit is reached (error 101), the bridge uses smaller batches until it reconnects, and the status
+says so. A closing chain is archived only when at least 95% of its contracts were quoted; otherwise the
+bridge tries again later.
 
 ### What the bridge does
 
