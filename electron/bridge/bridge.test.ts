@@ -23,17 +23,17 @@ function market() {
   return m;
 }
 
-function harness(wants: unknown, sessionMarket = market()) {
+function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer } = {}) {
   const calls: string[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
-  const ingest: IngestApi = { wants: async () => wants, chain: rec("chain"), volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: rec("chain"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
     underlyingStats: async () => { calls.push("stats"); return {}; }, optionBars: rec("obars"), heartbeat: async () => { calls.push("heartbeat"); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
   const bridge = new Bridge({
     connector: new FakeConnector(new Map([[4001, session]])), ingest, ledger: new Ledger(null, () => NOW), settings: () => DEFAULT_BRIDGE,
     clientName: "optionlens-mac test", log: silentLogger, onStatus: (s) => statuses.push(s), now: () => Date.now(),
-    pacer: new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: 50,
+    pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: 50,
   });
   return { bridge, calls, session, statuses };
 }
@@ -93,6 +93,26 @@ describe("Bridge", () => {
     expect(h.session.historicalCalls.filter((x) => x.contract.secType === "OPT")).toHaveLength(1);   // 4 contracts planned
     expect(h.calls.filter((c) => c === "vol:KO")).toHaveLength(2);                                   // other symbols go on
     expect(h.bridge.status().notes.join(" ")).toMatch(/No IBKR market-data permission \(skipped\): AAPL option bars/);
+    h.bridge.stop();
+  });
+
+  it("option-bar catch-up resumes after a reconnect without repeating done contracts; acks each plan once", async () => {
+    let polls = 0;
+    // Like the engine: an accepted plan is not offered again for hours.
+    const wants = () => (polls++ === 0 ? { option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 1, moneyness: 0.2 }] } : {});
+    const h = harness(wants, market(), { pacer: new HistoricalPacer({ minSpacingMs: 1000 }) });
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const opt = () => h.session.historicalCalls.filter((x) => x.contract.secType === "OPT").map((x) => x.contract.conId);
+    const before = opt();
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.length).toBeLessThan(4);
+    h.session.emitClose("nightly reset");
+    await vi.advanceTimersByTimeAsync(20_000);
+    const all = opt();
+    expect(all).toHaveLength(4);                        // 2 strikes × C/P, each requested once
+    expect(new Set(all).size).toBe(4);
+    expect(h.calls.filter((c) => c.startsWith("ack:"))).toEqual([`ack:${JSON.stringify({ kind: "option_bars", items: [{ symbol: "AAPL", sessions: ["2026-11-18"] }] })}`]);
     h.bridge.stop();
   });
 

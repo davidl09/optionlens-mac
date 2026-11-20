@@ -195,10 +195,11 @@ def write_eod_chain(day: date, snap: ChainSnapshot, source: str | None) -> int:
 
 
 def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> int:
-    """Store reconstructed EOD rows (dicts with osi, expiry, strike, right, last, volume, iv, delta,
-    gamma, theta, vega, underlying; bid/ask/oi NULL) as the (day, symbol) archive with source
+    """Add reconstructed EOD rows (dicts with osi, expiry, strike, right, last, volume, iv, delta,
+    gamma, theta, vega, underlying; bid/ask/oi NULL) to the (day, symbol) archive with source
     'reconstructed' — only when that archive is missing or itself reconstructed (real rows are never
-    overwritten). Returns rows written (0 when a real archive exists)."""
+    overwritten). Rows with the same osi are replaced, the archive's other contracts are kept. Returns
+    rows written (0 when a real archive exists)."""
     rows = list({r["osi"]: r for r in rows}.values())
     n = len(rows)
     data = {f: [r.get(f) for r in rows] for f in _EOD_FIELDS}
@@ -207,7 +208,8 @@ def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> 
     with db.write() as cur:
         if not n or not _archivable(cur, day, {symbol: RECONSTRUCTED}):
             return 0
-        _clear_eod(cur, day, [symbol])
+        cur.execute("DELETE FROM option_eod WHERE date = ? AND symbol = ? AND osi IN (SELECT unnest(?::VARCHAR[]))",
+                    [day, symbol, data["osi"]])
         return insert_arrow(cur, "option_eod", data)
 
 

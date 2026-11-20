@@ -107,8 +107,17 @@ POST /api/ingest/option-bars               // historical daily bars of individua
   "bars": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C", "date": "2026-11-19",
               "open": .., "high": .., "low": .., "close": 9.2, "volume": 812 } ] }
 → 200 {"stored": n}   // stored as end-of-day rows with source "reconstructed" (bid/ask/oi null, IV and delta
-                      // computed server-side from close + underlying close); never overwrite real rows
+                      // computed server-side from close + underlying close); never overwrite real rows.
+                      // Pushes add to the session's reconstructed archive (same contract = replaced):
+                      // the bridge pushes contract by contract
+POST /api/ingest/ack-wants                 // the bridge accepted (queued) these wants
+{ "kind": "option_bars", "items": [ { "symbol": "AAPL", "sessions": ["2026-11-18"] } ] }
+→ 200 {"recorded": n_session_symbol_pairs}
 ```
+Only accepted `option_bars` offers count: GET wants records nothing. A (session, symbol) is offered while it has
+no archive or only a reconstructed (possibly partial) one, until it was accepted 3 times, and again only 6 h
+after an accepted offer. The bridge keeps an accepted plan until every contract of it is done (per-contract
+attempt ledger), so a reconnect or restart resumes it without repeating finished contracts.
 
 **`delayed` flag.** `/api/ingest/chain`, `/api/ingest/quotes` and `/api/ingest/underlying-stats` bodies carry a
 top-level boolean `delayed` (always present): true when at least one value in the push came from IBKR delayed
@@ -134,7 +143,8 @@ work makes progress in every cycle.
                                                                 // chain_universe + indices (SPX, NDX, RUT, XSP)
                                                                 // after close+20m until 20:00 ET
   "option_bars": [ {"symbol": "AAPL", "sessions": ["2026-11-18"], "expiries": 6, "moneyness": 0.15} ],
-                                                                // sessions missing an end-of-day archive
+                                                                // sessions without a real end-of-day archive
+                                                                // (see ack-wants)
   "index_symbols": ["VIX", "VIX9D", "VIX3M", "VIX6M"],
   "chains_on_demand_max_age_s": 120 }
 ```

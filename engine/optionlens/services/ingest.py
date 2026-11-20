@@ -148,6 +148,14 @@ def option_bars(body: dict, now: datetime | None = None) -> dict:
     return {"stored": n}
 
 
+def ack_wants(body: dict, now: datetime | None = None) -> dict:
+    """POST /api/ingest/ack-wants: the bridge accepted (queued) these wants of `kind`; only accepted
+    option_bars offers count towards bridge_plan.MAX_OFFERS."""
+    n = bridge_plan.record_offers([{"symbol": normalize_symbol(i["symbol"]), "sessions": i["sessions"]}
+                                   for i in body["items"]], now)
+    return {"recorded": n}
+
+
 def heartbeat(body: dict, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     bridge_repo.record_heartbeat(body["client"], body["ibkr_connected"], body.get("account_type"), now)

@@ -12,7 +12,7 @@ import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
 import { HistoricalPacer } from "./pacer";
-import { RetryLater, Scheduler, type Task } from "./scheduler";
+import { RetryLater, Scheduler, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
 import { HIST_RETRY_MS, ledgerKey, parseWants, planWants, type Wants } from "./wants";
 
@@ -61,6 +61,10 @@ export class Bridge {
   private backfill = { total: 0, done: 0, failed: 0 };
   /** What the last pushes revealed about the account's market data (null = not seen yet). */
   private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
+  /** Accepted option-bar catch-up plans not finished yet, by plan ledger key. */
+  private readonly obarsPlans = new Map<string, { symbol: string; sessions: string[]; shape: ChainShape }>();
+  /** Option-bar plans (ledger keys) whose contract tasks are still queued or running. */
+  private readonly obarsInFlight = new Set<string>();
   /** Task groups (symbol + kind) TWS refused for lack of a market-data permission: when, and what. */
   private readonly denied = new Map<string, { at: number; label: string }>();
   /** Last chain posted with less than FINAL_MIN_COVERAGE of its contracts quoted (status note). */
@@ -101,7 +105,11 @@ export class Bridge {
     this.supervisor.restart();
   }
 
-  cancel(kind?: JobKind): void { this.scheduler.cancel({ kind }); }
+  /** User cancel: also forgets accepted option-bar plans, so they are not resumed. */
+  cancel(kind?: JobKind): void {
+    if (kind === undefined || kind === "option-bars") this.obarsPlans.clear();
+    this.scheduler.cancel({ kind });
+  }
 
   /** The page that asked for this refresh went away: drop it if it has not finished. */
   cancelRefresh(symbol: string): void { this.scheduler.cancel({ key: onDemandKey(symbol) }); }
@@ -214,7 +222,16 @@ export class Bridge {
         { gate: this.pacer, ledgerKey: ledgerKey.indexBars(s), group: group.indexBars(s) }));
     }
     if (this.idle("option-bars") && this.idle("iv-history")) this.backfill = { total: 0, done: 0, failed: 0 };
-    for (const o of plan.optionBars) this.enqueue(this.optionBarsPlanTask(o.symbol, o.sessions, o.shape));
+    // Accepted catch-up plans are kept until all their contracts are done, so a reconnect resumes them
+    // (the engine does not offer an accepted plan again for hours).
+    const accepted = plan.optionBars.filter((o) => !this.obarsPlans.has(ledgerKey.optionBars(o.symbol, o.sessions)) && !this.isDenied(group.optionBars(o.symbol).id));
+    for (const o of accepted) this.obarsPlans.set(ledgerKey.optionBars(o.symbol, o.sessions), o);
+    for (const [k, o] of this.obarsPlans) if (!this.obarsInFlight.has(k)) void this.enqueue(this.optionBarsPlanTask(o.symbol, o.sessions, o.shape));
+    // Only accepted offers count on the engine's side (a want the bridge skipped is offered again).
+    if (accepted.length) {
+      void this.d.ingest.ackWants({ kind: "option_bars", items: accepted.map((o) => ({ symbol: o.symbol, sessions: o.sessions })) })
+        .catch((e: unknown) => this.d.log.warn(`bridge ack-wants: ${(e as Error).message}`));
+    }
     for (const v of plan.volHistory) {
       this.enqueue(this.task("iv-history", `vol:${v.kind}:${v.symbol}`, `${v.symbol} ${v.kind === "iv30" ? "IV" : "HV"} history`,
         async (ctx) => { if (await pushVolHistory(ctx, v.symbol, v.from, v.kind)) this.pushed(); },
@@ -226,15 +243,19 @@ export class Bridge {
     return this.scheduler.counts()[kind] === 0 && this.scheduler.current()?.kind !== kind;
   }
 
-  private enqueue(t: Task): void {
-    if (this.scheduler.has(t.key) || this.isDenied(t.group)) return;
+  /** Queues a task (or joins the queued one with its key); a task of a denied group fails at once. */
+  private enqueue(t: Task): Promise<Outcome> {
+    if (this.isDenied(t.group)) return Promise.resolve({ ok: false, cancelled: false, error: "no market-data permission" });
+    if (this.scheduler.has(t.key)) return this.scheduler.enqueue(t);
     const historical = HISTORICAL_KINDS.includes(t.kind) && t.gate !== undefined;
     if (historical) this.backfill.total += 1;
-    void this.scheduler.enqueue(t).then((o) => {
+    const outcome = this.scheduler.enqueue(t);
+    void outcome.then((o) => {
       if (!historical || (!o.ok && o.cancelled)) return;
       if (o.ok) this.backfill.done += 1; else this.backfill.failed += 1;
       this.emit();
     });
+    return outcome;
   }
 
   private isDenied(group: string | undefined): boolean {
@@ -314,16 +335,39 @@ export class Bridge {
     });
   }
 
+  /**
+   * Resolves the symbol's contracts and queues one bars task per contract not done yet (per-contract
+   * ledger), so a catch-up interrupted by a disconnect, cancel or restart resumes where it stopped. The
+   * plan's own ledger key is marked only once every contract task has finished (not when cancelled).
+   */
   private optionBarsPlanTask(symbol: string, sessions: string[], shape: ChainShape): Task {
+    const planKey = ledgerKey.optionBars(symbol, sessions);
     return this.task("option-bars", `obars-plan:${symbol}`, `${symbol} option bars (contracts)`, async (ctx) => {
-      const r = await resolveOptionContracts(ctx, symbol, shape);
-      for (const c of r.contracts) this.enqueue(this.optionBarsTask(symbol, c, sessions));
-    }, { ledgerKey: ledgerKey.optionBars(symbol, sessions), group: group.optionBars(symbol) });
+      this.obarsInFlight.add(planKey);
+      try {
+        const r = await resolveOptionContracts(ctx, symbol, shape);
+        const todo = r.contracts.filter((c) => !this.d.ledger.attemptedWithin(ledgerKey.optionBar(c, sessions), HIST_RETRY_MS));
+        void Promise.all(todo.map((c) => this.enqueue(this.optionBarsTask(symbol, c, sessions)))).then((outcomes) => {
+          this.obarsInFlight.delete(planKey);
+          if (outcomes.every((o) => o.ok || !o.cancelled)) this.planDone(planKey);
+        });
+      } catch (e) {
+        this.obarsInFlight.delete(planKey);
+        if (!ctx.signal.aborted && !(e instanceof RetryLater)) this.planDone(planKey);
+        throw e;
+      }
+    }, { group: group.optionBars(symbol) });
+  }
+
+  private planDone(planKey: string): void {
+    this.d.ledger.mark(planKey);
+    this.obarsPlans.delete(planKey);
   }
 
   private optionBarsTask(symbol: string, c: TwsContract, sessions: string[]): Task {
     const label = `${symbol} ${c.lastTradeDateOrContractMonth} ${c.strike}${c.right} bars`;
     return this.task("option-bars", `obars:${symbol}:${c.conId ?? `${c.lastTradeDateOrContractMonth}${c.right}${c.strike}`}`, label,
-      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(); }, { gate: this.pacer, maxAttempts: 6, group: group.optionBars(symbol) });
+      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(); },
+      { gate: this.pacer, maxAttempts: 6, group: group.optionBars(symbol), ledgerKey: ledgerKey.optionBar(c, sessions) });
   }
 }

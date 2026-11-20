@@ -12,7 +12,7 @@ function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
   return { calls, wants: async () => ({}), chain: rec("chain"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
-    underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), heartbeat: rec("heartbeat") };
+    underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat") };
 }
 
 function ctxFor(session: FakeSession, o: Partial<JobContext> = {}): JobContext & { ingest: ReturnType<typeof fakeIngest> } {

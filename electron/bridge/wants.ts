@@ -3,6 +3,7 @@
 // attempt ledger so a symbol IBKR has no data for is not re-requested on every poll).
 import type { ChainShape } from "./chain";
 import { nyDate } from "./ny";
+import type { TwsContract } from "./tws";
 
 export interface Wants {
   ivHistory: { symbol: string; from: string }[];
@@ -116,6 +117,8 @@ export const ledgerKey = {
   vol: (kind: "iv30" | "hv30", s: string) => `${kind}:${s}`,
   indexBars: (s: string) => `bars:${s}`,
   optionBars: (s: string, sessions: string[]) => `obars:${s}:${[...sessions].sort().join(",")}`,
+  /** One contract of an option-bars plan. */
+  optionBar: (c: TwsContract, sessions: string[]) => `obar:${c.conId ?? `${c.symbol}${c.lastTradeDateOrContractMonth}${c.right}${c.strike}`}:${[...sessions].sort().join(",")}`,
 };
 
 const stale = (last: number | undefined, now: number, maxAgeS: number) => last === undefined || now - last >= maxAgeS * 1000;

@@ -27,6 +27,8 @@ export interface UnderlyingStats { source: "ibkr"; session_date: string; ts: str
 export interface IngestQuotes { source: "ibkr"; delayed: boolean; quotes: IngestQuote[] }
 export interface OptionBar { expiry: string; strike: number; right: "C" | "P"; date: string; open: N; high: N; low: N; close: number; volume: N }
 export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] }
+/** The bridge accepted (queued) these wants; the engine counts only accepted option_bars offers. */
+export interface AckWants { kind: "option_bars"; items: { symbol: string; sessions: string[] }[] }
 export interface Heartbeat { client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null }
 
 export interface IngestApi {
@@ -37,6 +39,7 @@ export interface IngestApi {
   quotes(b: IngestQuotes): Promise<unknown>;
   underlyingStats(b: UnderlyingStats): Promise<unknown>;
   optionBars(b: OptionBars): Promise<unknown>;
+  ackWants(b: AckWants): Promise<unknown>;
   heartbeat(b: Heartbeat): Promise<unknown>;
 }
 
@@ -49,6 +52,7 @@ export function ingestApi(http: JsonHttp): IngestApi {
     quotes: (b) => http.post("/api/ingest/quotes", b),
     underlyingStats: (b) => http.post("/api/ingest/underlying-stats", b),
     optionBars: (b) => http.post("/api/ingest/option-bars", b),
+    ackWants: (b) => http.post("/api/ingest/ack-wants", b),
     heartbeat: (b) => http.post("/api/ingest/heartbeat", b),
   };
 }

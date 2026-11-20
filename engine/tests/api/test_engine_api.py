@@ -211,6 +211,17 @@ def test_ingest_wants(client):
     assert {"session_date", "symbols", "not_before", "deadline"} <= set(e) and "SPX" in e["symbols"]
 
 
+def test_ingest_ack_wants_counts_accepted_option_bar_offers(client):
+    body = {"kind": "option_bars", "items": [{"symbol": "aapl", "sessions": ["2026-11-17", "2026-11-18"]}]}
+    r = client.post("/api/ingest/ack-wants", json=body)
+    assert r.status_code == 200 and r.json() == {"recorded": 2}
+    from optionlens.repo import options
+    offers = options.catchup_offers([date(2026, 11, 17), date(2026, 11, 18)])
+    assert {k: v[1] for k, v in offers.items()} == {(date(2026, 11, 17), "AAPL"): 1, (date(2026, 11, 18), "AAPL"): 1}
+    assert client.post("/api/ingest/ack-wants", json={**body, "kind": "chains"}).status_code == 422
+    assert client.post("/api/ingest/ack-wants", json={"kind": "option_bars", "items": [{"symbol": "AAPL", "sessions": []}]}).status_code == 422
+
+
 def test_ingest_underlying_stats_fill_metrics_and_iv_history(client):
     body = {"source": "ibkr", "delayed": True, "session_date": "2026-11-17", "ts": "2026-11-17T20:30:00+00:00",
             "stats": [{"symbol": "zzzz", "price": 10.0, "call_volume": 100, "put_volume": 50, "iv30": 0.4},

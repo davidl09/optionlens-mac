@@ -7,7 +7,8 @@
 - underlying_stats: the whole universe, during the session (open .. eod_deadline).
 - eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR.
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
-  each (session, symbol) is offered at most MAX_OFFERS times, REOFFER_AFTER apart.
+  each (session, symbol) is offered until the bridge has accepted it MAX_OFFERS times (POST
+  /api/ingest/ack-wants, record_offers), and again only REOFFER_AFTER after an accepted offer.
 """
 from __future__ import annotations
 
@@ -76,11 +77,12 @@ def eod_chains_want(now: datetime | None = None) -> dict:
             "not_before": final_since(day), "deadline": eod_deadline(day)}
 
 
-def option_bars_want(now: datetime | None = None, record: bool = True) -> list[dict]:
+def option_bars_want(now: datetime | None = None) -> list[dict]:
     """[{symbol, sessions, expiries, moneyness}] for chain-universe symbols whose recent sessions
     (catchup.catchup_sessions) have no archive and whose underlying close for them is stored (needed
-    for IV). `record`: count this offer (a (session, symbol) is re-offered only REOFFER_AFTER later,
-    at most MAX_OFFERS times — a session the bridge has no bars for is not asked for forever)."""
+    for IV). A (session, symbol) the bridge accepted (record_offers) is re-offered only REOFFER_AFTER
+    later, and not after MAX_OFFERS accepted offers (a session the bridge has no bars for is not asked
+    for forever). Reading the want records nothing."""
     now = now or now_ny()
     syms = [s for s in chain_universe(now) if s not in EOD_INDICES]
     sessions = catchup.catchup_sessions(now)
@@ -94,13 +96,18 @@ def option_bars_want(now: datetime | None = None, record: bool = True) -> list[d
         prev = offers.get((d, s))
         return prev is None or (prev[1] < MAX_OFFERS and now - prev[0] >= REOFFER_AFTER)
 
-    out, offered = [], []
+    out = []
     for s, days in missing.items():
         days = [d for d in days if s in last_bar and d <= last_bar[s] and due(d, s)]
         if days:
             out.append({"symbol": s, "sessions": days, "expiries": catchup.EXPIRIES,
                         "moneyness": catchup.MONEYNESS})
-            offered += [(d, s) for d in days]
-    if record:
-        options_repo.record_catchup_offers(offered, now)
     return out
+
+
+def record_offers(items: list[dict], now: datetime | None = None) -> int:
+    """The bridge accepted these option_bars wants ([{symbol, sessions}]): count one offer of each
+    (session, symbol). Returns how many were counted."""
+    pairs = list(dict.fromkeys((d, s["symbol"]) for s in items for d in s["sessions"]))
+    options_repo.record_catchup_offers(pairs, now or now_ny())
+    return len(pairs)

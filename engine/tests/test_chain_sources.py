@@ -205,11 +205,17 @@ def test_store_reconstructed_bars_never_overwrites_real_rows(tmpdb, payload):
     rows = options_repo.eod_for_date(wed, ["AAPL"])
     assert math.isnan(rows["bid"][0]) and math.isnan(rows["oi"][0]) and rows["underlying"][0] == 350.0
     assert 0.1 < rows["iv"][0] < 1.0
-    # a repeated push replaces the reconstruction; OI comparisons skip it
+    # a repeated push replaces that contract and keeps the others (the bridge pushes contract by contract);
+    # OI comparisons skip reconstructions
     assert catchup.store_reconstructed_bars("AAPL", [_bar(wed, 350.0, "C", 12.5)], "ibkr") == 1
+    assert catchup.store_reconstructed_bars("AAPL", [_bar(wed, 345.0, "C", 14.0)], "ibkr") == 1
     assert options_repo.prior_eod_date(FRI, "AAPL") == thu
     assert options_repo.prior_eod_date(thu, "AAPL") is None and options_repo.prior_oi(thu, "AAPL") == {}
-    assert len(options_repo.eod_for_date(wed, ["AAPL"])["osi"]) == 1
+    rows = options_repo.eod_for_date(wed, ["AAPL"])
+    assert dict(zip(rows["osi"].tolist(), rows["last"].tolist())) == {
+        "AAPL261218C00345000": 14.0, "AAPL261218C00350000": 12.5, "AAPL261218P00340000": 6.0}
+    # a partial (reconstructed) archive is still offered for catch-up; a real one is not
+    assert catchup.missing_eod(["AAPL"], [wed, thu]) == {"AAPL": [wed]}
 
 
 # ----------------------------------------------------------------------------- bridge plan
@@ -251,14 +257,19 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
         bars_repo.upsert_bars([Bar(s, d, None, None, None, 10.0, 1) for d in (date(2026, 11, 18), date(2026, 11, 19), FRI)])
     monkeypatch.setattr(catchup, "LOOKBACK_SESSIONS", 3)
     monkeypatch.setattr(catchup.catchup_sessions, "__defaults__", (None, 3))
-    want = {w["symbol"]: w for w in bridge_plan.option_bars_want(now)}
+    wants = bridge_plan.option_bars_want(now)
+    want = {w["symbol"]: w for w in wants}
     assert set(want) == {"F", "TSLA", "NVDA", "AAPL"}
     assert want["F"]["sessions"] == [date(2026, 11, 18), date(2026, 11, 19), FRI] and want["F"]["moneyness"] == 0.15
     assert want["AAPL"]["sessions"] == [date(2026, 11, 18), date(2026, 11, 19)]     # Friday archived
-    assert bridge_plan.option_bars_want(now + timedelta(minutes=5)) == []           # just offered
+    # Reading the want counts nothing: an offer counts only once the bridge accepted it (ack-wants).
+    assert bridge_plan.option_bars_want(now + timedelta(minutes=5)) == wants
+    assert bridge_plan.record_offers(wants, now) == 11
+    assert bridge_plan.option_bars_want(now + timedelta(minutes=5)) == []           # just accepted
     later = now + bridge_plan.REOFFER_AFTER
     assert len(bridge_plan.option_bars_want(later)) == 4
-    bridge_plan.option_bars_want(later + bridge_plan.REOFFER_AFTER)
+    bridge_plan.record_offers(bridge_plan.option_bars_want(later), later)
+    bridge_plan.record_offers(bridge_plan.option_bars_want(later + bridge_plan.REOFFER_AFTER), later + bridge_plan.REOFFER_AFTER)
     assert bridge_plan.option_bars_want(later + 3 * bridge_plan.REOFFER_AFTER) == []  # MAX_OFFERS reached
 
 

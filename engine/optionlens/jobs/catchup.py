@@ -47,12 +47,14 @@ def catchup_sessions(now: datetime | None = None, n: int = LOOKBACK_SESSIONS) ->
 
 
 def missing_eod(symbols: Sequence[str], sessions: Sequence[date]) -> dict[str, list[date]]:
-    """{symbol: sessions without any option_eod archive} for symbols missing at least one session."""
+    """{symbol: sessions without a real option_eod archive} for symbols missing at least one session. A
+    reconstructed archive counts as missing: it is filled contract by contract and may be partial (an
+    interrupted catch-up); bridge_plan bounds how often it is offered again."""
     have = options_repo.eod_sources(sessions, symbols)
     out: dict[str, list[date]] = {}
     for d in sessions:
         for s in symbols:
-            if s not in have.get(d, {}):
+            if have.get(d, {}).get(s, options_repo.RECONSTRUCTED) == options_repo.RECONSTRUCTED:
                 out.setdefault(s, []).append(d)
     return out
 
@@ -89,9 +91,10 @@ def reconstruct_rows(symbol: str, day: date, bars: Iterable[Mapping], spot: floa
 
 def store_reconstructed_bars(symbol: str, bars: Sequence[Mapping], source: str) -> int:
     """Store pushed daily contract bars ({expiry, strike, right, date, close, volume, open/high/low
-    ignored}) of `symbol` as reconstructed option_eod archives, one per session date (r: stored 13w
-    bill rate, q: dividend_yield). A session that already has a real archive is left alone; a
-    reconstructed one is replaced. `source` is the provider of the bars (logged). Returns rows stored."""
+    ignored}) of `symbol` as reconstructed option_eod rows, per session date (r: stored 13w bill rate,
+    q: dividend_yield). A session that already has a real archive is left alone; in a reconstructed one
+    the pushed contracts are replaced and the others kept (the bridge pushes contract by contract).
+    `source` is the provider of the bars (logged). Returns rows stored."""
     by_day: dict[date, list[Mapping]] = {}
     for b in bars:
         by_day.setdefault(b["date"], []).append(b)

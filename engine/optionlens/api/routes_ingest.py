@@ -158,6 +158,16 @@ class OptionBarsIn(_In):
     bars: list[OptionBarIn] = Field(max_length=ingest.MAX_CONTRACTS)
 
 
+class AckItemIn(_In):
+    symbol: Symbol
+    sessions: list[date] = Field(min_length=1, max_length=60)
+
+
+class AckWantsIn(_In):
+    kind: Literal["option_bars"]
+    items: list[AckItemIn] = Field(max_length=ingest.MAX_QUOTES)
+
+
 @router.post("/chain")
 async def chain(req: ChainIn):
     return await respond(ingest.chain, req.model_dump())
@@ -196,6 +206,11 @@ async def underlying_stats(req: UnderlyingStatsIn):
 @router.post("/option-bars")
 async def option_bars(req: OptionBarsIn):
     return await respond(ingest.option_bars, req.model_dump())
+
+
+@router.post("/ack-wants")
+async def ack_wants(req: AckWantsIn):
+    return await respond(ingest.ack_wants, req.model_dump())
 
 
 @router.get("/wants")
