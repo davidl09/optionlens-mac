@@ -216,10 +216,34 @@ def test_ingest_index_bars_and_quotes(client):
     assert client.post("/api/ingest/quotes", json={"source": "ibkr", "quotes": []}).status_code == 422
 
 
+def test_index_history_is_wanted_and_becomes_the_index_daily_bars(client):
+    """Index pages (SPX, NDX, RUT, XSP) read the IBKR index history as their daily bars; the bridge is asked for
+    10 years when it is missing and for the days after the last bar otherwise. The VIX family stays a market series."""
+    from optionlens.analytics.calendar import last_completed_session, now_ny
+    from optionlens.repo import market
+    from optionlens.services import ingest
+    today, last = now_ny().date(), last_completed_session(now_ny())
+    want = {x["symbol"]: x["from"] for x in ingest.index_bars_want(today, last)}
+    assert set(want) >= {"SPX", "NDX", "RUT", "XSP", "VIX", "VIX9D", "VIX3M", "VIX6M"}
+    assert want["SPX"] == today - timedelta(days=3650)
+    days = [last - timedelta(days=i) for i in range(3700) if (last - timedelta(days=i)).weekday() < 5][::-1]
+    body = {"source": "ibkr", "symbol": "SPX", "bars": [
+        {"date": d.isoformat(), "open": 4000 + i, "high": 4010 + i, "low": 3990 + i, "close": 4005 + i} for i, d in enumerate(days)]}
+    assert client.post("/api/ingest/index-bars", json=body).json() == {"stored": len(days)}
+    assert "SPX" not in market.index_coverage(["SPX"])                                   # not a market series
+    want = {x["symbol"]: x["from"] for x in ingest.index_bars_want(today, last)}
+    assert "SPX" not in want and "NDX" in want                                            # up to date now
+    s = client.get("/api/symbol/SPX/summary").json()
+    assert s["quote"]["price"] == pytest.approx(4005 + len(days) - 1) and s["quote"]["source"] == "ibkr"
+    assert s["returns"]["y1"] is not None and s["high_52w"] is not None and s["hv20"] is not None
+    pa = client.get("/api/symbol/SPX/price-action?range=1y").json()
+    assert pa["rows"] and client.get("/api/symbol/SPX/bars?range=1m").json()
+
+
 def test_ingest_wants(client):
     w = client.get("/api/ingest/wants").json()
     assert set(w) == {"iv_history", "underlying_stats", "chain_universe", "eod_chains", "option_bars",
-                      "index_symbols", "chains_on_demand_max_age_s"}
+                      "index_symbols", "index_bars", "chains_on_demand_max_age_s"}
     assert set(w["chain_universe"]) == {"symbols", "max_age_s", "expiries", "moneyness"}
     assert set(w["underlying_stats"]) == {"symbols", "max_age_s"} and isinstance(w["option_bars"], list)
     assert w["chains_on_demand_max_age_s"] == 120 and set(w["index_symbols"]) == {"VIX", "VIX9D", "VIX3M", "VIX6M"}

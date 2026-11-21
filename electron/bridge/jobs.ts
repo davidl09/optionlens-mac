@@ -2,7 +2,7 @@
 // Market-data work is done in batches no larger than the line budget; every historical
 // request goes through the pacer (begin → request → success | violation → RetryLater).
 import { assembleChain, assembleContract, assembleUnderlying, isoDate, pickExpiries, selectContracts, underlyingContract, type ChainShape } from "./chain";
-import type { IngestApi, IngestChain, OptionBar, UnderlyingStat } from "./ingest";
+import type { IngestApi, IngestChain, IngestQuote, OptionBar, UnderlyingStat } from "./ingest";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import type { LineBudget } from "./line-budget";
@@ -254,12 +254,25 @@ export interface StatsPushed {
   optionTicks: boolean;
 }
 
-/** One batch of underlying stats (generic ticks 100/101/104/106 on the underlying). */
+/** The stock quote of a stats snapshot (current price required): posted with the stats, so symbol headers and
+ * tables have the session's price, OHLC and volume without a chain. */
+export function assembleQuote(symbol: string, q: QuoteSnapshot, ts: string): IngestQuote | null {
+  const price = livePrice(q);
+  if (price === null) return null;
+  const ch = changeFromClose(q);
+  return { symbol, price, change: ch?.change ?? null, change_pct: ch?.changePct ?? null, ts,
+    bid: q.bid, ask: q.ask, open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume };
+}
+
+/** One batch of underlying stats (generic ticks 100/101/104/106 on the underlying), and the same streams' quotes. */
 export async function pushUnderlyingStats(ctx: JobContext, symbols: string[], sessionDate: string): Promise<StatsPushed> {
   const quotes = await collectQuotes(ctx, symbols.map(underlyingContract), { genericTicks: "100,101,104,106", complete: (a) => a.statsComplete(), minDwellMs: 1500 });
   const stats = symbols.map((s, i) => assembleStat(s, quotes[i])).filter((s): s is UnderlyingStat => s !== null);
   const delayed = quotes.some((q) => q.delayed);
-  if (stats.length) await ctx.ingest.underlyingStats({ source: "ibkr", session_date: sessionDate, ts: ctx.now().toISOString(), delayed, stats });
+  const ts = ctx.now().toISOString();
+  if (stats.length) await ctx.ingest.underlyingStats({ source: "ibkr", session_date: sessionDate, ts, delayed, stats });
+  const rows = symbols.map((s, i) => assembleQuote(s, quotes[i], ts)).filter((q): q is IngestQuote => q !== null);
+  if (rows.length) await ctx.ingest.quotes({ source: "ibkr", delayed, quotes: rows });
   return { symbols: stats.map((s) => s.symbol), delayed, optionTicks: stats.some((s) => s.call_volume !== null || s.call_oi !== null) };
 }
 
@@ -309,11 +322,16 @@ export async function pushVolHistory(ctx: JobContext, symbol: string, from: stri
   return points.length;
 }
 
-export async function pushIndexBars(ctx: JobContext, symbol: string): Promise<number> {
-  const bars = await pacedHistorical(ctx, underlyingContract(symbol), { duration: "1 Y", whatToShow: "TRADES", useRth: true });
+/**
+ * Daily bars of an index (IND: SPX, NDX, RUT, XSP, the VIX family) from `from` on (up to 10 years). TRADES is
+ * the index's own value series at IBKR (an index has no bid/ask, so MIDPOINT/BID_ASK do not apply; volume is
+ * meaningless and not sent).
+ */
+export async function pushIndexBars(ctx: JobContext, symbol: string, from: string): Promise<number> {
+  const bars = await pacedHistorical(ctx, underlyingContract(symbol), { duration: durationFor(from, ctx.now()), whatToShow: "TRADES", useRth: true });
   const rows = bars.filter(validBar).flatMap((b) => {
     const date = isoDate(b.time);
-    return date ? [{ date, open: b.open, high: b.high, low: b.low, close: b.close }] : [];
+    return date && date >= from ? [{ date, open: b.open, high: b.high, low: b.low, close: b.close }] : [];
   });
   if (rows.length) await ctx.ingest.indexBars({ source: "ibkr", symbol, bars: rows });
   return rows.length;

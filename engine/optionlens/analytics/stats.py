@@ -202,6 +202,20 @@ def high_low(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int) -> tu
     return float(np.max(h)), float(np.min(lo))
 
 
+def latest_bar_quote(open_: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray,
+                     volume: np.ndarray) -> dict[str, float | None]:
+    """Quote fields of the latest daily bar (arrays ascending by date): its close as the price, its OHLC and
+    volume, the previous bar's close and the change against it. Unknown values are None, never 0; {} without bars."""
+    if not len(close):
+        return {}
+    prev = _num(float(close[-2])) if len(close) > 1 else None
+    price = _num(float(close[-1]))
+    change = price - prev if price is not None and prev else None
+    return {"price": price, "open": _num(float(open_[-1])), "high": _num(float(high[-1])), "low": _num(float(low[-1])),
+            "volume": _num(float(volume[-1])), "prev_close": prev, "change": change,
+            "change_pct": change / prev if change is not None else None}
+
+
 def avg_volume(volume: np.ndarray, n: int = 30, exclude_last: bool = False) -> float | None:
     v = np.asarray(volume, dtype=float)
     if exclude_last:

@@ -219,8 +219,8 @@ export class Bridge {
     if (plan.indexQuotes.length) {
       this.enqueue(this.task("index", "index-quotes", "VIX family quotes", async (ctx) => { await pushIndexQuotes(ctx, plan.indexQuotes); this.pushed(); }));
     }
-    for (const s of plan.indexBars) {
-      this.enqueue(this.task("index", `index-bars:${s}`, `${s} daily bars`, async (ctx) => { await pushIndexBars(ctx, s); this.pushed(); },
+    for (const { symbol: s, from } of plan.indexBars) {
+      this.enqueue(this.task("index", `index-bars:${s}`, `${s} daily bars`, async (ctx) => { if (await pushIndexBars(ctx, s, from)) this.pushed(); },
         { gate: this.pacer, ledgerKey: ledgerKey.indexBars(s), group: group.indexBars(s) }));
     }
     if (this.idle("option-bars") && this.idle("iv-history")) this.backfill = { total: 0, done: 0, failed: 0 };

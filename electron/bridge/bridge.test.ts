@@ -44,6 +44,7 @@ const WANTS = {
   chain_universe: { symbols: ["MSFT"], max_age_s: 3600, expiries: 1, moneyness: 0.2 },
   eod_chains: { session_date: "2026-11-20", symbols: ["AAPL"], not_before: "2026-11-20T16:20:00-05:00", deadline: "2026-11-20T20:00:00-05:00" },
   index_symbols: ["VIX"],
+  index_bars: [{ symbol: "SPX", from: "2016-11-21" }],
   chains_on_demand_max_age_s: 120,
 };
 
@@ -57,7 +58,7 @@ describe("Bridge", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const work = h.calls.filter((c) => c !== "heartbeat");
     expect(work[0]).toBe("chain:MSFT");
-    expect([...work].sort()).toEqual(["bars:VIX", "chain:MSFT", "quotes", "stats", "vol:AAPL", "vol:AAPL"]);
+    expect([...work].sort()).toEqual(["bars:SPX", "chain:MSFT", "quotes", "quotes", "stats", "vol:AAPL", "vol:AAPL"]);   // quotes: VIX family + the stats pass
     expect(h.calls.filter((c) => c === "heartbeat").length).toBeGreaterThanOrEqual(1);
     const last = h.statuses[h.statuses.length - 1];
     expect(last).toMatchObject({ tws: "connected", endpoint: "IB Gateway (live)", accountType: "paper", current: null });

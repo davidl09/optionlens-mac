@@ -12,6 +12,8 @@ export interface Wants {
   eodChains: { sessionDate: string; symbols: string[]; notBefore: number; deadline: number } | null;
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
   indexSymbols: string[];
+  /** Index daily history (SPX, NDX, ..., VIX family) the engine is missing, from `from` (YYYY-MM-DD). */
+  indexBars: { symbol: string; from: string }[];
   onDemandMaxAgeS: number;
 }
 
@@ -55,12 +57,17 @@ function shape(o: Obj, path: string): ChainShape {
   return { expiries: Math.round(num(o.expiries, `${path}.expiries`, 1, 60)), moneyness: num(o.moneyness, `${path}.moneyness`, 0.01, 1) };
 }
 
+/** [{symbol, from}] (absent = []). */
+function symbolsFrom(v: unknown, path: string): { symbol: string; from: string }[] {
+  return present(v) ? arr(v, path).map((x, i) => {
+    const o = obj(x, `${path}[${i}]`);
+    return { symbol: symbols([o.symbol], `${path}[${i}].symbol`)[0], from: date(o.from, `${path}[${i}].from`) };
+  }) : [];
+}
+
 export function parseWants(raw: unknown): Wants {
   const w = obj(raw, "wants");
-  const ivHistory = present(w.iv_history) ? arr(w.iv_history, "iv_history").map((x, i) => {
-    const o = obj(x, `iv_history[${i}]`);
-    return { symbol: symbols([o.symbol], `iv_history[${i}].symbol`)[0], from: date(o.from, `iv_history[${i}].from`) };
-  }) : [];
+  const ivHistory = symbolsFrom(w.iv_history, "iv_history");
   const us = present(w.underlying_stats) ? obj(w.underlying_stats, "underlying_stats") : null;
   const cu = present(w.chain_universe) ? obj(w.chain_universe, "chain_universe") : null;
   const eod = present(w.eod_chains) ? obj(w.eod_chains, "eod_chains") : null;
@@ -82,6 +89,7 @@ export function parseWants(raw: unknown): Wants {
     } : null,
     optionBars,
     indexSymbols: present(w.index_symbols) ? symbols(w.index_symbols, "index_symbols") : [],
+    indexBars: symbolsFrom(w.index_bars, "index_bars"),
     onDemandMaxAgeS: present(w.chains_on_demand_max_age_s) ? num(w.chains_on_demand_max_age_s, "chains_on_demand_max_age_s", 0, 86_400) : 120,
   };
 }
@@ -107,7 +115,7 @@ export interface Plan {
   universe: { symbols: string[]; shape: ChainShape };
   stats: string[];
   indexQuotes: string[];
-  indexBars: string[];
+  indexBars: { symbol: string; from: string }[];
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
   volHistory: { symbol: string; from: string; kind: "iv30" | "hv30" }[];
 }
@@ -139,7 +147,7 @@ export function planWants(w: Wants, c: PlanContext): Plan {
     },
     stats: w.underlyingStats ? w.underlyingStats.symbols.filter((s) => stale(c.lastStatsPush(s), c.now, w.underlyingStats!.maxAgeS)) : [],
     indexQuotes: w.indexSymbols,
-    indexBars: w.indexSymbols.filter((s) => !c.attemptedWithin(ledgerKey.indexBars(s), HIST_RETRY_MS)),
+    indexBars: w.indexBars.filter((x) => !c.attemptedWithin(ledgerKey.indexBars(x.symbol), HIST_RETRY_MS)),
     optionBars: w.optionBars.filter((o) => o.sessions.length > 0 && !c.attemptedWithin(ledgerKey.optionBars(o.symbol, o.sessions), HIST_RETRY_MS)),
     volHistory: w.ivHistory.flatMap((x) => (["iv30", "hv30"] as const)
       .filter((kind) => !c.attemptedWithin(ledgerKey.vol(kind, x.symbol), HIST_RETRY_MS))

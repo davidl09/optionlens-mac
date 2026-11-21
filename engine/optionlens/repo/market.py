@@ -27,6 +27,13 @@ def index_bars(symbols: Sequence[str], start: date | None = None) -> dict[str, d
         ORDER BY symbol, date""", [list(symbols), start]), "symbol")
 
 
+def index_coverage(symbols: Sequence[str]) -> dict[str, dict]:
+    """-> {symbol: {first, last}} for index series that have any bars."""
+    rows = query("""SELECT symbol, min(date) AS first, max(date) AS last FROM index_bars
+                    WHERE symbol IN (SELECT unnest(?::VARCHAR[])) GROUP BY symbol""", [list(symbols)])
+    return {r.pop("symbol"): r for r in rows}
+
+
 def index_last_date(symbol: str) -> date | None:
     """Latest stored date for an index series."""
     return scalar("SELECT max(date) FROM index_bars WHERE symbol = ?", [symbol])

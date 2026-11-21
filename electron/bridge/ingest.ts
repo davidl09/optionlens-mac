@@ -22,7 +22,11 @@ export interface IngestChain {
 }
 export interface VolBars { source: "ibkr"; symbol: string; kind: "iv30" | "hv30"; bars: { date: string; value: number }[] }
 export interface IndexBars { source: "ibkr"; symbol: string; bars: { date: string; open: N; high: N; low: N; close: number }[] }
-export interface IngestQuote { symbol: string; price: N; change: N; change_pct: N; ts: string }
+export interface IngestQuote {
+  symbol: string; price: N; change: N; change_pct: N; ts: string;
+  /** Session fields where TWS sent them (stock quotes of the underlying-stats pass); absent = not sent. */
+  bid?: N; ask?: N; open?: N; high?: N; low?: N; prev_close?: N; volume?: N;
+}
 export interface UnderlyingStat {
   symbol: string; price: N; change_pct: N; volume: N;
   call_volume: N; put_volume: N; call_oi: N; put_oi: N; iv30: N; hv30: N;

@@ -24,6 +24,7 @@ import anyio.from_thread
 import numpy as np
 
 from ..analytics import earnings as earn_a
+from ..analytics import stats as stats_a
 from ..analytics import vol
 from ..analytics.calendar import now_ny
 from ..analytics.chain import ChainArrays
@@ -33,7 +34,8 @@ from ..analytics.dividends import (PARITY_BAND, PARITY_DTE, TRAILING_COVERAGE_DA
                                    implied_yield_from_chain, trailing_yield)
 from ..config import get_settings
 from ..jobs import hooks, ondemand
-from ..jobs._util import session_date
+from ..jobs._util import session_close, session_date
+from ..jobs.bridge_plan import EOD_INDICES as INDEX_SYMBOLS
 from ..models import Bar, Dividend, EarningsEvent, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
 from ..repo import dividends as div_repo
@@ -271,13 +273,40 @@ def optionable(symbol: str) -> bool | None:
     return row["optionable"] if row else None
 
 
-def quote_dict(symbol: str) -> dict | None:
-    q = quotes_repo.get_quote(symbol)
-    if q is None or q.price is None:
+_QUOTE_KEYS = ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low", "prev_close", "volume", "bid",
+               "ask", "iv30")
+_BAR_FILLED = ("price", "change", "change_pct", "open", "high", "low", "prev_close", "volume")
+QUOTE_BARS_DAYS = 10   # calendar days of bars read for a quote (the latest bar and the one before it)
+
+
+def bars_source(symbol: str) -> str:
+    """Who supplies a symbol's daily bars: the IBKR bridge for the cash indices, Nasdaq for stocks and ETFs."""
+    return "ibkr" if normalize_symbol(symbol) in INDEX_SYMBOLS else "nasdaq"
+
+
+def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
+    """The symbol's current quote. A stored quote of the latest session with data is used as it is, the fields it
+    lacks (OHLC, volume, previous close) filled from the daily bars; without one (none pushed, or older than the last
+    stored bar), the latest daily bar stands in: its close, OHLC, volume and change vs the previous close, `source`
+    the bars' source and `ts` that session's close. None when there is neither. `bars`: the symbol's live bars
+    (load_bars), read when not given."""
+    sym = normalize_symbol(symbol)
+    q = quotes_repo.get_quote(sym)
+    if bars is None:
+        bars = load_bars(sym, today() - timedelta(days=QUOTE_BARS_DAYS))
+    b = stats_a.bar_arrays(bars)
+    from_bars = stats_a.latest_bar_quote(b.open, b.high, b.low, b.close, b.volume)
+    qd = quote_session(q) if q is not None and q.price else None
+    if qd is not None and (not bars or qd >= bars[-1].date):
+        out = {f: getattr(q, f) for f in _QUOTE_KEYS}
+        for k in _BAR_FILLED:
+            if out[k] is None:
+                out[k] = from_bars.get(k)
+        return {**out, "delayed": bool(q.delayed), "source": quotes_repo.source_of(sym)}
+    if not from_bars or from_bars["price"] is None:
         return None
-    return {**{f: getattr(q, f) for f in ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low",
-                                           "prev_close", "volume", "bid", "ask", "iv30")},
-            "delayed": bool(q.delayed)}
+    return {**dict.fromkeys(_QUOTE_KEYS), **from_bars, "symbol": sym, "ts": session_close(bars[-1].date),
+            "delayed": False, "source": bars_source(sym)}
 
 
 def iv_history(symbol: str, cols: Sequence[str]) -> dict[str, np.ndarray]:

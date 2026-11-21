@@ -13,6 +13,7 @@ from ..jobs import bridge_plan, catchup, chains, hooks
 from ..jobs._util import session_close, session_date
 from ..jobs.marketdata import VIX_FAMILY
 from ..models import Bar, ChainSnapshot, OptionContract, Quote, normalize_symbol
+from ..repo import bars as bars_repo
 from ..repo import bridge as bridge_repo
 from ..repo import market as market_repo
 from ..repo import quotes as quotes_repo
@@ -114,14 +115,19 @@ def vol_history(kind: str, body: dict, now: datetime | None = None) -> dict:
 
 
 def index_bars(body: dict, now: datetime | None = None) -> dict:
+    """Index daily bars (IBKR TRADES). The cash indices (SPX, NDX, RUT, XSP) are symbols: their pushed bars are their
+    daily_bars, read by every price, return, range, HV and chart computation like any symbol's (replacing a bar the
+    EOD job built from a quote). The VIX family is a market series: index_bars."""
     sym = normalize_symbol(body["symbol"])
-    n = market_repo.upsert_index_bars(Bar(sym, b["date"], b.get("open"), b.get("high"), b.get("low"), b["close"],
-                                          None) for b in body["bars"])
+    rows = [Bar(sym, b["date"], b.get("open"), b.get("high"), b.get("low"), b["close"], None) for b in body["bars"]]
+    n = bars_repo.upsert_bars(rows) if sym in bridge_plan.EOD_INDICES else market_repo.upsert_index_bars(rows)
     bridge_repo.record_push(now or datetime.now(timezone.utc))
+    if sym in bridge_plan.EOD_INDICES:
+        ctx.invalidate()
     return {"stored": n}
 
 
-_QUOTE_FIELDS = ("price", "change", "change_pct")
+_QUOTE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
 
 
 def quotes(body: dict, now: datetime | None = None) -> dict:
@@ -138,6 +144,8 @@ def quotes(body: dict, now: datetime | None = None) -> dict:
             {f: getattr(old, f) for f in Quote.__slots__}
         base.update(symbol=sym, ts=q["ts"], delayed=body["delayed"],
                     **{f: q.get(f) for f in _QUOTE_FIELDS if q.get(f) is not None})
+        if q.get("volume") is not None:
+            base["volume"] = int(q["volume"])
         out.append(Quote(**base))
     n = quotes_repo.upsert_quotes(out, body["source"]) if out else 0
     bridge_repo.record_push(now or datetime.now(timezone.utc))
@@ -182,7 +190,8 @@ def wants(now: datetime | None = None) -> dict:
     """GET /api/ingest/wants: IV history for watchlist + index + universe symbols whose ingested
     history is missing or ends before the last completed session (from the day after it, else
     IV_HISTORY_YEARS back), plus the plans of jobs.bridge_plan (underlying stats, chain universe,
-    closing chains, option-bar catch-up), the VIX family and the on-demand chain freshness bound."""
+    closing chains, option-bar catch-up), the VIX family (quotes), missing index history (index_bars_want) and the
+    on-demand chain freshness bound."""
     now = (now or now_ny()).astimezone(NY)
     last = last_completed_session(now)
     syms = list(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
@@ -197,5 +206,26 @@ def wants(now: datetime | None = None) -> dict:
         "eod_chains": bridge_plan.eod_chains_want(now),
         "option_bars": bridge_plan.option_bars_want(now),
         "index_symbols": list(VIX_FAMILY),
+        "index_bars": index_bars_want(now.date(), last),
         "chains_on_demand_max_age_s": int(ctx.REFRESH_MIN_INTERVAL_S),
     }
+
+
+INDEX_HISTORY_YEARS = 10
+INDEX_COVER_SLACK_DAYS = 30   # a history starting this much after the wanted start is refetched in full
+
+
+def index_bars_want(today: date, last_session: date) -> list[dict]:
+    """Index daily history the bridge should fetch (IBKR TRADES): the cash indices (daily_bars) and the VIX family
+    (index_bars) without a 10-year history (from 10 years back), else from the day after their last bar when that
+    predates the last completed session."""
+    start = today - timedelta(days=365 * INDEX_HISTORY_YEARS)
+    cov = {**bars_repo.coverage(list(bridge_plan.EOD_INDICES)), **market_repo.index_coverage(VIX_FAMILY)}
+    out = []
+    for s in (*bridge_plan.EOD_INDICES, *VIX_FAMILY):
+        c = cov.get(s)
+        if c is None or c["first"] > start + timedelta(days=INDEX_COVER_SLACK_DAYS):
+            out.append({"symbol": s, "from": start})
+        elif c["last"] < last_session:
+            out.append({"symbol": s, "from": c["last"] + timedelta(days=1)})
+    return out

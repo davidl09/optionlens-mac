@@ -206,9 +206,12 @@ def _bars_block(C: dict, syms: list[str], pos: dict, quotes: dict, today: date) 
                       for ts, d in zip(C["quote_ts"], C["last_bar_date"])], dtype=bool)
     for k in ("price", "change", "change_pct", "open", "high", "low", "volume", "prev_close", "bid", "ask"):
         C[k][stale] = np.nan
-    # symbols without a (fresh) quote: fall back to the last stored close for price
-    miss = ~np.isfinite(C["price"]) & np.isfinite(C["last_close"])
-    C["price"][miss] = C["last_close"][miss]
+    # quote fields without a (fresh) quote value: the latest daily bar's (one rule with context.quote_dict)
+    for s, (dates, o, h, lo, c, v, live) in series.items():
+        i = pos[s]
+        for k, val in stats.latest_bar_quote(o, h, lo, c, v).items():
+            if val is not None and not np.isfinite(C[k][i]):
+                C[k][i] = val
     # the quote is authoritative for the day's change; otherwise the last bar-to-bar return
     C["change_pct"] = np.where(np.isfinite(C["change_pct"]), C["change_pct"], C["ret_1d"])
     C["ret_1d"] = C["change_pct"].copy()

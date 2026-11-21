@@ -110,6 +110,13 @@ class QuoteIn(_In):
     price: Price | None = None
     change: Num | None = None
     change_pct: Num | None = None
+    bid: Price | None = None
+    ask: Price | None = None
+    open: Price | None = None
+    high: Price | None = None
+    low: Price | None = None
+    prev_close: Price | None = None
+    volume: Count | None = None
     ts: AwareDatetime
 
 

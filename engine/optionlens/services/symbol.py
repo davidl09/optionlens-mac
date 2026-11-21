@@ -135,7 +135,7 @@ def summary(symbol: str) -> dict:
     return {
         "symbol": sym, "name": row["name"] or sym, "kind": row["kind"], "sector": row["sector"],
         "industry": row["industry"], "market_cap": row["market_cap"], "optionable": row["optionable"],
-        "in_universe": bool(row["in_universe"]), "quote": ctx.quote_dict(sym),
+        "in_universe": bool(row["in_universe"]), "quote": ctx.quote_dict(sym, bars_),
         "avg_volume_30d": stats.avg_volume(a.volume, 30, exclude_last=True),
         "rel_volume": stats.relative_volume(a.volume, 30),
         "high_52w": h52, "low_52w": l52, "high_3y": h3, "low_3y": l3,

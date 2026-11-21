@@ -106,13 +106,15 @@ POST /api/ingest/iv-history
   "bars": [ { "date": "2025-11-20", "value": 0.243 }, ... ] }
 → 200 {"stored": n}
 POST /api/ingest/hv-history   (same shape, kind "hv30": IBKR HISTORICAL_VOLATILITY)     → 200
-POST /api/ingest/index-bars
+POST /api/ingest/index-bars               // IBKR daily TRADES bars of an IND contract (an index has no bid/ask)
 { "source": "ibkr", "symbol": "VIX", "bars": [ {"date": "...", "open":..,"high":..,"low":..,"close":..} ] }
-→ 200 {"stored": n}
+→ 200 {"stored": n}   // SPX, NDX, RUT, XSP: stored as the index's daily bars (the one bar series every price,
+                      // return, range, HV and chart computation of a symbol reads); VIX family: market series
 POST /api/ingest/quotes
 { "source": "ibkr", "quotes": [ { "symbol": "VIX", "price": 27.8, "change": 3.26, "change_pct": 0.1327,
-  "ts": "..." } ] }
-→ 200 {"stored": n}
+  "ts": "...",
+  "bid": .., "ask": .., "open": .., "high": .., "low": .., "prev_close": .., "volume": .. } ] }   // optional
+→ 200 {"stored": n}   // field-wise upsert: fields sent replace the stored quote's, others are kept
 POST /api/ingest/heartbeat
 { "client": "optionlens-mac 0.1.0", "ibkr_connected": true, "account_type": "live"|"paper"|null }
 → 200 {"server_time": "..."}
@@ -170,9 +172,17 @@ work makes progress in every cycle.
   "option_bars": [ {"symbol": "AAPL", "sessions": ["2026-11-18"], "expiries": 6, "moneyness": 0.15} ],
                                                                 // sessions without a real end-of-day archive
                                                                 // (see ack-wants)
-  "index_symbols": ["VIX", "VIX9D", "VIX3M", "VIX6M"],
+  "index_symbols": ["VIX", "VIX9D", "VIX3M", "VIX6M"],                // quotes
+  "index_bars": [ {"symbol": "SPX", "from": "2016-11-21"} ],            // daily history of SPX, NDX, RUT, XSP and
+                                                                // the VIX family: 10 years when missing, else from
+                                                                // the day after the last stored bar
   "chains_on_demand_max_age_s": 120 }
 ```
+The underlying-stats pass also posts each stock's quote (last or mid, bid/ask, open/high/low, previous close,
+volume) to `/api/ingest/quotes` from the same streams. Without a quote of the latest session (none pushed,
+weekends, no chain), `SymbolSummary.quote` and the universe tables (`price`, `volume`, OHLC, change) show the
+latest daily bar: its close, OHLC and volume and the change vs the previous close, with `source` the bars'
+source (`"nasdaq"`, `"ibkr"` for the cash indices) and `ts` that session's close.
 
 Coverage: there is no free, licensed source of full option chains for the whole universe that this user can
 use (CBOE's website feed is blocked and not licensed for collection; Alpaca does not serve Canadian

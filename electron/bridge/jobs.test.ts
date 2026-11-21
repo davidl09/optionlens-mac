@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { emptyMarket, FakeSession, contractId, type FakeMarket } from "./fake-tws.test-helper";
 import type { IngestApi } from "./ingest";
-import { collectQuotes, pacedHistorical, pushChain, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { collectQuotes, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
 import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -181,6 +181,9 @@ describe("underlying stats", () => {
     const ctx = ctxFor(s);
     expect(await pushUnderlyingStats(ctx, ["AAPL", "NODATA"], "2026-11-20")).toEqual({ symbols: ["AAPL"], delayed: false, optionTicks: true });
     expect(s.streams[0].generic).toBe("100,101,104,106");
+    // The same streams' stock quote is posted too (no extra lines): headers and tables get price, OHLC and volume.
+    expect(s.streams).toHaveLength(2);
+    expect(ctx.ingest.calls.quotes[0]).toMatchObject({ source: "ibkr", delayed: false, quotes: [{ symbol: "AAPL", price: 99, change: expect.closeTo(-1, 9), prev_close: 100, volume: 4.1e7 }] });
     expect(ctx.ingest.calls.underlyingStats[0]).toMatchObject({ source: "ibkr", session_date: "2026-11-20", delayed: false, stats: [{
       symbol: "AAPL", price: 99, change_pct: expect.closeTo(-0.01, 10), volume: 4.1e7, call_volume: 338000, put_volume: 251000,
       call_oi: 2960000, put_oi: 2730000, iv30: 0.251, hv30: 0.27,
@@ -208,6 +211,45 @@ describe("delayed data (no real-time subscription)", () => {
     const ctx = ctxFor(new FakeSession(m));
     expect(await pushUnderlyingStats(ctx, ["KO"], "2026-11-20")).toEqual({ symbols: ["KO"], delayed: true, optionTicks: false });
     expect(ctx.ingest.calls.underlyingStats[0]).toMatchObject({ delayed: true, stats: [{ symbol: "KO", price: 60, call_volume: null, put_volume: null, call_oi: null, put_oi: null, iv30: null, hv30: null }] });
+  });
+});
+
+describe("index history", () => {
+  it("fetches daily TRADES bars of the IND contract back to `from` (10 years at most) and posts them", async () => {
+    const m = emptyMarket();
+    m.historical = () => [{ time: "20161118", open: 1, high: 1, low: 1, close: 1, volume: null }, { time: "20261120", open: 6600, high: 6650, low: 6550, close: 6602.1, volume: null }];
+    const ctx = ctxFor(new FakeSession(m));
+    expect(await pushIndexBars(ctx, "SPX", "2016-11-21")).toBe(1);
+    const call = (ctx.session as FakeSession).historicalCalls[0];
+    expect(call.contract).toMatchObject({ symbol: "SPX", secType: "IND", exchange: "CBOE" });
+    expect(call.req).toEqual({ duration: "10 Y", whatToShow: "TRADES", useRth: true });
+    expect(ctx.ingest.calls.indexBars[0]).toEqual({ source: "ibkr", symbol: "SPX", bars: [{ date: "2026-11-20", open: 6600, high: 6650, low: 6550, close: 6602.1 }] });
+  });
+});
+
+describe("weekend on-demand chain (delayed-frozen, no OPRA)", () => {
+  it("posts a chain from delayed ticks 66/67/83 on a Saturday; every request TWS gets has a valid expiry", async () => {
+    const m = aaplMarket();
+    m.ticks = (id) => id === "AAPL:STK"
+      ? [{ kind: "price", field: TICK.DELAYED_LAST, value: 100 }, { kind: "price", field: TICK.DELAYED_CLOSE, value: 98 }]
+      : id.split(":").length === 4 ? [
+        { kind: "price", field: TICK.DELAYED_BID, value: 1 }, { kind: "price", field: TICK.DELAYED_ASK, value: 1.2 },
+        { kind: "option", field: TICK.DELAYED_MODEL_OPTION, iv: 0.31, delta: 0.45, gamma: 0.02, vega: 0.1, theta: -0.03 }] : undefined;
+    const s = new FakeSession(m);
+    const ctx = ctxFor(s, { now: () => new Date("2026-11-21T17:00:00Z") });   // Saturday
+    const r = await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
+    expect(r?.coverage).toBe(1);
+    const body = ctx.ingest.calls.chain[0] as { delayed: boolean; contracts: { expiry: string; iv: number; delta: number }[] };
+    expect(body.delayed).toBe(true);
+    expect(body.contracts[0]).toMatchObject({ expiry: "2026-11-27", iv: 0.31, delta: 0.45 });
+  });
+
+  it("a contract with an expiry TWS rejects (error 321) gets no data — the fake behaves like TWS", async () => {
+    const s = new FakeSession(aaplMarket());
+    const bad: TwsContract = { symbol: "AAPL", secType: "OPT", exchange: "SMART", currency: "USD", lastTradeDateOrContractMonth: "2026-11-27", strike: 100, right: "C" };
+    const [q] = await collectQuotes(ctxFor(s), [bad], { genericTicks: "101", complete: (a) => a.optionComplete(), minDwellMs: 0 });
+    expect(q.bid).toBeNull();
+    await expect(pacedHistorical(ctxFor(s), bad, { duration: "5 D", whatToShow: "TRADES", useRth: true })).rejects.toThrow(/321/);
   });
 });
 

@@ -14,17 +14,23 @@ from optionlens.services import context
 from .test_engine_api import _chain
 
 SYM = "HPQ"
+QSYM = "HPQV"
 CHAIN_PATHS = ("chain", "activity", "open-interest", "skew", "implied-moves", "straddle", "ideas",
                f"contract/{SYM}261218C00120000")
 
 
-@pytest.fixture
-def hpq(client):
-    symbols.upsert_symbols([{"symbol": SYM, "name": "HP Inc.", "kind": "stock"}])
+def _bars_only_symbol(sym: str) -> None:
+    """A known stock with daily bars (AAPL's / 10, volume 1M) and nothing else."""
+    symbols.upsert_symbols([{"symbol": sym, "name": f"{sym} test", "kind": "stock"}])
     aapl = bars.get_bars("AAPL")
-    bars.upsert_bars([Bar(SYM, d, o / 10, h / 10, lo / 10, c / 10, 1_000_000) for d, o, h, lo, c in zip(
+    bars.upsert_bars([Bar(sym, d, o / 10, h / 10, lo / 10, c / 10, 1_000_000) for d, o, h, lo, c in zip(
         aapl["date"].astype(object).tolist(), aapl["open"].tolist(), aapl["high"].tolist(), aapl["low"].tolist(),
         aapl["close"].tolist())])
+
+
+@pytest.fixture
+def hpq(client):
+    _bars_only_symbol(SYM)
     return client
 
 
@@ -69,3 +75,33 @@ def test_a_weekend_quote_is_the_previous_sessions_bar(client):
     quotes.upsert_quotes([q], "ibkr")
     got = context.load_bars("HPQX")
     assert [b.date.isoformat() for b in got] == ["2026-11-19", "2026-11-20"] and got[-1].close == 30.0
+
+
+def test_without_a_quote_the_latest_daily_bar_is_the_quote(client):
+    """No quote pushed (e.g. a weekend, no chain): headers and tables show the latest daily bar's close, OHLC,
+    volume and change vs the previous close, tagged with the bars' source (never '—' while bars exist)."""
+    _bars_only_symbol(QSYM)
+    b = bars.get_bars(QSYM)
+    q = client.get(f"/api/symbol/{QSYM}/summary").json()["quote"]
+    last, prev = float(b["close"][-1]), float(b["close"][-2])
+    assert q["price"] == pytest.approx(last) and q["prev_close"] == pytest.approx(prev)
+    assert q["open"] == pytest.approx(float(b["open"][-1])) and q["volume"] == 1_000_000
+    assert q["change"] == pytest.approx(last - prev) and q["change_pct"] == pytest.approx(last / prev - 1)
+    assert q["source"] == "nasdaq" and q["ts"].startswith(str(b["date"][-1])[:10])
+    wl = client.post("/api/watchlists", json={"name": "fallback", "symbols": [QSYM]}).json()
+    row = client.get(f"/api/watchlists/{wl['id']}/table").json()["rows"][0]
+    assert row["volume"] == 1_000_000 and row["price"] == pytest.approx(last)
+    client.delete(f"/api/watchlists/{wl['id']}")
+
+
+def test_a_pushed_stock_quote_keeps_ohlc_and_volume_and_fills_gaps_from_bars(client):
+    QSYM = "HPQW"
+    _bars_only_symbol(QSYM)
+    ts = datetime.now(timezone.utc).isoformat()
+    body = {"source": "ibkr", "delayed": True, "quotes": [{"symbol": QSYM, "price": 31.5, "change": 0.5, "change_pct": 0.016,
+            "bid": 31.4, "ask": 31.6, "open": 31.0, "high": 32.0, "low": 30.9, "prev_close": 31.0, "volume": 2_500_000.0, "ts": ts}]}
+    assert client.post("/api/ingest/quotes", json=body).json() == {"stored": 1}
+    q = client.get(f"/api/symbol/{QSYM}/summary").json()["quote"]
+    assert (q["price"], q["open"], q["high"], q["low"], q["volume"], q["bid"]) == (31.5, 31.0, 32.0, 30.9, 2_500_000, 31.4)
+    assert q["source"] == "ibkr" and q["delayed"] is True
+    assert client.post("/api/ingest/quotes", json={**body, "quotes": [{**body["quotes"][0], "volume": -1}]}).status_code == 422

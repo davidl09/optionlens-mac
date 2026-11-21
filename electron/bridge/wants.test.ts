@@ -8,6 +8,7 @@ const RAW = {
   eod_chains: { session_date: "2026-11-20", symbols: ["AAPL", "SPX"], not_before: "2026-11-20T16:20:00-05:00", deadline: "2026-11-20T20:00:00-05:00" },
   option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 6, moneyness: 0.15 }],
   index_symbols: ["VIX", "VIX9D"],
+  index_bars: [{ symbol: "SPX", from: "2016-11-21" }, { symbol: "vix", from: "2026-11-19" }],
   chains_on_demand_max_age_s: 120,
 };
 
@@ -22,6 +23,7 @@ describe("parseWants", () => {
     expect(w.chainUniverse).toEqual({ symbols: ["AAPL", "MSFT", "TSLA"], maxAgeS: 3600, shape: { expiries: 6, moneyness: 0.2 } });
     expect(w.eodChains?.notBefore).toBe(Date.parse("2026-11-20T21:20:00Z"));
     expect(w.optionBars[0]).toEqual({ symbol: "AAPL", sessions: ["2026-11-18"], shape: { expiries: 6, moneyness: 0.15 } });
+    expect(w.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }, { symbol: "VIX", from: "2026-11-19" }]);
   });
 
   it("treats absent sections as nothing wanted (older servers)", () => {
@@ -36,6 +38,7 @@ describe("parseWants", () => {
     expect(() => parseWants({ ...RAW, iv_history: [{ symbol: "AAPL", from: "yesterday" }] })).toThrow(WantsError);
     expect(() => parseWants({ ...RAW, chain_universe: { ...RAW.chain_universe, moneyness: 5 } })).toThrow(/moneyness/);
     expect(() => parseWants({ ...RAW, index_symbols: "VIX" })).toThrow(/index_symbols/);
+    expect(() => parseWants({ ...RAW, index_bars: [{ symbol: "SPX" }] })).toThrow(/index_bars\[0\]\.from/);
     expect(() => parseWants(null)).toThrow(WantsError);
   });
 });
@@ -71,7 +74,7 @@ describe("planWants", () => {
     expect(p.universe.symbols).toEqual(["TSLA"]);
     expect(p.stats).toEqual(["KO"]);
     expect(p.volHistory.map((v) => `${v.kind}:${v.symbol}`)).toEqual(["hv30:AAPL", "iv30:MSFT", "hv30:MSFT"]);
-    expect(p.indexBars).toEqual(["VIX9D"]);
+    expect(p.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }]);
   });
 });
 
