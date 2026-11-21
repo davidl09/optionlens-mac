@@ -165,7 +165,7 @@ def _fv(x) -> float | None:
 
 
 COMPARE_STRADDLE = ReportDef(
-    "compare-straddle", "Straddle Comparison", "Volatility",
+    "compare-straddle", "Compare straddles", "Volatility",
     "ATM straddle (implied move) of the expiry nearest the target DTE for each symbol.",
     (Param("symbols", "Symbols", "symbols", None), p_int("dte", "Target DTE", 30, 0, 900)),
     COMPARE_COLS, run_compare_straddle, None, ("Straddle at the listed strike nearest spot, mid prices.",
