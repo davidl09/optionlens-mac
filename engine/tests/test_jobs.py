@@ -72,7 +72,7 @@ def test_eod_and_daily_schedules():
 
 def test_all_spec_jobs_defined():
     spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
-            "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune"}
+            "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune", "splits"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests
     assert set(scheduler.JOBS) - {"digest_morning"} == spec
     # no vendor ChainSource (default): no chain sweeps, no CBOE collection, eod after the bridge's pushes

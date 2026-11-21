@@ -44,6 +44,16 @@ def replace_bars(symbol: str, bars: Iterable[Bar]) -> int:
         return insert_arrow(cur, "daily_bars", to_columns(uniq, _FIELDS))
 
 
+def scale_before(symbol: str, day: date, factor: float) -> int:
+    """Split-adjust a symbol's bars dated before `day` (a split of `factor` new shares per old share): prices
+    divided by it, volume multiplied by it. Returns rows changed."""
+    with db.write() as cur:
+        cur.execute("""UPDATE daily_bars SET open = open / ?1, high = high / ?1, low = low / ?1, close = close / ?1,
+                       volume = CAST(round(volume * ?1) AS BIGINT) WHERE symbol = ?2 AND date < ?3""",
+                    [factor, symbol, day])
+        return cur.fetchone()[0] if cur.description else 0
+
+
 def get_bars(symbol: str, start: date | None = None, end: date | None = None) -> dict[str, np.ndarray]:
     """-> {date, open, high, low, close, volume} ascending for symbol within [start, end]."""
     return columns(f"""SELECT {_COLS} FROM daily_bars WHERE symbol = ?

@@ -127,6 +127,7 @@ def build_jobs() -> dict[str, Job]:
         Job("universe", universe.universe, daily(time(6, 0), {MON})),
         Job("prices_backfill", prices.prices_backfill, daily(time(6, 10))),
         Job("prices_refresh", prices.prices_refresh, daily(time(7, 0), {SAT})),
+        Job("splits", prices.splits, daily(time(6, 40))),
         Job("earnings", calendars.earnings, daily(time(5, 30))),
         Job("earnings_backfill", calendars.earnings_backfill, daily(time(4, 0))),  # no-op once complete
         Job("dividends", calendars.dividends, daily(time(5, 45))),

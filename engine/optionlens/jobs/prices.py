@@ -11,6 +11,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from ..analytics.calendar import last_completed_session, now_ny
+from ..analytics.splits import shows_unadjusted_split
 from ..config import get_settings
 from ..models import Bar
 from ..repo import bars as bars_repo
@@ -143,3 +144,36 @@ async def prices_refresh(symbols: list[str] | None = None) -> str:
 
     ok, failed = await run_bounded(rows, one, max(1, int(get_settings().nasdaq_rps)), "refresh")
     return f"{ok}/{len(rows)} refreshed, full refetch: {replaced[:50]}, failed: {len(failed)}"
+
+
+SPLITS_LOOKBACK_DAYS = 30
+SPLIT_WINDOW_DAYS = 10   # calendar days of bars read on each side of an ex-date
+
+
+def apply_splits(splits: list[dict], today: date) -> list[str]:
+    """Split-adjust stored daily bars for executed splits ({symbol, execution_date, split_factor}) whose stored
+    bars still show the unadjusted jump at the ex-date (idempotent: adjusted history is left alone; a later Nasdaq
+    refetch of adjusted history is not adjusted again). Returns 'SYM ratio ex-date' of the splits applied."""
+    done = []
+    for sp in splits:
+        ex, f = date.fromisoformat(str(sp["execution_date"])), sp.get("split_factor")
+        if ex > today or not f:
+            continue
+        b = bars_repo.get_bars(sp["symbol"], ex - timedelta(days=SPLIT_WINDOW_DAYS), ex + timedelta(days=SPLIT_WINDOW_DAYS))
+        dates = b["date"].astype("datetime64[D]").astype(object).tolist()
+        before = [c for d, c in zip(dates, b["close"].tolist()) if d < ex]
+        on = [c for d, c in zip(dates, b["close"].tolist()) if d >= ex]
+        if before and on and shows_unadjusted_split(before[-1], on[0], f):
+            bars_repo.scale_before(sp["symbol"], ex, f)
+            done.append(f"{sp['symbol']} {sp.get('ratio') or f} {ex}")
+    return done
+
+
+async def splits() -> str:
+    """Daily: the Nasdaq splits calendar of the last 30 days -> split-adjust stored bars that are not adjusted yet
+    (Nasdaq's history is adjusted, but bars stored before a split stay unadjusted until a refetch)."""
+    today = now_ny().date()
+    rows = await nasdaq.fetch_splits(today - timedelta(days=SPLITS_LOOKBACK_DAYS))
+    done = await asyncio.to_thread(apply_splits, rows, today)
+    return f"{len(rows)} splits listed, adjusted: {done[:50]}"
+
