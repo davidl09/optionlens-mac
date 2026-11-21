@@ -127,8 +127,9 @@ install_linux() {
   is_appimage "$new" || die "$asset is not an AppImage."
   (cd "$tmp" && "$new" --appimage-extract '*.desktop' >/dev/null && "$new" --appimage-extract 'usr/share/icons/hicolor/*/apps/optionlens.png' >/dev/null) \
     || die "could not read $asset (is it an AppImage for this system?)."
-  grep -qx 'Name=OptionLens' "$tmp"/squashfs-root/*.desktop && grep -qx "X-AppImage-Version=$version" "$tmp"/squashfs-root/*.desktop \
-    || die "$asset is not OptionLens $version."
+  if ! grep -qx 'Name=OptionLens' "$tmp"/squashfs-root/*.desktop || ! grep -qx "X-AppImage-Version=$version" "$tmp"/squashfs-root/*.desktop; then
+    die "$asset is not OptionLens $version."
+  fi
   say "AppImage verified"
 
   mv -f "$new" "$dest"
