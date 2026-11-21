@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,7 +7,8 @@ import { createLogger } from "./log";
 describe("createLogger", () => {
   it("rotates the log file by size and keeps the last 3", () => {
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const file = join(mkdtempSync(join(tmpdir(), "ol-log-")), "main.log");
+    const dir = mkdtempSync(join(tmpdir(), "ol-log-"));
+    const file = join(dir, "main.log");
     const log = createLogger(file, { maxBytes: 1000, keep: 3 });
     for (let i = 0; i < 100; i++) log.info(`line ${i} ${"x".repeat(80)}`);
     expect(statSync(file).size).toBeLessThanOrEqual(1000);
@@ -19,5 +20,6 @@ describe("createLogger", () => {
     for (let i = 0; i < 20; i++) again.warn("y".repeat(100));
     expect(statSync(file).size).toBeLessThanOrEqual(1000);
     vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
