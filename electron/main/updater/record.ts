@@ -4,7 +4,7 @@
 export interface PendingUpdate {
   version: string;
   previousVersion: string;
-  /** The previous app bundle, kept by the helper (…/backups/OptionLens-<previousVersion>.app). */
+  /** The previous version kept for a rollback: backups/OptionLens-<v>.app (macOS), -<v>.AppImage (Linux), -<v>-win-x64-setup.exe (Windows). */
   backupPath: string;
   /** Launches of `version` so far that have not been confirmed healthy. */
   launches: number;

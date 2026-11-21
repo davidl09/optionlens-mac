@@ -16,13 +16,13 @@ function harness(o: { settings?: Partial<UpdateSettings>; latest?: Release | Err
   const statuses: UpdateStatus[] = [];
   const blocker = { value: o.blocker ?? null };
   const d = {
-    currentVersion: "0.1.2", arch: "arm64",
+    currentVersion: "0.1.2", assetName: (v: string) => `OptionLens-${v}-arm64.zip`,
     settings: () => settings,
     latest: vi.fn(async () => { if (o.latest instanceof Error) throw o.latest; return o.latest ?? release(); }),
     download: vi.fn<UpdaterDeps["download"]>(async (spec) => { spec.onProgress?.(0.5); spec.onProgress?.(1); }),
     stage: vi.fn(async (_zip: string, stageDir: string) => `${stageDir}/OptionLens.app`),
     resetDir: vi.fn(async () => undefined),
-    location: () => (o.location ? { ok: false as const, reason: o.location } : { ok: true as const, bundlePath: "/Applications/OptionLens.app" }),
+    location: () => (o.location ? { ok: false as const, reason: o.location } : { ok: true as const, appPath: "/Applications/OptionLens.app" }),
     blocker: vi.fn(() => blocker.value),
     install: vi.fn(async () => undefined),
     records: { get: () => rec, set: (r: UpdateRecord) => { rec = r; } },
@@ -61,7 +61,7 @@ describe("updater", () => {
     expect(h.d.download.mock.calls[0][0]).toMatchObject({
       url: `https://github.com/${REPO}/releases/download/v0.1.3/OptionLens-0.1.3-arm64.zip`, dest: "/u/updates/0.1.3/OptionLens-0.1.3-arm64.zip", sha256: "c".repeat(64), size: 10,
     });
-    expect(h.d.stage).toHaveBeenCalledWith("/u/updates/0.1.3/OptionLens-0.1.3-arm64.zip", "/u/updates/0.1.3/stage", "0.1.3");
+    expect(h.d.stage).toHaveBeenCalledWith("/u/updates/0.1.3/OptionLens-0.1.3-arm64.zip", "/u/updates/0.1.3/stage", "0.1.3", "/Applications/OptionLens.app");
     expect(h.d.blocker).toHaveBeenCalledWith(true);
     expect(h.d.install).toHaveBeenCalledWith("/u/updates/0.1.3/stage/OptionLens.app", "/Applications/OptionLens.app", "0.1.3");
     expect(h.statuses.map((s) => s.phase)).toEqual(expect.arrayContaining(["checking", "available", "downloading", "ready", "installing"]));
@@ -69,7 +69,7 @@ describe("updater", () => {
   });
 
   it("automatic mode: downloads in the background, says it is ready, installs only when the policy allows", async () => {
-    const h = harness({ settings: { auto: true }, blocker: "Waiting until the Mac is idle to restart into the update." });
+    const h = harness({ settings: { auto: true }, blocker: "Waiting until the computer is idle to restart into the update." });
     await h.u.check();
     expect(h.u.status().phase).toBe("ready");
     expect(h.d.notify).toHaveBeenCalledWith("ready", "0.1.3");

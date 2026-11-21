@@ -18,7 +18,7 @@ export type LaunchDecision = { kind: "none" } | { kind: "watch" } | { kind: "rol
 const withSkipped = (skipped: string[], v: string) => (skipped.includes(v) ? skipped : [...skipped, v]);
 
 /** What this launch of `current` means for the update on probation (pure: returns the new record). */
-export function onLaunch(rec: UpdateRecord, current: string): { rec: UpdateRecord; decision: LaunchDecision } {
+export function onLaunch(rec: UpdateRecord, current: string, logFile: string): { rec: UpdateRecord; decision: LaunchDecision } {
   const p = rec.pending;
   if (!p) return { rec, decision: { kind: "none" } };
   if (p.version !== current) {
@@ -26,7 +26,7 @@ export function onLaunch(rec: UpdateRecord, current: string): { rec: UpdateRecor
     if (current === p.previousVersion) {
       notice = p.rollingBack
         ? `OptionLens ${p.version} did not start correctly, so ${current} was restored. ${p.version} will not be installed automatically.`
-        : `The update to ${p.version} could not be installed (details: ~/Library/Logs/OptionLens/updater.log).`;
+        : `The update to ${p.version} could not be installed (details: ${logFile}).`;
     }
     return { rec: { ...rec, pending: null, notice, skipped: p.rollingBack ? withSkipped(rec.skipped, p.version) : rec.skipped }, decision: { kind: "none" } };
   }

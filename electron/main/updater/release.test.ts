@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { assetName, parseSha256Digest, selectAsset } from "./asset";
+import { parseSha256Digest, selectAsset, updateAssetName } from "./asset";
 import { asset, HEX, releaseJson, REPO } from "./fixtures.test-helper";
 import { parseRelease, ReleaseSource, type CachedResponse, type HttpResponse } from "./release";
 import { isRepoSlug } from "./repo";
@@ -32,17 +32,32 @@ describe("release parsing", () => {
 
 describe("asset selection and digests", () => {
   const r = parseRelease(releaseJson(), REPO);
-  it("picks the zip for the process architecture", () => {
-    expect(selectAsset(r, "arm64")).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-arm64.zip" }, sha256: HEX });
-    expect(selectAsset(r, "x64")).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-x64.zip" }, sha256: "b".repeat(64) });
-    expect(selectAsset(r, "ia32")).toMatchObject({ ok: false, error: expect.stringMatching(/architecture/) });
-    expect(assetName("1.0.0", "x64")).toBe("OptionLens-1.0.0-x64.zip");
+  const pick = (platform: NodeJS.Platform, arch: string, release = r) => selectAsset(release, updateAssetName(platform, arch, release.version));
+  it("picks the macOS zip for the process architecture", () => {
+    expect(pick("darwin", "arm64")).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-arm64.zip" }, sha256: HEX });
+    expect(pick("darwin", "x64")).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-x64.zip" }, sha256: "b".repeat(64) });
+    expect(pick("darwin", "ia32")).toMatchObject({ ok: false, error: expect.stringMatching(/no OptionLens build for this system/) });
+  });
+  it("each OS picks its own asset from a release with every OS's files, never another OS's", () => {
+    const names = ["OptionLens-0.1.3-arm64.zip", "OptionLens-0.1.3-x64.zip", "OptionLens-0.1.3-win-x64.zip", "OptionLens-0.1.3-win-x64-setup.exe",
+      "OptionLens-0.1.3-linux-x64.AppImage", "OptionLens-0.1.3-linux-x64.AppImage.zsync", "OptionLens-0.1.3-x64.zip.blockmap"];
+    const all = parseRelease(releaseJson({ assets: names.map((n) => asset(n)) }), REPO);
+    expect(pick("darwin", "x64", all)).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-x64.zip" } });
+    expect(pick("darwin", "arm64", all)).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-arm64.zip" } });
+    expect(pick("win32", "x64", all)).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-win-x64-setup.exe" } });
+    expect(pick("linux", "x64", all)).toMatchObject({ ok: true, asset: { name: "OptionLens-0.1.3-linux-x64.AppImage" } });
+    for (const [os, arch] of [["linux", "arm64"], ["win32", "arm64"], ["win32", "ia32"], ["freebsd", "x64"]] as const) {
+      expect(pick(os, arch, all)).toMatchObject({ ok: false });
+    }
+    // a macOS-only release (0.1.3 and earlier) offers nothing to Windows and Linux
+    expect(pick("win32", "x64")).toMatchObject({ ok: false, error: expect.stringMatching(/has no OptionLens-0.1.3-win-x64-setup.exe/) });
+    expect(pick("linux", "x64")).toMatchObject({ ok: false, error: expect.stringMatching(/has no OptionLens-0.1.3-linux-x64.AppImage/) });
   });
   it("refuses an asset without a SHA-256 digest", () => {
     const noDigest = parseRelease(releaseJson({ assets: [asset("OptionLens-0.1.3-arm64.zip", { digest: null })] }), REPO);
-    expect(selectAsset(noDigest, "arm64")).toMatchObject({ ok: false, error: expect.stringMatching(/no SHA-256 digest/) });
+    expect(pick("darwin", "arm64", noDigest)).toMatchObject({ ok: false, error: expect.stringMatching(/no SHA-256 digest/) });
     const missing = parseRelease(releaseJson({ assets: [] }), REPO);
-    expect(selectAsset(missing, "arm64")).toMatchObject({ ok: false, error: expect.stringMatching(/has no OptionLens-0.1.3-arm64.zip/) });
+    expect(pick("darwin", "arm64", missing)).toMatchObject({ ok: false, error: expect.stringMatching(/has no OptionLens-0.1.3-arm64.zip/) });
   });
   it("parses only well-formed sha256 digests", () => {
     expect(parseSha256Digest(`sha256:${HEX}`)).toBe(HEX);

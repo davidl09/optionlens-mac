@@ -27,6 +27,7 @@ import { desktopPlatform, type PlatformDeps } from "./platform";
 import { parseStoredSettings, validateSettings } from "./settings";
 import { AppTray } from "./tray";
 import { createAppUpdater } from "./updater";
+import { platformInstaller } from "./updater/installers";
 import { createMainWindow } from "./window";
 
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
@@ -93,7 +94,8 @@ async function main(): Promise<void> {
   // ---- updates ----
   let tray: AppTray | null = null;
   const appUpdater = createAppUpdater({
-    userData, logsDir: app.getPath("logs"), currentVersion: app.getVersion(), packaged: app.isPackaged,
+    userData, logsDir: app.getPath("logs"), currentVersion: app.getVersion(), platform: process.platform, arch: process.arch,
+    installer: (paths) => platformInstaller(process.platform, { ...paths, pid: process.pid, currentVersion: app.getVersion(), packaged: app.isPackaged, execPath: process.execPath, env: process.env }),
     settings: () => settings.updates,
     context: () => ({ importing, idleSeconds: powerMonitor.getSystemIdleTime(), windowFocused: BrowserWindow.getFocusedWindow() !== null }),
     notify: (kind, version) => (kind === "available"

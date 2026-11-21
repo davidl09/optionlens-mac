@@ -3,12 +3,13 @@
 // bundle id and version in its Info.plist, and a valid signature (codesign --verify --deep --strict).
 import { lstat, mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { APP_ID } from "../app-id";
 
 /** Runs a program (absolute path, no shell) and resolves with its stdout; rejects on a non-zero exit. */
 export type Exec = (file: string, args: string[]) => Promise<string>;
 
 export const APP_BUNDLE = "OptionLens.app";
-export const BUNDLE_ID = "app.optionlens.mac";
+export const BUNDLE_ID = APP_ID;
 
 export interface BundleInfo { bundleId: string; version: string }
 

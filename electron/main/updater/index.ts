@@ -1,34 +1,30 @@
 // Wires the updater to the real world: GitHub over HTTPS (Node fetch: downloaded files get no quarantine
-// flag), ditto / PlistBuddy / codesign, the file system, the detached swap helper, Electron's idle time and
-// focus state. Also runs the launch check that keeps a new version on probation and rolls it back.
-import { execFile, spawn } from "node:child_process";
-import { accessSync, constants, existsSync, lstatSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+// flag or Mark-of-the-Web), this OS's installer (installers/: macOS .app swap, Windows NSIS installer, Linux
+// AppImage swap), the file system, Electron's idle time and focus state. Also runs the launch check that
+// keeps a new version on probation and rolls it back.
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { UpdateSettings, UpdateStatus } from "../../shared/api";
 import { jsonFile } from "../json-file";
 import type { Logger } from "../log";
+import { updateAssetName } from "./asset";
 import { downloadVerified, type StreamGet } from "./download";
-import { installLocation } from "./location";
+import type { Installer } from "./installers/types";
 import { parseUpdateRecord, type RecordStore, type UpdateRecord } from "./record";
 import { isCachedResponse, ReleaseSource, type HttpGet } from "./release";
 import { onLaunch, Probation, rollbackImpossible, rollbackStarted, confirmed } from "./rollback";
 import { installBlocker, type InstallContext } from "./safe-window";
 import { scheduleUpdates } from "./scheduler";
-import { stageBundle, type Exec } from "./stage";
-import { launchSwap, type SwapDeps } from "./swap";
 import { Updater } from "./updater";
-
-export const KEEP_APP_BACKUPS = 2;
-const OPEN = "/usr/bin/open";
 
 export interface AppUpdaterOptions {
   userData: string;
   logsDir: string;
   currentVersion: string;
-  packaged: boolean;
+  platform: NodeJS.Platform;
+  arch: string;
+  /** This OS's installer (installers/index.ts platformInstaller). */
+  installer: (paths: { backupsDir: string; logFile: string }) => Installer;
   settings: () => UpdateSettings;
   /** Idle time, focus and import state for the safe-window policy. */
   context: () => Omit<InstallContext, "now">;
@@ -38,15 +34,6 @@ export interface AppUpdaterOptions {
   quit: () => void;
   log: Logger;
 }
-
-const run = promisify(execFile);
-const exec: Exec = async (file, args) => (await run(file, args, { maxBuffer: 1024 * 1024 })).stdout;
-
-const swapDeps: SwapDeps = {
-  makeTempDir: () => mkdtemp(join(tmpdir(), "optionlens-update-")),
-  writeFile: (path, content, mode) => writeFile(path, content, { mode }),
-  spawnDetached: (file, args) => { spawn(file, args, { detached: true, stdio: "ignore" }).unref(); },
-};
 
 export function createAppUpdater(o: AppUpdaterOptions) {
   const backupsDir = join(o.userData, "backups");
@@ -66,25 +53,21 @@ export function createAppUpdater(o: AppUpdaterOptions) {
     read: () => { const v = cacheFile.read(); return isCachedResponse(v) ? v : null; },
     write: (c) => cacheFile.write(c),
   }, userAgent);
-  const location = () => installLocation({
-    platform: process.platform, packaged: o.packaged, execPath: process.execPath,
-    writable: (dir) => { try { accessSync(dir, constants.W_OK); return true; } catch { return false; } },
-  });
+  const installer = o.installer({ backupsDir, logFile });
+  const location = () => installer.location();
 
   const updater = new Updater({
     currentVersion: o.currentVersion,
-    arch: process.arch,
+    assetName: (version) => updateAssetName(o.platform, o.arch, version),
     settings: o.settings,
     latest: (repo) => source.latest(repo),
     download: (spec) => downloadVerified(streamGet, spec),
-    stage: (zip, stageDir, version) => stageBundle(exec, zip, stageDir, version),
+    stage: (file, stageDir, version, appPath) => installer.stage(file, stageDir, version, appPath),
     resetDir: async (dir) => { await rm(dir, { recursive: true, force: true }); await mkdir(dir, { recursive: true }); },
     location,
     blocker: (user) => installBlocker({ ...o.context(), now: new Date() }, user),
-    install: async (stagedApp, bundlePath, version) => {
-      const backupPath = join(backupsDir, `OptionLens-${o.currentVersion}.app`);
-      await launchSwap({ pid: process.pid, target: bundlePath, source: stagedApp, archive: backupPath,
-        prune: { dir: backupsDir, keep: KEEP_APP_BACKUPS }, logFile, open: OPEN }, swapDeps);
+    install: async (staged, appPath, version) => {
+      const backupPath = await installer.install(staged, appPath, version);
       // The helper waits for this process to exit, so recording the update on probation here is in time.
       const rec = records.get();
       records.set({ ...rec, skipped: rec.skipped.filter((v) => v !== version),
@@ -106,7 +89,7 @@ export function createAppUpdater(o: AppUpdaterOptions) {
     const p = rec.pending;
     if (!p) return;
     const where = location();
-    const backupOk = existsSync(p.backupPath) && lstatSync(p.backupPath).isDirectory();
+    const backupOk = installer.hasBackup(p.backupPath);
     if (!where.ok || !backupOk) {
       const why = !backupOk ? `the backup ${p.backupPath} is missing.` : where.ok ? "" : where.reason;
       o.log.error(`rollback of ${p.version} impossible: ${why}`);
@@ -116,7 +99,7 @@ export function createAppUpdater(o: AppUpdaterOptions) {
     }
     records.set(rollbackStarted(rec));
     o.log.warn(`OptionLens ${p.version} did not start correctly: restoring ${p.previousVersion} from ${p.backupPath}`);
-    await launchSwap({ pid: process.pid, target: where.bundlePath, source: p.backupPath, archive: null, prune: null, logFile, open: OPEN }, swapDeps);
+    await installer.restore(p.backupPath, where.appPath);
     o.quit();
   };
 
@@ -127,7 +110,7 @@ export function createAppUpdater(o: AppUpdaterOptions) {
      * quits). A Probation: feed it the engine's progress and the quit. null: nothing on probation.
      */
     launchCheck(): "rolling-back" | Probation | null {
-      const { rec, decision } = onLaunch(records.get(), o.currentVersion);
+      const { rec, decision } = onLaunch(records.get(), o.currentVersion, logFile);
       records.set(rec);
       if (decision.kind === "rollback") {
         void rollBack().catch((e: unknown) => o.log.error(`rollback: ${(e as Error).message}`));

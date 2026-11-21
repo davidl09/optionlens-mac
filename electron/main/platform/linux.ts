@@ -4,6 +4,7 @@
 // is no tray, and closing the window quits the app. Notifications go through libnotify (Electron).
 import { isAbsolute, join } from "node:path";
 import type { LoginItemStatus } from "../../shared/api";
+import { desktopEntryKeys } from "../desktop-entry";
 import { standardMenu } from "./menu";
 import { posixPython } from "./python-layout";
 import { OPENED_AT_LOGIN_ARG, type DesktopPlatform, type PlatformDeps, type RunFn } from "./types";
@@ -33,14 +34,7 @@ export function autostartEntry(exec: string): string {
 
 /** Whether an autostart entry runs at login (Hidden=true or X-GNOME-Autostart-enabled=false turn it off). */
 export function autostartEnabled(content: string): boolean {
-  const keys = new Map<string, string>();
-  let group = "";
-  for (const raw of content.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (line.startsWith("[")) { group = line; continue; }
-    const eq = line.indexOf("=");
-    if (group === "[Desktop Entry]" && eq > 0) keys.set(line.slice(0, eq).trim(), line.slice(eq + 1).trim());
-  }
+  const keys = desktopEntryKeys(content);
   return keys.get("Hidden") !== "true" && keys.get("X-GNOME-Autostart-enabled") !== "false";
 }
 

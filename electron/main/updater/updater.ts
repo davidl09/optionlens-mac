@@ -2,7 +2,7 @@
 // effect (GitHub, download, staging, the install itself, notifications, the policy) is a dependency, so
 // this file has no I/O of its own and is unit-tested with fakes.
 //
-// Manual mode: the user is told once per new version and installs from Settings or the menu-bar menu.
+// Manual mode: the user is told once per new version and installs from Settings or the tray menu.
 // Automatic mode: a new version is downloaded in the background, the user is told it is ready, and it is
 // installed at a safe moment (tick()) or when the user clicks Restart now. A version that was rolled back
 // is never installed automatically.
@@ -18,19 +18,20 @@ import { isUpdate } from "./version";
 
 export interface UpdaterDeps {
   currentVersion: string;
-  arch: string;
+  /** The release asset this installation updates from (asset.ts), or null when there is no build for it. */
+  assetName(version: string): string | null;
   settings(): UpdateSettings;
   latest(repo: string): Promise<Release>;
   download(spec: DownloadSpec): Promise<void>;
-  /** Extracts and validates the zip; resolves with the staged app's path. */
-  stage(zip: string, stageDir: string, version: string): Promise<string>;
+  /** Checks the verified download (identity, version) and prepares it; resolves with the staged path. */
+  stage(download: string, stageDir: string, version: string, appPath: string): Promise<string>;
   /** Removes and recreates a folder. */
   resetDir(dir: string): Promise<void>;
   location(): Location;
   /** Safe-window policy: null when the app may restart now. */
   blocker(userInitiated: boolean): string | null;
   /** Records the pending update, starts the helper and quits the app. */
-  install(stagedApp: string, bundlePath: string, version: string): Promise<void>;
+  install(staged: string, appPath: string, version: string): Promise<void>;
   records: RecordStore;
   notify(kind: "available" | "ready", version: string): void;
   onStatus(s: UpdateStatus): void;
@@ -105,7 +106,7 @@ export class Updater {
     else await this.download();
   }
 
-  /** The user's "Download and install" (Settings) or "Restart now" (notification, menu-bar menu). */
+  /** The user's "Download and install" (Settings) or "Restart now" (notification, tray menu). */
   async installNow(): Promise<Result> {
     if (this.phase === "ready") return this.install(true);
     if (this.phase === "downloading") { this.installWhenReady = true; return { ok: true }; }
@@ -152,18 +153,18 @@ export class Updater {
     if (!r) return;
     const where = this.d.location();
     if (!where.ok) { this.installWhenReady = false; this.set("available", { blocked: where.reason }); return; }
-    const sel = selectAsset(r, this.d.arch);
+    const sel = selectAsset(r, this.d.assetName(r.version));
     if (!sel.ok) { this.installWhenReady = false; this.set("error", { error: sel.error }); return; }
     this.set("downloading", { progress: 0, error: null, blocked: null });
     const dir = join(this.d.workDir, r.version);
     try {
       await this.d.resetDir(dir);
-      const zip = join(dir, sel.asset.name);
+      const file = join(dir, sel.asset.name);
       await this.d.download({
-        url: sel.asset.url, dest: zip, sha256: sel.sha256, size: sel.asset.size,
+        url: sel.asset.url, dest: file, sha256: sel.sha256, size: sel.asset.size,
         onProgress: (f) => { this.progress = f; this.d.onStatus(this.status()); },
       });
-      const app = await this.d.stage(zip, join(dir, "stage"), r.version);
+      const app = await this.d.stage(file, join(dir, "stage"), r.version, where.appPath);
       this.staged = { version: r.version, app };
       this.d.log.info(`update ${r.version} downloaded, verified and staged at ${app}`);
     } catch (e) {
@@ -188,7 +189,7 @@ export class Updater {
     }
     this.set("installing", { blocked: null });
     try {
-      await this.d.install(staged.app, where.bundlePath, staged.version);
+      await this.d.install(staged.app, where.appPath, staged.version);
       return { ok: true };
     } catch (e) {
       this.d.log.error(`installing update ${staged.version}: ${(e as Error).message}`);

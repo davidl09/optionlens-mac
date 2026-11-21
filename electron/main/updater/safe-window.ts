@@ -1,6 +1,6 @@
 // When an automatic update may restart the app. Never while the engine collects the closing chains
 // (16:15–16:50 New York time on weekdays) or while a data import runs. Otherwise either the user asked
-// for it (Restart now) or the Mac has been idle for 5 minutes with no OptionLens window focused.
+// for it (Restart now) or the computer has been idle for 5 minutes with no OptionLens window focused.
 
 export const CLOSE_WINDOW = { from: 16 * 60 + 15, to: 16 * 60 + 50 } as const;
 export const IDLE_SECONDS = 5 * 60;
@@ -31,6 +31,6 @@ export function installBlocker(c: InstallContext, userInitiated: boolean): strin
   if (c.importing) return "A data import is running; the update installs after it finishes.";
   if (inCloseCollectionWindow(c.now)) return "The engine is collecting closing data (16:15–16:50 ET); the update installs after that.";
   if (userInitiated) return null;
-  if (c.windowFocused || c.idleSeconds < IDLE_SECONDS) return "Waiting until the Mac is idle to restart into the update.";
+  if (c.windowFocused || c.idleSeconds < IDLE_SECONDS) return "Waiting until the computer is idle to restart into the update.";
   return null;
 }

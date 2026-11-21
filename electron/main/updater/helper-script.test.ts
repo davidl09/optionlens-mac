@@ -33,8 +33,8 @@ describe("helper script", () => {
     writeFileSync(opener, `#!/bin/bash\nprintf '%s\\n' "$1" >> ${shQuote(join(root, "opened.txt"))}\n`, { mode: 0o755 });
     plan = {
       pid: deadPid(), target: join(root, "Applications", "OptionLens.app"), source: join(support, "updates", "0.1.3", "stage", "OptionLens.app"),
-      archive: join(support, "backups", "OptionLens-0.1.2.app"), prune: { dir: join(support, "backups"), keep: 2 },
-      logFile: join(root, "updater.log"), workDir: join(root, "work dir"), open: opener,
+      archive: join(support, "backups", "OptionLens-0.1.2.app"), prune: { dir: join(support, "backups"), keep: 2, suffix: ".app" },
+      logFile: join(root, "updater.log"), workDir: join(root, "work dir"), open: [opener, join(root, "Applications", "OptionLens.app")], detach: false,
     };
   });
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
@@ -57,6 +57,8 @@ describe("helper script", () => {
     expect(() => helperScript({ ...plan, source: "/a\nrm -rf /" })).toThrow(/control/);
     expect(() => helperScript({ ...plan, pid: 1 })).toThrow(/pid/);
     expect(() => helperScript({ ...plan, pid: 1.5 })).toThrow(/pid/);
+    expect(() => helperScript({ ...plan, open: ["open"] })).toThrow(/absolute/);
+    expect(() => helperScript({ ...plan, prune: { ...plan.prune!, suffix: "*" as ".app" } })).toThrow(/suffix/);
   });
 
   it("swaps the bundle, keeps the previous one as a backup, prunes to 2, opens the app and cleans up", () => {
@@ -83,6 +85,35 @@ describe("helper script", () => {
   });
 });
 
+describe("helper script (Linux AppImage)", () => {
+  it("replaces the AppImage file, keeps the previous one, prunes *.AppImage backups and relaunches it detached", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ol appimage '"));
+    try {
+      const bin = join(root, "My Apps");
+      const backups = join(root, ".config", "OptionLens", "backups");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(backups, { recursive: true });
+      const target = join(bin, "OptionLens.AppImage");
+      const staged = join(bin, ".OptionLens-0.1.4.AppImage.update");
+      const launched = join(root, "launched.txt");
+      writeFileSync(target, `#!/bin/sh\necho 0.1.3 >> ${shQuote(launched)}\n`, { mode: 0o755 });
+      writeFileSync(staged, `#!/bin/sh\necho 0.1.4 "$@" >> ${shQuote(launched)}\n`, { mode: 0o755 });
+      for (const [v, t] of [["0.1.1", 1000], ["0.1.2", 2000]] as const) { writeFileSync(join(backups, `OptionLens-${v}.AppImage`), v); utimesSync(join(backups, `OptionLens-${v}.AppImage`), t, t); }
+      writeFileSync(join(backups, "OptionLens-0.1.0.app"), "not an AppImage backup: left alone");
+      mkdirSync(join(root, "work"));
+      const f = join(root, "swap.sh");
+      writeFileSync(f, helperScript({ pid: deadPid(), target, source: staged, archive: join(backups, "OptionLens-0.1.3.AppImage"),
+        prune: { dir: backups, keep: 2, suffix: ".AppImage" }, logFile: join(root, "updater.log"), workDir: join(root, "work"), open: [target], detach: true }));
+      expect(spawnSync("/bin/bash", [f]).status).toBe(0);
+      for (let i = 0; i < 50 && !existsSync(launched); i++) await new Promise((r) => setTimeout(r, 50));
+      expect(readFileSync(launched, "utf8")).toBe("0.1.4\n");
+      expect(existsSync(staged)).toBe(false);
+      expect(readdirSync(backups).sort()).toEqual(["OptionLens-0.1.0.app", "OptionLens-0.1.2.AppImage", "OptionLens-0.1.3.AppImage"]);
+      expect(readFileSync(join(backups, "OptionLens-0.1.3.AppImage"), "utf8")).toContain("0.1.3");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
 describe("launchSwap (rollback)", () => {
   it("discards the bad bundle inside the helper's temp folder and restores the backup", async () => {
     const root = mkdtempSync(join(tmpdir(), "ol rollback "));
@@ -93,7 +124,7 @@ describe("launchSwap (rollback)", () => {
       makeApp(backup, "0.1.2");
       const work = join(root, "tmp work");
       let spawned: string[] = [];
-      await launchSwap({ pid: deadPid(), target, source: backup, archive: null, prune: null, logFile: join(root, "log"), open: "/bin/true" }, {
+      await launchSwap({ pid: deadPid(), target, source: backup, archive: null, prune: null, logFile: join(root, "log"), open: ["/bin/true"], detach: false }, {
         makeTempDir: async () => { mkdirSync(work); return work; },
         writeFile: async (p, c, mode) => writeFileSync(p, c, { mode }),
         spawnDetached: (file, args) => { spawned = [file, ...args]; },

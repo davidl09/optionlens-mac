@@ -2,53 +2,54 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_RECORD, parseUpdateRecord, type UpdateRecord } from "./record";
 import { confirmed, onLaunch, Probation, rollbackImpossible, rollbackStarted } from "./rollback";
 
+const LOG = "/logs/updater.log";
 const pending = { version: "0.1.4", previousVersion: "0.1.3", backupPath: "/b/OptionLens-0.1.3.app", launches: 0, rollingBack: false };
 const rec = (over: Partial<UpdateRecord["pending"] & object> = {}, top: Partial<UpdateRecord> = {}): UpdateRecord => ({ ...EMPTY_RECORD, pending: { ...pending, ...over }, ...top });
 
 describe("launch decisions", () => {
   it("nothing on probation: nothing to do", () => {
-    expect(onLaunch(EMPTY_RECORD, "0.1.3")).toEqual({ rec: EMPTY_RECORD, decision: { kind: "none" } });
+    expect(onLaunch(EMPTY_RECORD, "0.1.3", LOG)).toEqual({ rec: EMPTY_RECORD, decision: { kind: "none" } });
   });
 
   it("the first two launches of a new version are watched; after two unconfirmed launches the next one rolls back", () => {
     let r = rec();
-    const first = onLaunch(r, "0.1.4");
+    const first = onLaunch(r, "0.1.4", LOG);
     expect(first.decision).toEqual({ kind: "watch" });
     r = first.rec;
-    const second = onLaunch(r, "0.1.4");                 // the first launch crashed before it was confirmed
+    const second = onLaunch(r, "0.1.4", LOG);                 // the first launch crashed before it was confirmed
     expect(second.decision).toEqual({ kind: "watch" });
-    const third = onLaunch(second.rec, "0.1.4");          // and the second one too
+    const third = onLaunch(second.rec, "0.1.4", LOG);          // and the second one too
     expect(third.decision).toMatchObject({ kind: "rollback", pending: { version: "0.1.4", previousVersion: "0.1.3" } });
   });
 
   it("a confirmed launch ends probation", () => {
-    const r = confirmed(onLaunch(rec(), "0.1.4").rec);
+    const r = confirmed(onLaunch(rec(), "0.1.4", LOG).rec);
     expect(r.pending).toBeNull();
-    expect(onLaunch(r, "0.1.4").decision).toEqual({ kind: "none" });
+    expect(onLaunch(r, "0.1.4", LOG).decision).toEqual({ kind: "none" });
   });
 
   it("after a rollback the restored version reports it, skips the bad version and does not roll back itself", () => {
     const started = rollbackStarted(rec({ launches: 2 }));
     expect(started.pending?.rollingBack).toBe(true);
     expect(started.skipped).toEqual(["0.1.4"]);
-    const { rec: after, decision } = onLaunch(started, "0.1.3");
+    const { rec: after, decision } = onLaunch(started, "0.1.3", LOG);
     expect(decision).toEqual({ kind: "none" });
     expect(after.pending).toBeNull();
     expect(after.skipped).toEqual(["0.1.4"]);
     expect(after.notice).toMatch(/0.1.4 did not start correctly, so 0.1.3 was restored/);
-    expect(onLaunch(after, "0.1.3").decision).toEqual({ kind: "none" });
+    expect(onLaunch(after, "0.1.3", LOG).decision).toEqual({ kind: "none" });
   });
 
   it("loop guard: still on the bad version after a rollback → stop trying and say so", () => {
-    const { rec: after, decision } = onLaunch(rollbackStarted(rec({ launches: 2 })), "0.1.4");
+    const { rec: after, decision } = onLaunch(rollbackStarted(rec({ launches: 2 })), "0.1.4", LOG);
     expect(decision).toEqual({ kind: "none" });
     expect(after.pending).toBeNull();
     expect(after.notice).toMatch(/restoring 0.1.3 failed/);
-    expect(onLaunch(after, "0.1.4").decision).toEqual({ kind: "none" });
+    expect(onLaunch(after, "0.1.4", LOG).decision).toEqual({ kind: "none" });
   });
 
   it("the swap never happened (helper failed): the old version says the install failed", () => {
-    const { rec: after } = onLaunch(rec(), "0.1.3");
+    const { rec: after } = onLaunch(rec(), "0.1.3", LOG);
     expect(after.pending).toBeNull();
     expect(after.skipped).toEqual([]);
     expect(after.notice).toMatch(/could not be installed/);

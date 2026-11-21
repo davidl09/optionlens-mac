@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { bundlePathFromExecutable, installLocation, isTranslocated, MOVE_TO_APPLICATIONS } from "./location";
+import { bundlePathFromExecutable, isTranslocated, macLocation, MOVE_TO_APPLICATIONS } from "./location";
 
 const EXE = "/Applications/OptionLens.app/Contents/MacOS/OptionLens";
-const probe = (over: Partial<Parameters<typeof installLocation>[0]> = {}) => installLocation({ platform: "darwin", packaged: true, execPath: EXE, writable: () => true, ...over });
+const probe = (over: Partial<Parameters<typeof macLocation>[0]> = {}) => macLocation({ packaged: true, execPath: EXE, writable: () => true, ...over });
 
 describe("install location", () => {
   it("finds the bundle from the executable", () => {
@@ -13,7 +13,7 @@ describe("install location", () => {
   });
 
   it("installs into a writable, non-translocated bundle", () => {
-    expect(probe()).toEqual({ ok: true, bundlePath: "/Applications/OptionLens.app" });
+    expect(probe()).toEqual({ ok: true, appPath: "/Applications/OptionLens.app" });
     expect(probe({ execPath: "/Users/me/Applications/OptionLens.app/Contents/MacOS/OptionLens" })).toMatchObject({ ok: true });
   });
 
@@ -26,8 +26,7 @@ describe("install location", () => {
     expect(probe({ writable: (d) => d !== "/Applications/OptionLens.app" })).toEqual({ ok: false, reason: MOVE_TO_APPLICATIONS });
   });
 
-  it("does not install from development builds or other platforms", () => {
+  it("does not install from development builds", () => {
     expect(probe({ packaged: false })).toMatchObject({ ok: false, reason: expect.stringMatching(/packaged/) });
-    expect(probe({ platform: "linux" })).toMatchObject({ ok: false, reason: expect.stringMatching(/macOS/) });
   });
 });
