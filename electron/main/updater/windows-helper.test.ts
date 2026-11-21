@@ -62,33 +62,39 @@ describe("Windows update helper", () => {
   describe.runIf(process.platform === "win32")("on Windows", () => {
     const deadPid = () => Number(spawnSync("cmd.exe", ["/c", "exit"]).pid);
     function run(o: { installerExit: number; fallback: boolean }) {
-      const root = mkdtempSync(join(tmpdir(), "ol helper ’"));
+      const root = mkdtempSync(join(tmpdir(), "ol helper ' ’"));
       const work = join(root, "work dir");
       mkdirSync(work);
-      const marks = join(root, "marks.txt");
+      // The fake installers are .bat files, which cmd reads in the OEM code page: their marker file has an
+      // ASCII path. The helper's own paths (script, installer, app, log) keep the space, ' and ’.
+      const marksDir = mkdtempSync(join(tmpdir(), "ol-marks-"));
+      const marks = join(marksDir, "marks.txt");
       const bat = (name: string, body: string) => { const f = join(root, name); writeFileSync(f, `@echo off\r\n${body}\r\n`); return f; };
       const installer = bat("setup new.bat", `echo installed %*>>"${marks}"\r\nexit /b ${o.installerExit}`);
       const fallback = o.fallback ? bat("setup old.bat", `echo restored %*>>"${marks}"\r\nexit /b 0`) : null;
       const app = bat("OptionLens.bat", `echo launched>>"${marks}"`);
       const script = join(work, "update.ps1");
-      writeFileSync(script, `\ufeff${windowsHelperScript({ pid: deadPid(), installer, fallback, app, logFile: join(root, "updater.log"), workDir: work })}`);
+      const logFile = join(root, "updater.log");
+      writeFileSync(script, `\ufeff${windowsHelperScript({ pid: deadPid(), installer, fallback, app, logFile, workDir: work })}`);
       const r = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), [...POWERSHELL_ARGS, script], { encoding: "utf8" });
-      for (let i = 0; i < 40 && !readFileSync(marks, "utf8").includes("launched"); i++) spawnSync("powershell.exe", ["-NoProfile", "-Command", "Start-Sleep -Milliseconds 250"]);
-      const out = { status: r.status, marks: readFileSync(marks, "utf8").replace(/\r/g, ""), log: readFileSync(join(root, "updater.log"), "utf8"), workGone: !existsSync(work) };
+      const read = (f: string) => (existsSync(f) ? readFileSync(f, "utf8").replace(/\r/g, "") : "");
+      for (let i = 0; i < 40 && !read(marks).includes("launched"); i++) spawnSync("powershell.exe", ["-NoProfile", "-Command", "Start-Sleep -Milliseconds 250"]);
+      const out = { status: r.status, marks: read(marks), log: `${read(logFile)}${r.stdout}${r.stderr}`, workGone: !existsSync(work) };
+      rmSync(marksDir, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
       return out;
     }
     it("installs silently, relaunches the app and cleans up", () => {
       const r = run({ installerExit: 0, fallback: true });
       expect(r.status).toBe(0);
-      expect(r.marks).toBe("installed /S --updated\nlaunched\n");
+      expect(r.marks, r.log).toBe("installed /S --updated\nlaunched\n");
       expect(r.log).toMatch(/installed .*setup new.bat/);
       expect(r.workGone).toBe(true);
     });
     it("runs the previous version's installer when the new one fails", () => {
       const r = run({ installerExit: 2, fallback: true });
       expect(r.status).toBe(1);
-      expect(r.marks).toBe("installed /S --updated\nrestored /S --updated\nlaunched\n");
+      expect(r.marks, r.log).toBe("installed /S --updated\nrestored /S --updated\nlaunched\n");
       expect(r.log).toMatch(/failed \(exit code 2\)/);
     });
   });
