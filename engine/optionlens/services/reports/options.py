@@ -445,7 +445,7 @@ BROAD_VIEW = ReportDef(
 # ============================================================================ put protection
 PP_COLS = (*C.DESC_SHORT, Col("price", "Price", "money", C.G_QUOTE), Col("expiry", "Expiry", "date"),
            Col("dte", "DTE", "int"), Col("strike", "Put strike", "money"),
-           Col("otm_pct", "% OTM", "pct", description="1 − strike/spot"),
+           Col("otm_pct", "% OTM", "pct", description="How far the put strike is below spot: 1 − strike/spot (≥ the target)"),
            Col("put_bid", "Bid", "money"), Col("put_ask", "Ask", "money"), Col("put_mid", "Mid", "money"),
            Col("cost_pct", "Cost %", "pct", description="ask / spot"),
            Col("annualized_cost", "Annualized cost", "pct", description="cost % · 365 / DTE"),
@@ -465,14 +465,15 @@ def run_put_protection(p: RunParams) -> Output:
     for ca in chains:
         if allowed is not None and ca.symbol not in allowed:
             continue
-        ok = (ca.ask > 0) & np.isfinite(ca.ask)
+        # an out-of-the-money put at least `otm` below spot: strike ≤ spot · (1 − otm), the highest such strike
+        ok = (ca.ask > 0) & np.isfinite(ca.ask) & (ca.strike <= ca.spot * (1 - otm) * (1 + 1e-9))
         if not ok.any():
             continue
         dtes = ca.exp_dte
         cand = np.unique(ca.exp_idx[ok])
         e = cand[np.argmin(np.abs(dtes[cand] - target))]
         rows_e = np.nonzero(ok & (ca.exp_idx == e))[0]
-        j = rows_e[np.argmin(np.abs(ca.strike[rows_e] - ca.spot * (1 - otm)))]
+        j = rows_e[np.argmax(ca.strike[rows_e])]
         exp, dte, k = ca.expiries[e], int(dtes[e]), float(ca.strike[j])
         cost = ca.ask[j] / ca.spot
         i = pos.get(ca.symbol)
@@ -500,8 +501,9 @@ PUT_PROTECTION = ReportDef(
     (p_int("target_dte", "Target DTE", 30, 1, 400), p_num("otm_pct", "% OTM", 0.05, 0, 0.5, step=0.01),
      p_int("min_oi", "Min OI", 0, 0), KIND, UNIVERSE_ONLY, *SCOPE),
     PP_COLS, run_put_protection, ("annualized_cost", "asc"),
-    ("Uses the listed expiry nearest the target DTE and the listed strike nearest spot × (1 − % OTM); "
-     "cost at the ask.", C.NOTE_CHAIN_UNIVERSE))
+    ("Uses the listed expiry nearest the target DTE and the highest listed strike at or below spot × (1 − % OTM), "
+     "so the put is at least that far out of the money (symbols without one are left out); cost at the ask.",
+     C.NOTE_CHAIN_UNIVERSE))
 
 REPORTS = (UOV, IV_RANKINGS, IV_MOVERS, VOLUME_LEADERS, OI_CHANGES, LARGE_VOLUME, OPTION_SCREENER, BROAD_VIEW,
            PUT_PROTECTION)

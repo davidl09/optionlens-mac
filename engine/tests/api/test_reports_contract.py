@@ -64,3 +64,13 @@ def test_user_data_shapes(api, seeded):
     check(a.json(), "Alert")
     check(api.get("/api/alerts").json(), "Alert[]")
     check(api.get("/api/notifications").json(), "Notification[]")
+
+
+def test_protective_put_is_out_of_the_money_by_at_least_the_target(api):
+    """DELL-style regression: a 5% OTM target must never pick an in-the-money put (strike above spot)."""
+    for otm in (0.05, 0.1):
+        rows = api.get(f"/api/reports/put-protection?otm_pct={otm}&target_dte=30").json()["rows"]
+        assert rows
+        for r in rows:
+            assert r["strike"] <= r["price"] * (1 - otm) + 1e-6
+            assert r["otm_pct"] == pytest.approx(1 - r["strike"] / r["price"]) and r["otm_pct"] >= otm - 1e-9
