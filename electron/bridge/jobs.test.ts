@@ -127,16 +127,42 @@ describe("pushChain", () => {
     const body = ctx.ingest.calls.chain[0] as { final: boolean; session_date?: string; contracts: unknown[] };
     expect(body.final).toBe(false);
     expect(body.session_date).toBeUndefined();
-    expect(body.contracts).toHaveLength(9);
+    expect(body.contracts).toHaveLength(10);
   });
 
-  it("a live chain posts the contracts that have data and reports its coverage", async () => {
+  it("a live chain posts every requested contract (unquoted ones with nulls) and reports coverage per expiry", async () => {
     const m = aaplMarket();
     const base = m.ticks;
     m.ticks = (id) => (id.endsWith(":C") && Number(id.split(":")[2]) >= 110 ? [] : base(id));
-    const r = await pushChain(ctxFor(new FakeSession(m)), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
-    expect(r?.contracts).toBe(9);
+    const ctx = ctxFor(new FakeSession(m));
+    const r = await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
+    expect(r?.contracts).toBe(10);
     expect(r?.coverage).toBeCloseTo(0.9, 6);
+    expect(r?.expiries).toEqual([{ expiry: "2026-11-27", contracts: 10, quoted: 9 }]);
+    const body = ctx.ingest.calls.chain[0] as { contracts: { strike: number; right: string; bid: number | null; oi: number | null }[] };
+    expect(body.contracts.find((c) => c.strike === 110 && c.right === "C")).toMatchObject({ bid: null, oi: null });
+  });
+
+  it("every picked expiry is accounted for: one whose contracts got no quotes, one whose contract list never came", async () => {
+    // DELL on a Saturday: the two weeklies before earnings must not silently disappear.
+    const m = aaplMarket();
+    const base = m.ticks;
+    m.ticks = (id) => (id.includes(":20261127:") ? [] : base(id));
+    const s = new FakeSession(m);
+    const details = s.contractDetails.bind(s);
+    s.contractDetails = async (c) => {
+      if (c.lastTradeDateOrContractMonth === "20261204") throw new TwsTimeoutError("AAPL OPT contract details 20261204", 180_000);
+      return details(c);
+    };
+    const ctx = ctxFor(s);
+    const r = await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 3, moneyness: 0.1 }, final: false, sessionDate: null });
+    expect(r?.expiries).toEqual([
+      { expiry: "2026-11-27", contracts: 10, quoted: 0 },
+      { expiry: "2026-12-04", contracts: 0, quoted: 0 },
+      { expiry: "2026-12-11", contracts: 10, quoted: 10 },
+    ]);
+    const body = ctx.ingest.calls.chain[0] as { contracts: { expiry: string }[] };
+    expect(new Set(body.contracts.map((c) => c.expiry))).toEqual(new Set(["2026-11-27", "2026-12-11"]));
   });
 
   it("reports a symbol IBKR lists no options for (no option parameters) to the engine instead of a chain", async () => {

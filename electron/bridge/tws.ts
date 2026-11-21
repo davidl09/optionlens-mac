@@ -31,7 +31,8 @@ export type TickEvent =
   | { kind: "price"; field: number; value: number }
   | { kind: "size"; field: number; value: number }
   | { kind: "generic"; field: number; value: number }
-  | { kind: "option"; field: number; iv?: number; delta?: number; gamma?: number; vega?: number; theta?: number; undPrice?: number };
+  | { kind: "option"; field: number; iv?: number; delta?: number; gamma?: number; vega?: number; theta?: number; undPrice?: number }
+  | { kind: "string"; field: number; value: string };
 
 export interface TickHandlers { onTick(e: TickEvent): void; onError(e: TwsRequestError): void }
 

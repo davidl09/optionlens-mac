@@ -82,6 +82,7 @@ class IbSession implements TwsSession {
       if (field !== undefined && value !== undefined) tick(reqId, { kind: "size", field, value: Number(value) });
     });
     ib.on(EventName.tickGeneric, (reqId: number, field: number, value: number) => tick(reqId, { kind: "generic", field, value }));
+    ib.on(EventName.tickString, (reqId: number, field: number, value: string) => tick(reqId, { kind: "string", field, value: String(value) }));
     ib.on(EventName.tickOptionComputation, (reqId: number, field: number, _attrib: number | undefined, iv?: number, delta?: number, _optPrice?: number,
       _pvDiv?: number, gamma?: number, vega?: number, theta?: number, undPrice?: number) => tick(reqId, { kind: "option", field, iv, delta, gamma, vega, theta, undPrice }));
   }

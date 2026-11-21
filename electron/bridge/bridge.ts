@@ -7,7 +7,7 @@ import { batchLines } from "../main/settings";
 import { FULL_CHAIN, type ChainShape } from "./chain";
 import { COMPETING_MESSAGE, COMPETING_PAUSE_MS, TwsSupervisor } from "./connection";
 import type { IngestApi } from "./ingest";
-import { FINAL_MIN_COVERAGE, pushChain, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { FINAL_MIN_COVERAGE, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
@@ -42,6 +42,23 @@ const group = {
   indexBars: (s: string): Group => ({ id: `index-bars:${s}`, label: `${s} daily bars` }),
 };
 
+interface ChainGaps { symbol: string; coverage: number; noQuotes: string[]; noContracts: string[] }
+
+/** What a posted chain is missing, or null when complete enough (≥ FINAL_MIN_COVERAGE, every expiry quoted). */
+function chainGaps(symbol: string, r: ChainPushed): ChainGaps | null {
+  const noQuotes = r.expiries.filter((e) => e.contracts > 0 && e.quoted === 0).map((e) => e.expiry);
+  const noContracts = r.expiries.filter((e) => e.contracts === 0).map((e) => e.expiry);
+  if (r.coverage >= FINAL_MIN_COVERAGE && !noQuotes.length && !noContracts.length) return null;
+  return { symbol, coverage: r.coverage, noQuotes, noContracts };
+}
+
+function chainGapsText(g: ChainGaps): string {
+  const parts = [`${Math.round(g.coverage * 100)}% of contracts quoted`];
+  if (g.noQuotes.length) parts.push(`no quotes for ${g.noQuotes.join(", ")}`);
+  if (g.noContracts.length) parts.push(`no contracts from IBKR for ${g.noContracts.join(", ")}`);
+  return `Incomplete IBKR chain for ${g.symbol}: ${parts.join("; ")}`;
+}
+
 export class Bridge {
   readonly scheduler: Scheduler;
   private readonly supervisor: TwsSupervisor;
@@ -69,8 +86,8 @@ export class Bridge {
   private readonly denied = new Map<string, { at: number; label: string }>();
   /** Symbols whose last chain attempt found that IBKR lists no options. */
   private readonly noOptions = new Set<string>();
-  /** Last chain posted with less than FINAL_MIN_COVERAGE of its contracts quoted (status note). */
-  private incompleteChain: { symbol: string; coverage: number } | null = null;
+  /** Last chain posted with gaps (status note): under FINAL_MIN_COVERAGE quoted, expiries without quotes or contracts. */
+  private chainGaps: ChainGaps | null = null;
 
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
@@ -134,7 +151,7 @@ export class Bridge {
     if (reduced !== null) out.push(`IBKR market-data line limit reached: batches reduced to ${reduced} lines (Settings → Market data lines is ${this.d.settings().marketDataLines})`);
     const denied = [...this.denied.values()].map((d) => d.label);
     if (denied.length) out.push(`No IBKR market-data permission (skipped): ${denied.slice(0, 3).join(", ")}${denied.length > 3 ? ` and ${denied.length - 3} more` : ""}`);
-    if (this.incompleteChain) out.push(`Incomplete IBKR chain for ${this.incompleteChain.symbol}: ${Math.round(this.incompleteChain.coverage * 100)}% of contracts quoted`);
+    if (this.chainGaps) out.push(chainGapsText(this.chainGaps));
     return out;
   }
 
@@ -314,10 +331,11 @@ export class Bridge {
       const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
       if (r === null) { this.noOptions.add(symbol); this.pushed(); return; }
       this.noOptions.delete(symbol);
-      if (r.coverage < FINAL_MIN_COVERAGE) {
-        this.incompleteChain = { symbol, coverage: r.coverage };
-        this.d.log.warn(`bridge: ${symbol} chain incomplete (${Math.round(r.coverage * 100)}% of contracts quoted)`);
-      } else if (this.incompleteChain?.symbol === symbol) this.incompleteChain = null;
+      const gaps = chainGaps(symbol, r);
+      if (gaps) {
+        this.chainGaps = gaps;
+        this.d.log.warn(`bridge: ${chainGapsText(gaps)}`);
+      } else if (this.chainGaps?.symbol === symbol) this.chainGaps = null;
       this.feed.optionsDelayed = r.optionsDelayed;
       this.feed.stocksDelayed = r.underlyingDelayed;
       this.lastChainPush.set(symbol, this.now());

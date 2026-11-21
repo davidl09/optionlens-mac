@@ -97,6 +97,26 @@ describe("Bridge", () => {
     h.bridge.stop();
   });
 
+  it("names expiries without quotes in the status (and clears the note once the chain is complete)", async () => {
+    const m = market();
+    m.optionParams = [{ exchange: "SMART", tradingClass: "DELL", multiplier: "100", expirations: ["20261127", "20261204"], strikes: [] }];
+    const quotedTicks = m.ticks;
+    m.ticks = (id) => (id.includes(":20261127:") ? [] : quotedTicks(id));
+    const h = harness({ iv_history: [], chains_on_demand_max_age_s: 0 }, m);
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const p = h.bridge.refreshSymbol("DELL");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await p).toEqual({ status: "refreshed" });
+    expect(h.bridge.status().notes).toContain("Incomplete IBKR chain for DELL: 50% of contracts quoted; no quotes for 2026-11-27");
+    m.ticks = quotedTicks;
+    const again = h.bridge.refreshSymbol("DELL");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await again;
+    expect(h.bridge.status().notes.some((n) => n.includes("DELL"))).toBe(false);
+    h.bridge.stop();
+  });
+
   it("reports unavailable when not connected", async () => {
     const h = harness({});
     expect(await h.bridge.refreshSymbol("AAPL")).toMatchObject({ status: "unavailable" });

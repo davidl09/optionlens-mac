@@ -12,9 +12,10 @@ export const TICK = {
   BID_OPTION: 10, ASK_OPTION: 11, LAST_OPTION: 12, MODEL_OPTION: 13,
   DELAYED_BID: 66, DELAYED_ASK: 67, DELAYED_LAST: 68, DELAYED_HIGH: 72, DELAYED_LOW: 73, DELAYED_VOLUME: 74, DELAYED_CLOSE: 75, DELAYED_OPEN: 76,
   DELAYED_BID_OPTION: 80, DELAYED_ASK_OPTION: 81, DELAYED_LAST_OPTION: 82, DELAYED_MODEL_OPTION: 83,
+  LAST_TIMESTAMP: 45, DELAYED_LAST_TIMESTAMP: 88,
 } as const;
 
-const DELAYED_FIELDS = new Set<number>([66, 67, 68, 72, 73, 74, 75, 76, 80, 81, 82, 83]);
+const DELAYED_FIELDS = new Set<number>([66, 67, 68, 72, 73, 74, 75, 76, 80, 81, 82, 83, 88]);
 
 const HUGE = 1e12;
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && Math.abs(v) < HUGE;
@@ -30,6 +31,23 @@ export const cleanNonNeg = (v: unknown): number | null => (finite(v) && v >= 0 ?
 /** Theta can be any sign; -2 exactly is TWS's "not computed" sentinel. */
 export const cleanTheta = (v: unknown): number | null => (finite(v) && v !== -2 ? v : null);
 
+/** TWS last-trade time: Unix seconds as a string; anything else (or before 2000) is unknown. */
+export const cleanEpochSeconds = (v: unknown): number | null => {
+  const n = typeof v === "string" && /^\d{9,11}$/.test(v.trim()) ? Number(v.trim()) * 1000 : NaN;
+  return Number.isFinite(n) && n >= Date.UTC(2000, 0, 1) ? n : null;
+};
+
+/**
+ * A two-sided price from TWS's bid / ask. Frozen and delayed data report "no quote" as -1 and, on weekends,
+ * often as 0: an ask ≤ 0 is never a quote, and a 0 bid is real (far out-of-the-money options) only against
+ * a real ask. Both stay null when unknown, never 0.
+ */
+export function quoteSides(bid: number | null, ask: number | null): { bid: number | null; ask: number | null } {
+  const a = ask !== null && ask > 0 ? ask : null;
+  const b = bid !== null && (bid > 0 || (bid === 0 && a !== null)) ? bid : null;
+  return { bid: b, ask: a };
+}
+
 export interface Greeks { iv: number | null; delta: number | null; gamma: number | null; vega: number | null; theta: number | null }
 
 export interface QuoteSnapshot {
@@ -39,6 +57,8 @@ export interface QuoteSnapshot {
   oi: number | null; callOi: number | null; putOi: number | null;
   callVolume: number | null; putVolume: number | null;
   impliedVol: number | null; historicalVol: number | null;
+  /** When the last trade happened (epoch ms; tick 45 / 88), null when TWS did not say. */
+  lastTime: number | null;
   /** Model computation (tick 13 / 83), else the first other computation received. */
   greeks: Greeks | null;
   /** At least one delayed tick was received (no real-time subscription for this contract class). */
@@ -60,7 +80,7 @@ const COMPUTATION_FIELDS = new Set<number>([TICK.BID_OPTION, TICK.ASK_OPTION, TI
 
 export function emptySnapshot(): QuoteSnapshot {
   return { bid: null, ask: null, last: null, open: null, high: null, low: null, close: null, volume: null, oi: null, callOi: null, putOi: null,
-    callVolume: null, putVolume: null, impliedVol: null, historicalVol: null, greeks: null, delayed: false };
+    callVolume: null, putVolume: null, impliedVol: null, historicalVol: null, lastTime: null, greeks: null, delayed: false };
 }
 
 export class TickAccumulator {
@@ -72,6 +92,10 @@ export class TickAccumulator {
   apply(e: TickEvent): void {
     if (e.kind !== "generic" && DELAYED_FIELDS.has(e.field)) this.s.delayed = true;
     switch (e.kind) {
+      case "string": {
+        if (e.field === TICK.LAST_TIMESTAMP || e.field === TICK.DELAYED_LAST_TIMESTAMP) this.set("lastTime", cleanEpochSeconds(e.value));
+        return;
+      }
       case "price": {
         const k = PRICE_FIELDS[e.field];
         if (k) this.set(k, cleanPrice(e.value));

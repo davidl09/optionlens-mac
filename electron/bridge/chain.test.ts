@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assembleChain, assembleContract, isoDate, pickExpiries, selectContracts, underlyingContract } from "./chain";
+import { assembleChain, assembleContract, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract } from "./chain";
 import { bestPrice, TICK, TickAccumulator } from "./ticks";
 import type { TwsContract } from "./tws";
 
@@ -111,12 +111,32 @@ describe("chain assembly (ticks → ingest JSON)", () => {
       { kind: "option", field: TICK.MODEL_OPTION, iv: 0.251, delta: 0.52, gamma: 0.011, vega: 0.41, theta: -0.12 },
     ]);
     expect(assembleContract(opt("20261218", 350, "C"), q)).toEqual({
-      expiry: "2026-12-18", strike: 350, right: "C", bid: 9.1, ask: 9.3, last: 9.2, volume: 812, oi: 15321,
+      expiry: "2026-12-18", strike: 350, right: "C", bid: 9.1, ask: 9.3, last: 9.2, last_ts: null, volume: 812, oi: 15321,
       iv: 0.251, delta: 0.52, gamma: 0.011, theta: -0.12, vega: 0.41,
     });
   });
 
-  it("drops contracts with nothing usable and requires a session date for final chains", () => {
+  it("sends the last trade's time (tick 45 / delayed 88) with the last price, so a stale last is labelled", () => {
+    const q = ticksFor([{ kind: "price", field: TICK.DELAYED_LAST, value: 2.5 }, { kind: "string", field: TICK.DELAYED_LAST_TIMESTAMP, value: "1795208400" }]);
+    expect(q.delayed).toBe(true);
+    expect(assembleContract(opt("20261218", 350, "C"), q)?.last_ts).toBe("2026-11-20T21:00:00.000Z");
+    const junk = ticksFor([{ kind: "price", field: TICK.LAST, value: 2.5 }, { kind: "string", field: TICK.LAST_TIMESTAMP, value: "n/a" }]);
+    expect(assembleContract(opt("20261218", 350, "C"), junk)?.last_ts).toBeNull();
+  });
+
+  it("treats frozen weekend bid/ask of -1 or 0 as no quote; a 0 bid is kept only against a real ask", () => {
+    const row = (bid: number, ask: number) => {
+      const r = assembleContract(opt("20261218", 350, "P"), ticksFor([{ kind: "price", field: TICK.DELAYED_BID, value: bid }, { kind: "price", field: TICK.DELAYED_ASK, value: ask }]));
+      return [r?.bid, r?.ask];
+    };
+    expect(row(-1, -1)).toEqual([null, null]);
+    expect(row(0, 0)).toEqual([null, null]);
+    expect(row(0, 0.05)).toEqual([0, 0.05]);
+    expect(row(1.2, 0)).toEqual([1.2, null]);
+    expect(isQuoted(ticksFor([{ kind: "price", field: TICK.BID, value: 0 }, { kind: "price", field: TICK.ASK, value: 0 }]))).toBe(false);
+  });
+
+  it("posts contracts TWS sent nothing for with null fields (never dropped, never 0); requires a session date for final chains", () => {
     const empty = ticksFor([]);
     const und = { price: 349.1, bid: 349, ask: 349.2, open: null, high: null, low: null, prev_close: 351, volume: 1e6, ts: "2026-11-20T21:00:00.000Z", rth_close: null };
     const body = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: "2026-11-20", underlyingDelayed: false }, und, [
@@ -124,8 +144,10 @@ describe("chain assembly (ticks → ingest JSON)", () => {
       { contract: opt("20261218", 350, "P"), quote: ticksFor([{ kind: "price", field: TICK.BID, value: 1 }]) },
     ]);
     expect(body).toMatchObject({ source: "ibkr", symbol: "AAPL", final: true, session_date: "2026-11-20" });
-    expect(body.contracts).toHaveLength(1);
-    expect(body.contracts[0]).toMatchObject({ right: "P", bid: 1, ask: null, iv: null });
+    expect(body.contracts).toHaveLength(2);
+    expect(body.contracts[0]).toEqual({ expiry: "2026-12-18", strike: 350, right: "C", bid: null, ask: null, last: null, last_ts: null,
+      volume: null, oi: null, iv: null, delta: null, gamma: null, theta: null, vega: null });
+    expect(body.contracts[1]).toMatchObject({ right: "P", bid: 1, ask: null, iv: null });
     expect(() => assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: true, sessionDate: null, underlyingDelayed: false }, und, [])).toThrow(/session date/);
     const live = assembleChain({ symbol: "AAPL", fetchedAt: und.ts, final: false, sessionDate: null, underlyingDelayed: true }, und, []);
     expect("session_date" in live).toBe(false);

@@ -1,7 +1,7 @@
 // Bridge task bodies: talk to TWS through the TwsSession contract, assemble ingest bodies and push them.
 // Market-data work is done in batches no larger than the line budget; every historical
 // request goes through the pacer (begin → request → success | violation → RetryLater).
-import { assembleChain, assembleContract, assembleUnderlying, isoDate, pickExpiries, selectContracts, underlyingContract, type ChainShape } from "./chain";
+import { assembleChain, assembleUnderlying, expiryCoverage, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract, type ChainShape, type ExpiryCoverage } from "./chain";
 import type { IngestApi, IngestChain, IngestQuote, OptionBar, UnderlyingStat } from "./ingest";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -126,14 +126,23 @@ async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export interface ResolvedChain { underlying: QuoteSnapshot; spot: number; contracts: TwsContract[] }
+export interface ResolvedChain {
+  underlying: QuoteSnapshot; spot: number; contracts: TwsContract[];
+  /** Every picked expiry (YYYYMMDD), in order, including those without contracts (none listed in the band, or
+   * TWS did not deliver the contract list: two timeouts, reported per expiry rather than failing the chain). */
+  expiries: string[];
+}
 
 /** TWS answered the option-parameter request with no listed (future) expiries: the symbol has no options. */
 export class NoListedOptions extends Error {
   constructor(symbol: string) { super(`${symbol}: IBKR lists no options`); this.name = "NoListedOptions"; }
 }
 
-/** Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. */
+/**
+ * Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. An expiry
+ * whose contract details TWS does not deliver (two timeouts) is kept without contracts; only when no expiry
+ * delivered does the resolution fail.
+ */
 export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape, spotOverride: number | null = null): Promise<ResolvedChain> {
   const und = underlyingContract(symbol);
   const [details] = await ctx.session.contractDetails(und, ctx.signal);
@@ -146,22 +155,34 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
   const expiries = pickExpiries(params, und.symbol, ctx.now(), shape.expiries);
   if (!expiries.length) throw new NoListedOptions(symbol);
   const all: TwsContract[] = [];
+  let timeouts = 0;
+  let lastError: unknown = null;
   for (const e of expiries) {
     throwIfAborted(ctx.signal);
     const req: TwsContract = {
       symbol: und.symbol, secType: "OPT", exchange: "SMART", currency: "USD",
       lastTradeDateOrContractMonth: e.expiry, tradingClass: e.tradingClass, multiplier: e.multiplier,
     };
-    all.push(...await retryOnTimeout(() => ctx.session.contractDetails(req, ctx.signal)));
+    try {
+      all.push(...await retryOnTimeout(() => ctx.session.contractDetails(req, ctx.signal)));
+    } catch (err) {
+      if (!(err instanceof TwsTimeoutError)) throw err;
+      timeouts += 1;
+      lastError = err;
+    }
   }
-  return { underlying: quote, spot, contracts: selectContracts(all, spot, shape.moneyness) };
+  if (timeouts === expiries.length) throw lastError;
+  return { underlying: quote, spot, contracts: selectContracts(all, spot, shape.moneyness), expiries: expiries.map((e) => e.expiry) };
 }
 
 export interface ChainRequest { symbol: string; shape: ChainShape; final: boolean; sessionDate: string | null }
 export interface ChainPushed {
+  /** Contracts posted (all requested ones; those without data have null fields). */
   contracts: number;
-  /** Share of the requested contracts that got data (and were posted). */
+  /** Share of the requested contracts TWS quoted. */
   coverage: number;
+  /** Per picked expiry: contracts listed in the strike band and how many were quoted. */
+  expiries: ExpiryCoverage[];
   optionsDelayed: boolean;
   underlyingDelayed: boolean;
 }
@@ -174,7 +195,7 @@ const OPTION_TICKS: CollectOptions = { genericTicks: "101", complete: (a) => a.o
 /** Option quotes for `contracts`; contracts that got no usable data are asked for once more. */
 async function optionQuotes(ctx: JobContext, contracts: TwsContract[]): Promise<QuoteSnapshot[]> {
   const quotes = await collectQuotes(ctx, contracts, OPTION_TICKS);
-  const missing = contracts.flatMap((c, i) => (assembleContract(c, quotes[i]) === null ? [i] : []));
+  const missing = contracts.flatMap((_, i) => (isQuoted(quotes[i]) ? [] : [i]));
   if (missing.length > contracts.length * (1 - FINAL_MIN_COVERAGE)) {
     const again = await collectQuotes(ctx, missing.map((i) => contracts[i]), OPTION_TICKS);
     missing.forEach((i, k) => { quotes[i] = again[k]; });
@@ -202,10 +223,11 @@ export async function sessionClose(ctx: JobContext, symbol: string, sessionDate:
 }
 
 /**
- * Fetches and posts one chain (only the contracts that got data). A closing chain is centred on the
- * session's regular close and carries it as underlying.rth_close. A closing chain below
- * FINAL_MIN_COVERAGE is never archived: it is posted as a live chain and the task fails, so it is retried.
- * When IBKR lists no options for the symbol, posts that instead (POST /api/ingest/no-options) and returns null.
+ * Fetches and posts one chain: every contract IBKR lists in the strike band of the picked expiries, those TWS
+ * sent nothing for with null fields. A closing chain is centred on the session's regular close and carries it
+ * as underlying.rth_close. A closing chain below FINAL_MIN_COVERAGE quoted is never archived: it is posted as a
+ * live chain and the task fails, so it is retried. When IBKR lists no options for the symbol, posts that
+ * instead (POST /api/ingest/no-options) and returns null.
  */
 export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed | null> {
   const rthClose = req.final && req.sessionDate ? await sessionClose(ctx, req.symbol, req.sessionDate) : null;
@@ -222,17 +244,22 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
   const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
   const rows = r.contracts.map((contract, i) => ({ contract, quote: quotes[i] }));
+  const quoted = quotes.filter(isQuoted).length;
+  if (!quoted) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
   const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed };
-  let body: IngestChain = assembleChain(meta, underlying, rows);
-  if (!body.contracts.length) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
-  const coverage = body.contracts.length / r.contracts.length;
+  const coverage = quoted / r.contracts.length;
   const incompleteFinal = req.final && coverage < FINAL_MIN_COVERAGE;
-  if (incompleteFinal) body = assembleChain({ ...meta, final: false, sessionDate: null }, { ...underlying, rth_close: null }, rows);
+  const body: IngestChain = incompleteFinal
+    ? assembleChain({ ...meta, final: false, sessionDate: null }, { ...underlying, rth_close: null }, rows)
+    : assembleChain(meta, underlying, rows);
   await ctx.ingest.chain(body);
   if (incompleteFinal) {
-    throw new Error(`${req.symbol}: closing chain incomplete (${body.contracts.length} of ${r.contracts.length} contracts quoted); posted as a live chain, not archived — will retry`);
+    throw new Error(`${req.symbol}: closing chain incomplete (${quoted} of ${r.contracts.length} contracts quoted); posted as a live chain, not archived — will retry`);
   }
-  return { contracts: body.contracts.length, coverage, optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed };
+  return {
+    contracts: body.contracts.length, coverage, expiries: expiryCoverage(r.expiries, rows),
+    optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed,
+  };
 }
 
 // ---------------- universe stats and index quotes ----------------

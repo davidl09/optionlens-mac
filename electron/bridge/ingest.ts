@@ -12,7 +12,10 @@ export interface IngestUnderlying {
 }
 export interface IngestContract {
   expiry: string; strike: number; right: "C" | "P";
-  bid: N; ask: N; last: N; volume: N; oi: N; iv: N; delta: N; gamma: N; theta: N; vega: N;
+  bid: N; ask: N; last: N;
+  /** When `last` traded (TWS tick 45 / 88), null when unknown: a weekend snapshot's last can be days old. */
+  last_ts: string | null;
+  volume: N; oi: N; iv: N; delta: N; gamma: N; theta: N; vega: N;
 }
 export interface IngestChain {
   source: "ibkr"; symbol: string; fetched_at: string; final: boolean; session_date?: string;

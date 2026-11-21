@@ -2,7 +2,7 @@
 // and how accumulated ticks become the POST /api/ingest/chain body (INTEGRATION.md §6).
 import type { IngestChain, IngestContract, IngestUnderlying } from "./ingest";
 import { nyYmd } from "./ny";
-import { bestPrice, type QuoteSnapshot } from "./ticks";
+import { bestPrice, quoteSides, type QuoteSnapshot } from "./ticks";
 import type { OptionParams, TwsContract } from "./tws";
 
 /** Cash-settled indices (and the VIX family) and their listing exchange at IBKR. */
@@ -70,20 +70,45 @@ export function isoDate(twsDate: string): string | null {
 export function assembleUnderlying(q: QuoteSnapshot, ts: string, rthClose: number | null = null): IngestUnderlying | null {
   const price = bestPrice(q) ?? rthClose;
   if (price === null) return null;
-  return { price, bid: q.bid, ask: q.ask, open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts, rth_close: rthClose };
+  return { price, ...quoteSides(q.bid, q.ask), open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts, rth_close: rthClose };
 }
 
-/** One contract row, or null when TWS gave nothing usable (no quote, no IV). */
+/** TWS gave something usable for the contract: a quote side, a last price or a model IV. */
+export function isQuoted(q: QuoteSnapshot): boolean {
+  const { bid, ask } = quoteSides(q.bid, q.ask);
+  return bid !== null || ask !== null || q.last !== null || (q.greeks?.iv ?? null) !== null;
+}
+
+/**
+ * One contract row; null only for a malformed contract. A contract TWS sent nothing for is still posted
+ * (every field null, never 0), so its strike and expiry appear in the chain as "no quote".
+ */
 export function assembleContract(c: TwsContract, q: QuoteSnapshot): IngestContract | null {
   const expiry = isoDate(c.lastTradeDateOrContractMonth ?? "");
   if (!expiry || c.strike === undefined || !(c.strike > 0) || (c.right !== "C" && c.right !== "P")) return null;
   const g = q.greeks;
-  if (q.bid === null && q.ask === null && q.last === null && (g?.iv ?? null) === null) return null;
   const oi = (c.right === "C" ? q.callOi : q.putOi) ?? q.oi;
+  const { bid, ask } = quoteSides(q.bid, q.ask);
   return {
-    expiry, strike: c.strike, right: c.right, bid: q.bid, ask: q.ask, last: q.last, volume: q.volume, oi,
+    expiry, strike: c.strike, right: c.right, bid, ask, last: q.last,
+    last_ts: q.last !== null && q.lastTime !== null ? new Date(q.lastTime).toISOString() : null,
+    volume: q.volume, oi,
     iv: g?.iv ?? null, delta: g?.delta ?? null, gamma: g?.gamma ?? null, theta: g?.theta ?? null, vega: g?.vega ?? null,
   };
+}
+
+/** Per expiry: contracts IBKR listed in the strike band, and how many of them TWS quoted. */
+export interface ExpiryCoverage { expiry: string; contracts: number; quoted: number }
+
+export function expiryCoverage(expiries: string[], quotes: { contract: TwsContract; quote: QuoteSnapshot }[]): ExpiryCoverage[] {
+  const by = new Map(expiries.map((e) => [e, { expiry: isoDate(e) ?? e, contracts: 0, quoted: 0 }]));
+  for (const { contract, quote } of quotes) {
+    const row = by.get(contract.lastTradeDateOrContractMonth ?? "");
+    if (!row) continue;
+    row.contracts += 1;
+    if (isQuoted(quote)) row.quoted += 1;
+  }
+  return [...by.values()];
 }
 
 export interface ChainMeta { symbol: string; fetchedAt: string; final: boolean; sessionDate: string | null; underlyingDelayed: boolean }
