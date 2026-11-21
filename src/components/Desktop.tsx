@@ -7,7 +7,7 @@ import type { BridgeStatus } from "../../electron/shared/api";
 import { api, configureClient } from "../api/client";
 import { useConnectivity } from "../api/useApi";
 import { desktop } from "../desktop";
-import { bridgePillLabel } from "../lib/status";
+import { bridgePillLabel, populateText } from "../lib/status";
 import { useBridgeStatus, useEngineStatus } from "../state/desktop";
 import { Spinner } from "./ui";
 
@@ -83,7 +83,7 @@ export function bridgeSummary(b: BridgeStatus): string {
   if (!b.enabled) return "IBKR bridge off";
   if (b.tws === "connecting") return "Connecting to IB Gateway / TWS…";
   if (b.tws !== "connected") return b.lastError ?? "Not connected to IB Gateway / TWS";
-  return [`${b.endpoint ?? "IBKR"} connected${b.accountType ? ` (${b.accountType})` : ""}`, b.paused, ...b.notes].filter(Boolean).join(" · ");
+  return [`${b.endpoint ?? "IBKR"} connected${b.accountType ? ` (${b.accountType})` : ""}`, b.paused, populateText(b), ...b.notes].filter(Boolean).join(" · ");
 }
 
 export function BridgeIndicator() {

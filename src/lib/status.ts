@@ -28,6 +28,12 @@ export function readableDetail(detail: string | null): string | null {
 
 const isDelayedNote = (n: string) => /delayed/i.test(n);
 
+/** "Populating last session's data: 340/1145" while the bridge fills the last session after hours, else null. */
+export function populateText(b: BridgeStatus | null | undefined): string | null {
+  const p = b?.populate;
+  return p ? `Populating last session's data: ${p.done.toLocaleString("en-US")}/${p.total.toLocaleString("en-US")}` : null;
+}
+
 /** The header pill in plain words: "IBKR connected · delayed data", "IBKR not connected", ... */
 export function bridgePillLabel(b: BridgeStatus): string {
   if (!b.enabled) return "IBKR off";

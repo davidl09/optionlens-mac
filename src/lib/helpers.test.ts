@@ -5,7 +5,7 @@ import type { ColumnDef, SymbolRef } from "../api/types";
 import { fundamentalText, shortSector } from "./format";
 import { sellSplit } from "./insiders";
 import { rankSymbols } from "./search";
-import { bridgePillLabel, jobState, nextCollectionWindow, readableDetail } from "./status";
+import { bridgePillLabel, jobState, nextCollectionWindow, populateText, readableDetail } from "./status";
 import { templateUsesWidth } from "./strategy";
 import { emptyColumnKeys, humanize } from "./table";
 
@@ -87,6 +87,14 @@ describe("bridgePillLabel", () => {
     expect(bridgePillLabel({ ...base, tws: "disconnected" as BridgeStatus["tws"] })).toBe("IBKR not connected");
     expect(bridgePillLabel({ ...base, enabled: false })).toBe("IBKR off");
     expect(bridgePillLabel({ ...base, paused: "competing session" })).toBe("IBKR connected · paused");
+  });
+});
+
+describe("populateText", () => {
+  it("names the after-hours fill progress, and nothing when none runs", () => {
+    expect(populateText(null)).toBeNull();
+    expect(populateText({ populate: null } as BridgeStatus)).toBeNull();
+    expect(populateText({ populate: { sessionDate: "2026-11-20", done: 340, total: 1145 } } as BridgeStatus)).toBe("Populating last session's data: 340/1,145");
   });
 });
 

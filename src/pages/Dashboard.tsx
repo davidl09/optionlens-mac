@@ -8,8 +8,8 @@ import { LineChart, LineSeries } from "../components/charts/Charts";
 import { usePalette } from "../components/charts/EChart";
 import { DataTable, inferColumns } from "../components/DataTable";
 import { StatValue } from "../components/StatGrid";
-import { CollectionTimes } from "../components/Collection";
-import { AsOf, Async, Card, EmptyNotice, Segmented } from "../components/ui";
+import { CollectionTimes, PopulationNote } from "../components/Collection";
+import { AfterHoursBadge, AsOf, Async, Card, EmptyNotice, Segmented } from "../components/ui";
 import { fmt, plural, shortSector, signClass } from "../lib/format";
 
 function Sparkline({ values, width = 96, height = 30 }: { values: number[]; width?: number; height?: number }) {
@@ -40,7 +40,7 @@ function MiniTable({ title, rows, def, preferred, link, max, empty }: { title: s
   const cols = useMemo(() => compactColumns(rows, def, preferred, max), [rows, def, preferred, max]);
   return (
     <Card title={title} actions={link ? <Link to={link} className="small">Full report →</Link> : undefined} className="mini-table">
-      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <EmptyNotice>{empty ?? "No rows match this panel's criteria right now."}</EmptyNotice>}
+      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <EmptyNotice>{empty ?? "No rows match this panel's criteria right now."} <PopulationNote /></EmptyNotice>}
     </Card>
   );
 }
@@ -140,7 +140,7 @@ function DashboardBody({ m, defs, status }: { m: MarketOverview; defs: ReportDef
         <>
           {/* Empty: one line with the reason, not a large empty panel. */}
           <div className="panel-notice" role="status">
-            <b>Unusual option volume:</b> <span>{m.empty_notes.unusual_options ?? "No symbol qualifies right now."}</span> <CollectionTimes />
+            <b>Unusual option volume:</b> <span>{m.empty_notes.unusual_options ?? "No symbol qualifies right now."}</span> <PopulationNote /> <CollectionTimes />
             <Link to="/reports/unusual-option-volume" className="small">Report →</Link>
           </div>
           <VixCard m={m} />
@@ -167,7 +167,7 @@ export default function Dashboard() {
   const status = useApi(api.status, []);
   return (
     <div className="stack">
-      <div className="page-head"><h1 className="page-title">Market dashboard</h1>{st.data && <AsOf ts={st.data.asof} />}</div>
+      <div className="page-head"><h1 className="page-title">Market dashboard</h1>{st.data && <div className="page-head-meta"><AsOf ts={st.data.asof} /><AfterHoursBadge show={st.data.after_hours} /></div>}</div>
       <Async state={st}>{(m) => <DashboardBody m={m} defs={defs.data ?? []} status={status.data} />}</Async>
     </div>
   );

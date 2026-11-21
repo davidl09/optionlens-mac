@@ -191,6 +191,12 @@ through the work one task at a time:
   **underlying stats** for the whole universe (option volume, open interest, IV, HV per stock);
   VIX-family quotes and daily bars; **option-bar catch-up** for sessions without an end-of-day archive;
   and the **IV / HV history backfill**, up to 10 years.
+- **First launch outside market hours** (evening, weekend, before the open): when the last session has no
+  data yet, the bridge collects its closing values from IBKR's frozen data right after connecting — the
+  underlying stats for the whole universe first (a few minutes), then the chain universe — so reports and
+  the dashboard fill in without waiting for the next session. Settings shows the progress ("Populating last
+  session's data: 340/1145"), and such values carry a "Last session's close (collected after hours)"
+  badge. They never replace data collected during the session or its closing snapshot.
 
 All historical requests are for daily bars, which IBKR does not hard-limit like small bars: they are
 sent about 1 s apart, and after a real pacing violation the bridge pauses (30 s, growing) and spaces

@@ -4,7 +4,7 @@ import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "../../api/client";
 import { useApi } from "../../api/useApi";
 import { AddToWatchlist } from "../../components/AddToWatchlist";
-import { AsOf, ErrorBox, SourceBadge, Spinner } from "../../components/ui";
+import { AfterHoursBadge, AsOf, ErrorBox, SourceBadge, Spinner } from "../../components/ui";
 import { fmt, signClass } from "../../lib/format";
 import { LegsProvider } from "../../state/legs";
 import CalculatorTab from "./CalculatorTab";
@@ -84,6 +84,7 @@ function QuoteHeader({ sym }: { sym: string }) {
           <span className={`qh-chg ${signClass(q.change)}`}>{q.change > 0 ? "+" : ""}{fmt(q.change, "num2")} ({fmt(q.change_pct, "pct_signed")})</span>
           <AsOf ts={q.ts} />
           <SourceBadge source={q.source} delayed={q.delayed === true} />
+          <AfterHoursBadge show={q.after_hours} />
         </div>
       )}
       {s && (

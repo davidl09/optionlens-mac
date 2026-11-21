@@ -248,7 +248,7 @@ test("empty report: the engine's reason, when chains are collected, and the meth
   await page.goto("/reports/oi-changes");
   const empty = page.locator(".dt-empty");
   await expect(empty).toContainText("No stored option chain matches these settings.");
-  await expect(empty).toContainText("Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET) and on demand when you open a symbol.");
+  await expect(empty).toContainText("Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET), after hours for a last session that has none yet, and on demand when you open a symbol.");
   await expect(empty).toContainText("Last bridge push 2026-11-19 15:45 ET · next collection 2026-11-19 16:00 ET.");
   await expect(page.getByText("No data.", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Contracts not present in the prior end-of-day snapshot are skipped.")).toBeHidden();
@@ -281,6 +281,32 @@ test("dashboard: an empty unusual-volume panel is one line with the reason and t
   await expect(notice).toContainText("next collection 2026-11-19 16:00 ET");
   await expect(page.locator(".card-head h3", { hasText: "Unusual option volume" })).toHaveCount(0);
   await expect(page.locator(".heat-tile", { hasText: "XLY" })).toContainText("Cons. Disc.");   // deliberate abbreviation
+  clean(p);
+});
+
+test("after-hours fill: a small neutral badge on the quote, the chain, a report and the dashboard", async ({ page }) => {
+  const p = await setup(page);
+  const flagged = (path: string, patch: (b: Record<string, unknown>) => Record<string, unknown>) => page.route(path, async (route) => {
+    const b = handle("GET", new URL(route.request().url()), null)!.body as Record<string, unknown>;
+    await route.fulfill({ json: patch(b) });
+  });
+  await flagged("**/api/market/overview", (m) => ({ ...m, after_hours: true }));
+  await flagged("**/api/reports/iv-rankings**", (r) => ({ ...r, after_hours: true }));
+  await flagged("**/api/symbol/AAPL/summary", (s) => ({ ...s, quote: { ...(s.quote as object), after_hours: true } }));
+  await flagged("**/api/symbol/AAPL/chain**", (c) => ({ ...c, after_hours: true }));
+  const badge = page.locator(".badge.after-hours");
+  await page.goto("/");
+  await expect(badge).toHaveText("Last session's close (collected after hours)");
+  await expect(badge).toHaveClass(/neutral/);
+  await expect(badge).toHaveAttribute("title", /frozen data after the session ended/);
+  await page.goto("/reports/iv-rankings");
+  await expect(page.locator(".page-head .badge.after-hours")).toBeVisible();
+  await page.goto("/s/AAPL/chain");
+  await expect(page.locator(".qh-price .badge.after-hours")).toBeVisible();      // the quote
+  await expect(page.locator(".toolbar .badge.after-hours")).toBeVisible();      // the chain
+  await page.goto("/reports/unusual-option-volume");                            // not flagged: no badge
+  await expect(page.getByText("Data notes:")).toBeVisible();
+  await expect(page.locator(".page-head .badge.after-hours")).toHaveCount(0);
   clean(p);
 });
 

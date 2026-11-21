@@ -6,10 +6,10 @@ import { api } from "../api/client";
 import type { ColumnDef, ColumnFilter, Preset, ReportDef, ReportResult, ReportRow } from "../api/types";
 import { useApi } from "../api/useApi";
 import { DataTable, inferColumns, SortState, TableState } from "../components/DataTable";
-import { ChainCollectionNote } from "../components/Collection";
+import { ChainCollectionNote, PopulationNote } from "../components/Collection";
 import type { NavFrom } from "../components/Header";
 import { ParamForm } from "../components/ParamForm";
-import { AsOf, Async, Card, EmptyNotice, ErrorBox, NotesBox, Spinner } from "../components/ui";
+import { AfterHoursBadge, AsOf, Async, Card, EmptyNotice, ErrorBox, NotesBox, Spinner } from "../components/ui";
 import { humanize } from "../lib/table";
 import { todayNY } from "../lib/dates";
 import { ParamStrings, resolveParams, stringToValue, valueToString } from "../lib/params";
@@ -106,6 +106,7 @@ export function ReportEmpty({ result, chainBased }: { result: ReportResult; chai
   return (
     <EmptyNotice>
       <span>{result.empty_reason ?? "No rows match these settings."}</span>
+      {" "}<PopulationNote />
       {chainBased && <> <ChainCollectionNote /></>}
     </EmptyNotice>
   );
@@ -166,7 +167,7 @@ function ReportView({ def }: { def: ReportDef }) {
           <h1 className="page-title">{def.title}</h1>
           <p className="page-desc">{def.description}</p>
         </div>
-        {result.data && <AsOf ts={result.data.asof} />}
+        {result.data && <div className="page-head-meta"><AsOf ts={result.data.asof} /><AfterHoursBadge show={result.data.after_hours} /></div>}
       </div>
       {def.params.length > 0 && (
         <Card className="params-card">

@@ -3,10 +3,11 @@ import { api } from "../api/client";
 import type { Status } from "../api/types";
 import { useApi } from "../api/useApi";
 import { fmtDateTime } from "../lib/format";
-import { COLLECTION_END_H, nextCollectionWindow } from "../lib/status";
+import { COLLECTION_END_H, nextCollectionWindow, populateText } from "../lib/status";
+import { useBridgeStatus } from "../state/desktop";
 
 export const CHAIN_COLLECTION_TEXT =
-  "Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET) and on demand when you open a symbol.";
+  "Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET), after hours for a last session that has none yet, and on demand when you open a symbol.";
 
 /** The next collection: the engine's scheduled sweep when it has one, else the bridge's next window. */
 export function nextCollection(s: Status): string {
@@ -23,6 +24,12 @@ export function collectionTimes(s: Status): string {
 export function CollectionTimes() {
   const st = useApi(api.status, []);
   return st.data ? <span className="collection-times">{collectionTimes(st.data)}</span> : null;
+}
+
+/** "Populating last session's data: 340/1145." while the bridge fills the last session (empty views say so), else nothing. */
+export function PopulationNote() {
+  const text = populateText(useBridgeStatus());
+  return text ? <span className="population-note" role="status">{text}.</span> : null;
 }
 
 /** The chain-collection sentence plus the last/next collection times. */

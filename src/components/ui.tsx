@@ -110,6 +110,18 @@ export function SourceBadge({ source, delayed = false }: { source: DataSource | 
   );
 }
 
+export const AFTER_HOURS_TEXT = "Last session's close (collected after hours)";
+
+/** Values collected after their session ended (IBKR frozen data: evening, weekend, before the open). Neutral: honest, not a warning. */
+export function AfterHoursBadge({ show }: { show: boolean | undefined }) {
+  if (!show) return null;
+  return (
+    <span className="badge neutral source-badge after-hours" title={`${AFTER_HOURS_TEXT}: collected from IBKR's frozen data after the session ended. Option quotes are the closing ones; a stock's last price can be an extended-hours trade.`}>
+      {AFTER_HOURS_TEXT}
+    </span>
+  );
+}
+
 export function ModelBadge() {
   return <span className="badge warn" title="Priced with a Black-Scholes model (IV proxy) because stored option prices were not available for this date.">model</span>;
 }

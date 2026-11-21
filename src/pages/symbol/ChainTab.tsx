@@ -5,7 +5,7 @@ import { api } from "../../api/client";
 import type { Chain, Leg, OptionRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { StatGrid } from "../../components/StatGrid";
-import { AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
+import { AfterHoursBadge, AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
 import { describeLeg, useLegs } from "../../state/legs";
@@ -185,6 +185,7 @@ export default function ChainTab() {
               <Segmented label="Strikes" value={range} onChange={setRange} options={[{ value: "10", label: "±10" }, { value: "20", label: "±20" }, { value: "all", label: "All" }]} />
               <label className="check-inline"><input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> Greeks</label>
               {(chain.source || chain.delayed) && <span className="chain-source">Source <SourceBadge source={chain.source} delayed={chain.delayed === true} /></span>}
+              <AfterHoursBadge show={chain.after_hours} />
               <span className="muted small legend-inline"><span className="swatch itm" /> in the money · <span className="swatch hot" /> volume &gt; OI · click bid to sell / ask to buy</span>
             </div>
           </Card>

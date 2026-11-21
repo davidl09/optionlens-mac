@@ -10,8 +10,8 @@ const BASE = "http://127.0.0.1:59999";
 const TOKEN = "per-launch-token-abcdefghijklmnop";
 
 /** `refresh`: what refreshSymbol answers; "manual" = it stays pending until __finishRefresh(result). */
-async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string; update?: Record<string, unknown> } = {}) {
-  await page.addInitScript(({ base, token, state, refresh, tws, update }) => {
+async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string; update?: Record<string, unknown>; populate?: unknown } = {}) {
+  await page.addInitScript(({ base, token, state, refresh, tws, update, populate }) => {
     const listeners: Record<string, ((v: unknown) => void)[]> = {};
     const on = (ch: string) => (cb: (v: unknown) => void) => { (listeners[ch] ??= []).push(cb); return () => undefined; };
     const engine = {
@@ -22,7 +22,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       enabled: true, tws, port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
       notes: ["IBKR delayed (no OPRA subscription)"], lastPushAt: "2026-11-19T15:41:00-05:00", current: { kind: "iv-history", label: "AAPL IV history" },
       queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 3, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 12 },
-      backfill: { total: 40, done: 12, failed: 1 },
+      backfill: { total: 40, done: 12, failed: 1 }, populate,
     };
     const w = window as unknown as Record<string, unknown>;
     w.__refreshCalls = [] as string[];
@@ -58,7 +58,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"), onUpdateStatus: on("update"),
     };
   }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running", refresh: opts.refresh ?? { status: "refreshed" }, tws: opts.tws ?? "connected",
-    update: { ...UP_TO_DATE, ...opts.update } });
+    update: { ...UP_TO_DATE, ...opts.update }, populate: opts.populate ?? null });
 }
 
 const UP_TO_DATE = {
@@ -162,7 +162,7 @@ test("no stored chain and IB Gateway not connected: says how to get it, and fetc
   await page.evaluate(() => (window as unknown as { __emit: (c: string, v: unknown) => void }).__emit("bridge", {
     enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null, notes: [], lastPushAt: null,
     current: null, queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 0, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 0 },
-    backfill: { total: 0, done: 0, failed: 0 },
+    backfill: { total: 0, done: 0, failed: 0 }, populate: null,
   }));
   await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: string[] }).__refreshCalls)).toEqual(["DELL", "DELL"]);
 });
@@ -192,6 +192,27 @@ test("settings page shows engine, bridge status and saves bridge settings", asyn
   await page.getByLabel("Client ID").fill("-3");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Client ID must be a whole number")).toBeVisible();
+});
+
+test("populating the last session after hours: progress in Settings and Status, and empty views say so", async ({ page }) => {
+  await fakeDesktop(page, { populate: { sessionDate: "2026-11-20", done: 340, total: 1145 } });
+  await mockEngine(page);
+  await page.route("**/api/market/overview", async (route) => {
+    const m = handle("GET", new URL(route.request().url()), null)!.body as Record<string, unknown>;
+    await route.fulfill({ json: { ...m, unusual_options: [], empty_notes: { unusual_options: "No option volume collected yet." } }, headers: { "Access-Control-Allow-Origin": "*" } });
+  });
+  await page.goto("/settings");
+  await expect(page.locator(".progress-label", { hasText: "Populating last session's data: 340/1,145" })).toBeVisible();
+  await page.goto("/status");
+  await expect(page.locator(".bridge-summary")).toContainText("Populating last session's data: 340/1,145");
+  await page.goto("/");
+  await expect(page.locator(".panel-notice")).toContainText("No option volume collected yet. Populating last session's data: 340/1,145.");
+  await page.goto("/reports/oi-changes");                                  // an empty report
+  await expect(page.locator(".dt-empty")).toContainText("Populating last session's data: 340/1,145.");
+  await emit(page, "bridge", { enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
+    notes: [], lastPushAt: null, current: null, queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 0, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 0 },
+    backfill: { total: 0, done: 0, failed: 0 }, populate: null });            // done: the note goes away
+  await expect(page.locator(".dt-empty")).not.toContainText("Populating");
 });
 
 test("main-process navigation (notification click) opens the link in-app", async ({ page }) => {
