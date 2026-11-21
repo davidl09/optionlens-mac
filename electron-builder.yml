@@ -1,7 +1,11 @@
-# electron-builder: macOS OptionLens.app (unsigned, ad-hoc signed after packing), one per architecture
-# (the bundled Python wheels are architecture-specific). scripts/zip-mac-app.sh packs it into the release
-# zip with ditto (install.sh and the in-app updater install from that zip). Linux `dir` is only for local checks.
-appId: app.optionlens.mac
+# electron-builder, one build per OS and architecture (the bundled Python wheels are platform-specific;
+# scripts/bundle-engine.sh builds build/python first). Release assets (names: electron/main/updater/asset.ts):
+# - macOS: OptionLens.app (`dir`, ad-hoc signed after packing), zipped by scripts/zip-mac-app.sh into
+#   OptionLens-<version>-<arch>.zip. install.sh and the in-app updater install from that zip.
+# - Windows x64: OptionLens-<version>-win-x64-setup.exe (NSIS, per user, no admin; install.ps1 and the updater
+#   run it) and OptionLens-<version>-win-x64.zip (portable folder, updated by hand).
+# - Linux x64: OptionLens-<version>-linux-x64.AppImage (install.sh and the updater replace it in place).
+appId: app.optionlens.mac   # = APP_ID in electron/main/app-id.ts (bundle id, Windows AppUserModelID)
 productName: OptionLens
 copyright: OptionLens
 directories:
@@ -15,6 +19,10 @@ files:
   - "!**/*.map"
 asar: true
 afterPack: scripts/after-pack.cjs
+# Relocatable CPython with the engine and its locked dependencies (scripts/bundle-engine.sh).
+extraResources:
+  - from: build/python
+    to: python
 mac:
   category: public.app-category.finance
   target: dir
@@ -27,13 +35,30 @@ mac:
   extendInfo:
     LSUIElement: false
     NSHumanReadableCopyright: OptionLens
-  # Relocatable CPython with the engine and its locked dependencies (scripts/bundle-engine.sh).
-  extraResources:
-    - from: build/python
-      to: python
+win:
+  target: [nsis, zip]
+  icon: build/icon.png
+  artifactName: OptionLens-${version}-win-x64.${ext}   # x64 builds only (CI)
+nsis:
+  # One click, per user (%LOCALAPPDATA%\Programs\OptionLens), no elevation; data in %APPDATA%\OptionLens stays
+  # on uninstall. The Start-menu shortcut carries the AppUserModelID that notifications need.
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: OptionLens
+  deleteAppDataOnUninstall: false
+  differentialPackage: false
+  artifactName: OptionLens-${version}-win-x64-setup.${ext}
 linux:
-  target: dir
+  target: AppImage
+  executableName: optionlens
+  syncDesktopName: true   # desktopName (package.json) = optionlens.desktop: window ↔ launcher entry (WM_CLASS)
   category: Finance
-  extraResources:
-    - from: build/python
-      to: python
+  icon: build/icon.png
+  synopsis: Options and stock analytics with an IBKR bridge
+  artifactName: OptionLens-${version}-linux-x64.${ext}   # x64 builds only (CI); the AppImage default would say x86_64
+toolsets:
+  # The static AppImage runtime (type2-runtime): runs with FUSE 3 or 2 and without libfuse2 installed
+  # (Ubuntu 22.04+ no longer installs libfuse2), unlike the legacy runtime.
+  appimage: "1.0.3"

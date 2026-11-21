@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkAppImage } from "../appimage";
 import { peFile, versionResource } from "../pe-fixtures.test-helper";
 import { linuxInstaller, linuxLocation, NOT_AN_APPIMAGE, stagedName } from "./linux";
 import { macInstaller } from "./mac";
@@ -89,6 +92,15 @@ describe("Linux installer", () => {
     await expect(mk("[Desktop Entry]\nName=Other\nX-AppImage-Version=0.1.4\n").stage(download, join(root, "stage"), "0.1.4", appPath)).rejects.toThrow(/"Other", not OptionLens/);
     await expect(mk("[Desktop Entry]\nName=OptionLens\nX-AppImage-Version=0.1.3\n").stage(download, join(root, "stage"), "0.1.4", appPath)).rejects.toThrow(/version 0.1.3, not 0.1.4/);
     expect(readdirSync(root).filter((n) => n.endsWith(".update"))).toEqual([]);
+  });
+
+  // CI (Linux): OPTIONLENS_APPIMAGE=release/OptionLens-<v>-linux-x64.AppImage npx vitest run …/installers.test.ts
+  it.runIf(!!process.env.OPTIONLENS_APPIMAGE)("accepts the built AppImage (its own --appimage-extract, real desktop entry)", async () => {
+    const version = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const run = promisify(execFile);
+    const execIn = async (file: string, args: string[], cwd: string) => (await run(file, args, { cwd })).stdout;
+    await checkAppImage(execIn, resolve(process.env.OPTIONLENS_APPIMAGE!), tempDir(), version);
+    await expect(checkAppImage(execIn, resolve(process.env.OPTIONLENS_APPIMAGE!), tempDir(), "9.9.9")).rejects.toThrow(/not 9.9.9/);
   });
 
   it("starts helpers without the running AppImage's variables", () => {

@@ -30,10 +30,49 @@ jobs:
       # Mocked Playwright suite against `vite preview` (uses the runner's Google Chrome; see playwright.config.ts).
       - run: npx playwright test e2e/smoke.spec.ts e2e/desktop.spec.ts --trace off
 
+  engine:
+    name: Engine — pytest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: pytest
+        working-directory: engine
+        shell: bash
+        run: |
+          uv sync --frozen
+          uv run pytest -q
+
+  shell:
+    name: Installer and build scripts — shellcheck, PSScriptAnalyzer (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version && shellcheck install.sh scripts/*.sh
+      - name: PowerShell — parse and PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          foreach ($f in 'install.ps1', 'scripts/test-install-ps1.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | Format-List; throw "$f does not parse" }
+          }
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser
+          # Write-Host is the installer's console output (not pipeline data).
+          $issues = Invoke-ScriptAnalyzer -Path install.ps1, scripts/test-install-ps1.ps1 -Severity Warning, Error -ExcludeRule PSAvoidUsingWriteHost
+          $issues | Format-Table -AutoSize
+          if ($issues) { throw 'PSScriptAnalyzer found issues' }
+
   packaged:
-    # The packaged app as users get it: bundled Python engine started by the app, and the renderer
-    # (app://optionlens) loading data from it — what Chromium's Local Network Access checks could break.
-    name: Packaged app — bundled engine + renderer data (Linux, xvfb)
+    # The packaged Linux app as users get it (the release AppImage): bundled Python engine started by the app,
+    # and the renderer (app://optionlens) loading data from it — what Chromium's Local Network Access checks
+    # could break; the update path's AppImage check and install.sh run against the built AppImage.
+    name: Linux AppImage — bundled engine, glibc baseline, packaged renderer (xvfb), install.sh
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,36 +81,107 @@ jobs:
           node-version: 22
           cache: npm
       - uses: astral-sh/setup-uv@v6
-      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: sudo apt-get update && sudo apt-get install -y xvfb fuse3
       - run: npm ci
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
+      - name: Bundle Python + engine (manylinux_2_28 wheels)
+        run: ./scripts/bundle-engine.sh
+      - name: Build the AppImage
+        run: npm run dist:linux
+      - name: AppImage name
+        run: echo "APPIMAGE=release/OptionLens-$(node -p 'require("./package.json").version')-linux-x64.AppImage" >> "$GITHUB_ENV"
+      - name: No bundled binary needs a glibc newer than 2.28
+        run: ./scripts/check-linux-glibc.sh release/linux-unpacked 2.28
+      - name: Bundled engine starts and stops cleanly (LISTENING + health, stdin closed)
+        run: ./scripts/smoke-bundled-engine.sh release/linux-unpacked/resources/python/bin/python3
+      - name: Bundled engine on Ubuntu 22.04 (container)
+        run: >-
+          docker run --rm -v "$PWD/release/linux-unpacked:/app:ro" -v "$PWD/scripts:/scripts:ro" ubuntu:22.04
+          /app/resources/python/bin/python3 -I -B /scripts/smoke-bundled-engine.py
+      - name: The updater accepts the built AppImage (magic, name, version)
+        run: OPTIONLENS_APPIMAGE="$APPIMAGE" npx vitest run electron/main/updater/installers
+      - name: Packaged renderer loads data from the engine; quitting stops it cleanly (the AppImage itself)
+        run: PACKAGED_APP="$PWD/$APPIMAGE" xvfb-run -a npx playwright test e2e/packaged.spec.ts --trace off
+      - name: install.sh (Linux) against the built AppImage
+        run: ./scripts/test-install-sh.sh "$APPIMAGE"
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        with:
+          name: OptionLens-linux-x64
+          path: ${{ env.APPIMAGE }}
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 — setup.exe + zip, bundled engine, installed app
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: [app, engine, packaged, shell]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Unit tests that exercise Windows (PowerShell update helper, file locks, platform module)
+        run: |
+          npx vitest run electron/main/updater/windows-helper.test.ts electron/main/fs-retry.test.ts electron/main/import-data.test.ts electron/main/db-backup.test.ts
+          npx vitest run electron/main/platform -t Windows
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
       - name: Bundle Python + engine
         run: ./scripts/bundle-engine.sh
-      - run: npm run dist:dir
-      - name: Bundled engine starts (LISTENING + health)
-        run: ./scripts/smoke-bundled-engine.sh release/linux-unpacked/resources/python/bin/python3
-      - name: Packaged renderer loads data from the engine
-        run: xvfb-run -a npx playwright test e2e/packaged.spec.ts --trace off
-        env:
-          PACKAGED_APP: release/linux-unpacked/optionlens-mac
-
-  engine:
-    name: Engine — pytest (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: pytest
-        working-directory: engine
+      - name: Build setup.exe and zip
+        run: npm run dist:win
+      - name: Artifact names
         run: |
-          uv sync --frozen
-          uv run pytest -q
-
-  shell:
-    name: Shell scripts — shellcheck (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: shellcheck --version && shellcheck install.sh scripts/*.sh
+          V="$(node -p 'require("./package.json").version')"
+          echo "SETUP=release/OptionLens-$V-win-x64-setup.exe" >> "$GITHUB_ENV"
+          echo "ZIP=release/OptionLens-$V-win-x64.zip" >> "$GITHUB_ENV"
+          ls -l release
+      - name: Bundled engine starts and stops cleanly (LISTENING + health, stdin closed)
+        run: ./scripts/smoke-bundled-engine.sh release/win-unpacked/resources/python/python.exe
+      - name: The updater accepts the built installer (version resource)
+        run: OPTIONLENS_SETUP_EXE="$SETUP" npx vitest run electron/main/updater/pe-version.test.ts
+      - name: The zip is the portable app (OptionLens.exe + bundled Python)
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath $env:ZIP -DestinationPath zip-check
+          foreach ($f in 'OptionLens.exe', 'resources\app.asar', 'resources\python\python.exe') {
+            if (-not (Test-Path -LiteralPath (Join-Path zip-check $f))) { Get-ChildItem zip-check; throw "the zip has no $f" }
+          }
+      - name: Silent per-user install (/S), as install.ps1 and the updater run it
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath $env:SETUP -ArgumentList '/S' -PassThru
+          $null = $p.Handle; $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { throw "setup exited with $($p.ExitCode)" }
+          $dir = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'OptionLens.exe') } | Select-Object -First 1
+          if (-not $dir) { throw 'OptionLens.exe not found under %LOCALAPPDATA%\Programs' }
+          # electron/main/updater/installers/windows.ts: an installer-made copy updates itself
+          if (-not (Test-Path (Join-Path $dir.FullName 'Uninstall OptionLens.exe'))) { Get-ChildItem $dir.FullName; throw 'no "Uninstall OptionLens.exe"' }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\OptionLens.lnk")) { throw 'no Start-menu shortcut' }
+          "INSTALLED_EXE=$(Join-Path $dir.FullName 'OptionLens.exe')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Installed app — renderer loads data from the engine; quitting stops it cleanly
+        run: PACKAGED_APP="$INSTALLED_EXE" npx playwright test e2e/packaged.spec.ts --trace off
+      - name: install.ps1 logic (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/test-install-ps1.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OptionLens-win-x64
+          path: |
+            ${{ env.SETUP }}
+            ${{ env.ZIP }}
+          if-no-files-found: error
 
   mac:
     name: macOS zip (${{ matrix.arch }})
@@ -113,26 +223,33 @@ jobs:
         run: ./scripts/verify-mac-zip.sh "$ZIP"
       - uses: actions/upload-artifact@v4
         with:
-          name: OptionLens-${{ matrix.arch }}-zip
+          name: OptionLens-mac-${{ matrix.arch }}
           path: ${{ env.ZIP }}
           if-no-files-found: error
 
   release:
-    name: Attach the zips to the GitHub Release
+    name: Attach every OS's assets to the GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: mac
+    needs: [mac, windows, packaged]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: OptionLens-*-zip
+          pattern: OptionLens-*
           merge-multiple: true
-          path: zip
-      - run: ls -l zip && test "$(ls zip/*.zip | wc -l)" -eq 2
+          path: assets
+      - name: Exactly the five release assets (names as electron/main/updater/asset.ts expects)
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          ls -l assets
+          for f in "OptionLens-$V-arm64.zip" "OptionLens-$V-x64.zip" "OptionLens-$V-win-x64.zip" "OptionLens-$V-win-x64-setup.exe" "OptionLens-$V-linux-x64.AppImage"; do
+            test -s "assets/$f" || { echo "missing $f" >&2; exit 1; }
+          done
+          test "$(ls assets | wc -l)" -eq 5
       - uses: softprops/action-gh-release@v2
         with:
-          files: zip/*.zip
+          files: assets/*
           fail_on_unmatched_files: true
           generate_release_notes: true
