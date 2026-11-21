@@ -39,4 +39,5 @@ async def rates() -> str:
             errors.append(f"{y}: {e}")
     if not stored and errors:
         raise RuntimeError("; ".join(errors))
-    return f"{stored} rates; latest {await asyncio.to_thread(market_repo.rate_on)}"
+    latest = await asyncio.to_thread(market_repo.rate_on)
+    return f"{stored} rates; latest {latest:.2%}" if latest is not None else f"{stored} rates"

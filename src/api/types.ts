@@ -25,7 +25,10 @@ export interface Bar { date: ISODate; open: number; high: number; low: number; c
 export interface JobRun { job: string; started_at: ISODateTime; finished_at: ISODateTime | null; ok: boolean | null; detail: string | null }
 export interface Status {
   now: ISODateTime; market_open: boolean; next_sweep_at: ISODateTime | null;
-  universe_size: number; optionable_count: number;
+  universe_size: number;
+  optionable_count: number;           // universe symbols with a chain stored in the last 5 sessions
+  options_listed_count?: number;      // universe symbols a chain source showed to list options (a chain was stored)
+  no_options_count?: number;          // universe symbols the IBKR bridge confirmed list no options
   last_sweep_at: ISODateTime | null; last_eod_date: ISODate | null;
   iv_history_days: number;            // distinct dates in metrics_daily
   option_eod_days: number;            // distinct dates in option_eod

@@ -68,7 +68,7 @@ def test_symbols_upsert_universe_search(tmpdb):
     symbols.reprobe_not_optionable(["SPY"])
     assert symbols.get_symbol("SPY")["optionable"] is None
     symbols.set_optionable("AAPL", True)
-    assert symbols.counts() == {"universe_size": 2, "optionable_count": 1, "total": 5}
+    assert symbols.counts() == {"universe_size": 2, "optionable_count": 1, "no_options_count": 0, "total": 5}
     assert [r["symbol"] for r in symbols.search_symbols("aap")] == ["AAP", "AAPL"]  # exact match first
     assert [r["symbol"] for r in symbols.search_symbols("aa")] == ["AAPL", "AAP"]   # then universe
     assert symbols.search_symbols("AAPL")[0]["symbol"] == "AAPL"

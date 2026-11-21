@@ -27,4 +27,4 @@ async def prune() -> str:
             "http_cache": cache_repo.prune_cache(now - timedelta(days=CACHE_DAYS)),
         }
 
-    return ", ".join(f"{k} -{v}" for k, v in (await asyncio.to_thread(run)).items())
+    return "deleted: " + ", ".join(f"{k} {v:,}" for k, v in (await asyncio.to_thread(run)).items())

@@ -119,6 +119,14 @@ async def test_eod_without_vendor_archives_unarchived_pushes_only(tmpdb, payload
     assert set(bars_repo.bars_on(FRI)) == {"AAPL", "MSFT"}
 
 
+async def test_a_trading_day_eod_that_archives_nothing_fails(tmpdb, monkeypatch):
+    """No closing chain pushed (bridge off after the close): the run is a failure with the reason, never OK with
+    '0 option_eod rows, 0 bars'."""
+    monkeypatch.setattr(chains, "now_ny", lambda: ny(2026, 11, 20, 20, 5))
+    with pytest.raises(chains.NothingArchived, match="2026-11-20: nothing archived"):
+        await chains.eod()
+
+
 async def test_ensure_fresh_without_source_serves_stored_chain(tmpdb, payload, monkeypatch):
     async def no_history(row, start=None):
         return 0

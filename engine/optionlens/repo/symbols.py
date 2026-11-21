@@ -103,9 +103,11 @@ def search_symbols(q: str, limit: int = 20) -> list[dict]:
 
 
 def counts() -> dict[str, int]:
-    """-> {universe_size, optionable_count, total}."""
+    """-> {universe_size, optionable_count (a chain was stored), no_options_count (a chain source confirmed no
+    listed options), total}."""
     r = query("""SELECT count(*) FILTER (WHERE in_universe) AS universe_size,
                         count(*) FILTER (WHERE in_universe AND optionable) AS optionable_count,
+                        count(*) FILTER (WHERE in_universe AND optionable = false) AS no_options_count,
                         count(*) AS total FROM symbols""")[0]
     return {k: int(v) for k, v in r.items()}
 

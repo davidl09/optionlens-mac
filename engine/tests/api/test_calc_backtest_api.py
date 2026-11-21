@@ -86,10 +86,20 @@ def test_system_endpoints(client):
     st = client.get("/api/status").json()
     assert st["universe_size"] == 2 and st["iv_history_days"] == 1 and st["option_eod_days"] == 1
     assert st["row_counts"]["option_latest"] > 3000 and st["last_eod_date"] == "2026-11-18"
+    assert st["optionable_count"] == 1                    # chain coverage: AAPL's stored chain (SPY has none)
+    assert st["options_listed_count"] == 1 and st["no_options_count"] == 0
     assert [x["symbol"] for x in client.get("/api/search?q=aap").json()] == ["AAPL"]
     cv = client.get("/api/compare/volatility?symbols=AAPL,spy").json()
     assert cv["symbols"] == ["AAPL", "SPY"] and cv["table"][1]["iv30"] is None and cv["table"][0]["iv30"] > 0
     assert client.get("/api/compare/volatility?symbols=").status_code == 422
+
+
+def test_job_details_are_human_readable():
+    from optionlens.services.system import human_detail
+    assert human_detail('{"cursor": "2024-01-03", "events": 51664}') == "cursor 2024-01-03, events 51,664"
+    assert human_detail('ReadTimeout: x {"cursor": "2024-01-03", "events": 5}') == "ReadTimeout: x cursor 2024-01-03, events 5"
+    assert human_detail("12 rates; latest 0.042300000000000004") == "12 rates; latest 0.0423"
+    assert human_detail(None) is None and human_detail("AAPL 1.5 ok") == "AAPL 1.5 ok"
 
 
 def test_api_only_unknown_paths_404_json(client):

@@ -79,6 +79,17 @@ def fetched_since(since: datetime, symbols: Sequence[str] | None = None) -> set[
         [utc_naive(since), syms, syms])}
 
 
+def chain_coverage(since: date, symbols: Sequence[str]) -> int:
+    """Number of `symbols` with a chain stored since `since`: a latest chain fetched on/after it or an end-of-day
+    archive dated on/after it."""
+    syms = list(symbols)
+    return int(scalar(
+        """SELECT count(*) FROM (SELECT symbol FROM option_latest WHERE ts >= ? UNION
+                                 SELECT symbol FROM option_eod WHERE date >= ?)
+           WHERE symbol IN (SELECT unnest(?::VARCHAR[]))""",
+        [utc_naive(datetime.combine(since, datetime.min.time())), since, syms]) or 0)
+
+
 def get_chain(symbol: str, expiry: date | None = None) -> ChainSnapshot | None:
     """Stored chain (optionally one expiry) + stored quote as a ChainSnapshot, or None."""
     quote = get_quote(symbol)

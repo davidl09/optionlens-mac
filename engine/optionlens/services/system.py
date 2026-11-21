@@ -1,12 +1,14 @@
 """Health, status page data (incl. data-source and IBKR-bridge health) and symbol search."""
 from __future__ import annotations
 
+import json
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from importlib import metadata
 
-from ..analytics.calendar import is_market_open, now_ny
+from ..analytics.calendar import is_market_open, now_ny, prev_trading_day
 from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.calendars import earnings_backfill_progress
@@ -26,11 +28,32 @@ SOURCE_JOBS = {
                "dividends_history"),
     "treasury": ("rates",),
 }
+COVERAGE_SESSIONS = 5   # optionable_count: universe symbols with a chain stored within this many sessions
 BRIDGE_STALE_S = 600   # no heartbeat for this long -> bridge not connected (it polls /wants every 5 min)
 
 
+_JSON_TAIL = re.compile(r"\{[^{}]*\}\s*$")
+_FLOAT = re.compile(r"(?<![\w.])-?\d+\.\d{5,}(?![\w.])")
+
+
+def human_detail(detail: str | None) -> str | None:
+    """A job's detail for people: a trailing JSON progress object (kept raw in job_runs as the resume state) as
+    'key value' pairs, counts with thousands separators, float noise (0.042300000000000004) rounded."""
+    if not detail:
+        return detail
+    m = _JSON_TAIL.search(detail)
+    if m:
+        try:
+            obj = json.loads(m.group(0))
+            pairs = ", ".join(f"{k} {f'{v:,}' if isinstance(v, int) else v}" for k, v in obj.items())
+            detail = (detail[:m.start()].rstrip() + " " if detail[:m.start()].strip() else "") + pairs
+        except ValueError:
+            pass
+    return _FLOAT.sub(lambda f: f"{float(f.group(0)):.6g}", detail)
+
+
 def _job(r: dict) -> dict:
-    return {k: r[k] for k in JOB_FIELDS}
+    return {**{k: r[k] for k in JOB_FIELDS}, "detail": human_detail(r["detail"])}
 
 
 @lru_cache(maxsize=1)
@@ -86,6 +109,12 @@ def sources(latest: dict[str, dict], br: dict) -> list[dict]:
     return [_source("nasdaq", latest), _source("treasury", latest), ibkr, *vendor]
 
 
+def _sessions_back(d, n: int):
+    for _ in range(n):
+        d = prev_trading_day(d)
+    return d
+
+
 def status() -> dict:
     now = now_ny()
     counts = symbols_repo.counts()
@@ -97,7 +126,10 @@ def status() -> dict:
     recent = [r for r in jobs_repo.recent_runs(50) if r["id"] not in seen]
     return {
         "now": now, "market_open": is_market_open(now), "next_sweep_at": scheduler.next_run_at("sweep", now),
-        "universe_size": counts["universe_size"], "optionable_count": counts["optionable_count"],
+        "universe_size": counts["universe_size"],
+        "optionable_count": options_repo.chain_coverage(_sessions_back(now.date(), COVERAGE_SESSIONS),
+                                                        symbols_repo.universe_symbols(include_unoptionable=True)),
+        "options_listed_count": counts["optionable_count"], "no_options_count": counts["no_options_count"],
         "last_sweep_at": sweep["finished_at"] if sweep else None,
         "last_eod_date": options_repo.prior_eod_date(now.date() + timedelta(days=1)),
         "iv_history_days": status_repo.distinct_dates("metrics_daily"),

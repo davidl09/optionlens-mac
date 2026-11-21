@@ -240,4 +240,11 @@ async def eod(symbols: list[str] | None = None) -> str:
     n_eod = await asyncio.to_thread(archive_unarchived, day, symbols)
     bars = await asyncio.to_thread(store_quote_bars, day, symbols)
     await hooks.fire(hooks.on_eod, day, sorted({b.symbol for b in bars}))
-    return f"{day}: {n_eod} option_eod rows, {len(bars)} bars{sweep_detail}"
+    if not n_eod and not bars:
+        raise NothingArchived(f"{day}: nothing archived — no closing chain was stored after the close (is IB Gateway "
+                              f"connected with the bridge on between the close and 20:00 ET?){sweep_detail}")
+    return f"{day}: {n_eod:,} option_eod rows, {len(bars):,} bars{sweep_detail}"
+
+
+class NothingArchived(RuntimeError):
+    """A trading day's EOD found no closing data to archive (recorded as a failed run, not as OK)."""
