@@ -41,11 +41,11 @@ def _screener(kind: str):
 SCREENER_PARAMS = (MIN_PRICE, Param("min_avg_volume", "Min avg volume (30d)", "int", 0, min=0, step=50_000),
                    MIN_MCAP, UNIVERSE_ONLY, *SCOPE)
 STOCK_SCREENER = ReportDef(
-    "stock-screener", "Stock Screener", "Stocks",
+    "stock-screener", "Stock screener", "Stocks",
     "30+ metrics per stock: performance, volume, technicals, volatility, option activity, dividends and catalysts.",
     SCREENER_PARAMS, C.STOCK_SCREENER, _screener("stock"), ("market_cap", "desc"), NOTES_FRAME)
 ETF_SCREENER = ReportDef(
-    "etf-screener", "ETF Screener", "Stocks", "The stock-screener metrics for ETFs.",
+    "etf-screener", "ETF screener", "Stocks", "The stock-screener metrics for ETFs.",
     (Param("min_price", "Min price", "number", 0.0, min=0), *SCREENER_PARAMS[1:]), C.STOCK_SCREENER,
     _screener("etf"), ("avg_volume_30d", "desc"), NOTES_FRAME)
 
@@ -71,7 +71,7 @@ def run_market_movers(p: RunParams) -> Output:
 
 
 MARKET_MOVERS = ReportDef(
-    "market-movers", "Market Movers", "Stocks", "Top gainers, losers or most active symbols today.",
+    "market-movers", "Market movers", "Stocks", "Top gainers, losers or most active symbols today.",
     (p_select("side", "Show", "gainers", (("gainers", "Gainers"), ("losers", "Losers"), ("active", "Most active"))),
      *MOVERS_PARAMS), C.MOVERS, run_market_movers, None, NOTES_FRAME)
 
@@ -88,10 +88,10 @@ def _hv_movers(up: bool):
 
 HV_PARAMS = (p_num("min_rel_volume", "Min relative volume", 1.5, 0, step=0.25),
              p_num("min_change", "Min |% change|", 0.02, 0, step=0.01), *MOVERS_PARAMS)
-GAINERS_HV = ReportDef("gainers-high-volume", "Gainers on High Volume", "Stocks",
+GAINERS_HV = ReportDef("gainers-high-volume", "Gainers on high volume", "Stocks",
                        "Up today with volume above its 30-day average.", HV_PARAMS, C.MOVERS, _hv_movers(True),
                        ("change_pct", "desc"), NOTES_FRAME)
-LOSERS_HV = ReportDef("losers-high-volume", "Losers on High Volume", "Stocks",
+LOSERS_HV = ReportDef("losers-high-volume", "Losers on high volume", "Stocks",
                       "Down today with volume above its 30-day average.", HV_PARAMS, C.MOVERS, _hv_movers(False),
                       ("change_pct", "asc"), NOTES_FRAME)
 
@@ -118,7 +118,7 @@ def run_highs_lows(p: RunParams) -> Output:
 
 
 HIGHS_LOWS = ReportDef(
-    "52w-highs-lows", "52-Week Highs / Lows", "Stocks",
+    "52w-highs-lows", "52-week highs / lows", "Stocks",
     "Symbols trading at (or within x% of) a new 52-week high or low today.",
     (p_select("side", "Show", "high", (("high", "New highs"), ("low", "New lows"))),
      p_num("within_pct", "Within % of the prior 52w extreme", 0.0, 0, 0.5, step=0.01,
@@ -132,7 +132,7 @@ def run_unusual_stock_volume(p: RunParams) -> Output:
 
 
 UNUSUAL_STOCK_VOLUME = ReportDef(
-    "unusual-stock-volume", "Unusual Stock Volume", "Stocks", "Today's share volume vs the 30-day average.",
+    "unusual-stock-volume", "Unusual stock volume", "Stocks", "Today's share volume vs the 30-day average.",
     (p_num("min_rel_volume", "Min relative volume", 2.0, 0, step=0.5), *MOVERS_PARAMS), C.MOVERS,
     run_unusual_stock_volume, ("rel_volume", "desc"),
     ("Intraday, today's volume is partial (delayed quote volume so far) while the average is of full days.",))
@@ -145,7 +145,7 @@ def run_volume_burst(p: RunParams) -> Output:
 
 
 VOLUME_BURST = ReportDef(
-    "volume-burst", "Volume Burst", "Stocks", "Volume ≥ 3× average with a move of at least 2% either way.",
+    "volume-burst", "Volume burst", "Stocks", "Volume ≥ 3× average with a move of at least 2% either way.",
     (p_num("min_rel_volume", "Min relative volume", 3.0, 0, step=0.5),
      p_num("min_change", "Min |% change|", 0.02, 0, step=0.01), *MOVERS_PARAMS), C.MOVERS, run_volume_burst,
     ("rel_volume", "desc"), NOTES_FRAME)
@@ -172,7 +172,7 @@ def run_gap_and_go(p: RunParams) -> Output:
 
 
 GAP_AND_GO = ReportDef(
-    "gap-and-go", "Gap and Go", "Stocks", "Gapped at the open by at least x% and kept moving in the gap direction.",
+    "gap-and-go", "Gap and go", "Stocks", "Gapped at the open by at least x% and kept moving in the gap direction.",
     (p_select("side", "Gap", "up", (("up", "Gap up"), ("down", "Gap down"))),
      p_num("min_gap", "Min |gap|", 0.02, 0, step=0.01), *MOVERS_PARAMS), GAP_COLS, run_gap_and_go, None,
     ("Gap = today's open / previous close − 1; continuation = price beyond the open in the gap direction.",))
@@ -244,10 +244,10 @@ def _group_perf(field: str):
 
 
 GROUP_PARAMS = (Param("kind", "Type", "select", "stock", options=KIND.options), UNIVERSE_ONLY, *SCOPE)
-PERF_SECTOR = ReportDef("performance-by-sector", "Performance by Sector", "Stocks",
+PERF_SECTOR = ReportDef("performance-by-sector", "Sector performance", "Stocks",
                         "Equal-weight average returns per sector.", GROUP_PARAMS, GROUP_PERF_COLS,
                         _group_perf("sector"), ("ret_1d", "desc"), ("Equal-weight averages of member returns.",))
-PERF_INDUSTRY = ReportDef("performance-by-industry", "Performance by Industry", "Stocks",
+PERF_INDUSTRY = ReportDef("performance-by-industry", "Industry performance", "Stocks",
                           "Equal-weight average returns per industry.", GROUP_PARAMS, GROUP_PERF_COLS,
                           _group_perf("industry"), ("ret_1d", "desc"), ("Equal-weight averages of member returns.",))
 
@@ -318,7 +318,7 @@ def run_seasonality(p: RunParams) -> Output:
 
 
 SEASONALITY = ReportDef(
-    "seasonality-screener", "Seasonality Screener", "Stocks",
+    "seasonality-screener", "Seasonality screener", "Stocks",
     "Historic average return and % of positive years for the current and next calendar month (up to 10 years).",
     (p_int("min_years", "Min years of history", 5, 1, 10), p_num("min_pos_pct", "Min % positive (this month)", None, 0, 1),
      *MOVERS_PARAMS), SEAS_COLS, run_seasonality, ("cur_avg", "desc"),
@@ -378,10 +378,10 @@ def _extended(market: str):
 
 
 EXT_PARAMS = (p_int("top_n", "Top N by volume", 50, 0, 200, help="Plus every watchlist symbol"), *SCOPE)
-PREMARKET = ReportDef("premarket-movers", "Pre-Market Movers", "Stocks",
+PREMARKET = ReportDef("premarket-movers", "Pre-market movers", "Stocks",
                       "Pre-market moves for watchlist symbols and the most active names.", EXT_PARAMS, EXT_COLS,
                       _extended("pre"), None)
-AFTERHOURS = ReportDef("afterhours-movers", "After-Hours Movers", "Stocks",
+AFTERHOURS = ReportDef("afterhours-movers", "After-hours movers", "Stocks",
                        "After-hours moves for watchlist symbols and the most active names.", EXT_PARAMS, EXT_COLS,
                        _extended("post"), None)
 
@@ -418,7 +418,7 @@ def run_event_driven(p: RunParams) -> Output:
 
 
 EVENT_DRIVEN = ReportDef(
-    "event-driven", "Event-Driven", "Stocks", "Upcoming earnings and ex-dividend dates within N days.",
+    "event-driven", "Event-driven", "Stocks", "Upcoming earnings and ex-dividend dates within N days.",
     (p_int("days", "Within days", 7, 0, 90), p_select("event", "Events", "all",
                                                        (("all", "All"), ("earnings", "Earnings"), ("ex_div", "Ex-dividend"))),
      MIN_MCAP, KIND, UNIVERSE_ONLY, *SCOPE),

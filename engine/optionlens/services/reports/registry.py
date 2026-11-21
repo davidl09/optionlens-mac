@@ -10,7 +10,10 @@ import anyio.to_thread
 from ...repo import user as user_repo
 from ..errors import NotFound
 from . import calendars, dividends, earnings, options, stocks, strategies, volatility
+from .columns import NOTE_CHAIN_UNIVERSE
 from .base import MAX_ROWS, Output, ParamError, ReportDef, RunParams, jsonable, sort_rows
+
+NO_CHAIN_MATCH = "No stored option chain matches these settings."
 
 REPORTS: dict[str, ReportDef] = {}
 for _d in (*options.REPORTS, *strategies.REPORTS, *earnings.REPORTS, *volatility.REPORTS, *stocks.REPORTS,
@@ -83,7 +86,20 @@ def finalize(d: ReportDef, p: RunParams, out: Output) -> dict:
         "id": d.id, "title": d.title, "asof": jsonable(out.asof), "params": jsonable(dict(p)),
         "columns": [c.as_dict() for c in d.columns], "rows": jsonable(rows), "truncated": truncated,
         "notes": [*d.notes, *out.notes], **({"extra": jsonable(out.extra)} if out.extra is not None else {}),
+        **({"method": list(d.method)} if d.method else {}),
+        **({"empty_reason": reason} if not rows and (reason := empty_reason(d, out)) else {}),
     }
+
+
+def empty_reason(d: ReportDef, out: Output) -> str | None:
+    """Why a run returned no rows: its run-time notes (they explain the empty result), else the report's own
+    `empty_reason`, else for chain-based reports that no stored chain matched."""
+    run_time = " ".join(n for n in out.notes if n not in d.notes)
+    if run_time:
+        return run_time
+    if d.empty_reason:
+        return d.empty_reason
+    return NO_CHAIN_MATCH if NOTE_CHAIN_UNIVERSE in d.notes else None
 
 
 def compare_straddle(symbols: list[str], dte: int = 30) -> dict:

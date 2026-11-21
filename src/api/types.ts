@@ -295,7 +295,11 @@ export interface ReportResult {
   id: string; title: string; asof: ISODateTime | null;
   params: Record<string, unknown>;     // effective params
   columns: ColumnDef[]; rows: ReportRow[]; truncated: boolean;
-  notes: string[];                     // limitations / proxies
+  notes: string[];                     // limitations / proxies, in plain words
+  /** The precise method behind the notes (formulas, thresholds), shown on request. */
+  method?: string[];
+  /** Only when `rows` is empty: why (the run's own explanation, or the report's known reason). */
+  empty_reason?: string;
   extra?: Record<string, unknown>;     // report-specific (e.g. P/C history)
   source?: DataSource;
 }

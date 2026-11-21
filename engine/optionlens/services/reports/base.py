@@ -187,7 +187,9 @@ class ReportDef:
     columns: tuple[Col, ...]
     run: Callable[[RunParams], Any]
     default_sort: tuple[str, str] | None = None     # (key, "asc"|"desc")
-    notes: tuple[str, ...] = ()                       # static limitations / proxies
+    notes: tuple[str, ...] = ()                       # static limitations / proxies, in plain words
+    method: tuple[str, ...] = ()                      # the precise method behind the notes (shown on request)
+    empty_reason: str | None = None                   # why a run can return no rows (when no run-time note says)
 
     def as_dict(self) -> dict:
         d = {"id": self.id, "title": self.title, "category": self.category, "description": self.description,

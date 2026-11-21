@@ -24,10 +24,16 @@ from .universe import Frame
 
 CAL_ID = symbol_earnings.CALENDAR_REPORT_ID
 HISTORY_YEARS = 4
-TIME_LABEL = {"bmo": "BMO", "amc": "AMC", "unknown": "—"}
-NOTE_TIMING = ("Implied move = ATM straddle of the first expiry on/after the reaction day / spot (reaction day: "
-               "event day for BMO, next session for AMC or unknown timing).")
-NOTE_HIST = "Historical moves: reaction-day close vs the prior close, from stored daily bars (up to 3y of events)."
+TIME_LABEL = {"bmo": "BMO", "amc": "AMC", "unknown": "n/a"}
+NOTE_TIMING = ("Implied move = how far options expect the stock to move on the earnings reaction, from the "
+               "at-the-money straddle price.")
+NOTE_HIST = "Historical moves: the stock's close-to-close move on past earnings reaction days (up to 3 years)."
+TIME_DESC = "BMO = before the open, AMC = after the close, n/a = time not announced"
+NOTE_TIME_NA = ("Time: BMO = before the open, AMC = after the close, \"(inferred)\" = read off past price gaps, "
+                "n/a = not announced.")
+METHOD_MOVES = ("Implied move = ATM straddle of the first expiry on/after the reaction day ÷ spot. Reaction day = the "
+                "event day for BMO, the next session for AMC or unknown timing.",
+                "Historical move = reaction-day close vs the prior close, from stored daily bars.")
 
 
 # ----------------------------------------------------------------------------- shared helpers
@@ -84,7 +90,7 @@ def _fval(f: Frame, i: int | None, k: str):
 
 # ============================================================================ calendar
 CAL_COLS = (
-    Col("date", "Date", "date"), Col("time", "Time", "badge", description="BMO = before open, AMC = after close"),
+    Col("date", "Date", "date"), Col("time", "Time", "badge", description=TIME_DESC),
     *C.DESC_SHORT, Col("price", "Price", "money", C.G_QUOTE), Col("change_pct", "% Chg", "pct_signed", C.G_QUOTE),
     *group("Estimates", (Col("eps_estimate", "EPS est", "num2"), Col("num_estimates", "# Ests", "int"),
                          Col("fiscal_quarter", "Fiscal qtr", "text", default_hidden=True))),
@@ -125,7 +131,7 @@ def calendar_rows(p: RunParams, start: date, end: date) -> tuple[list[dict], Fra
         avg = earn_a.earnings_stats(h[:8])["avg_abs_move"] if h else None
         im = imp.get(e.symbol, {})
         rows.append({
-            "date": e.date, "time": TIME_LABEL.get(e.timing, "—"), "timing": e.timing, "symbol": e.symbol,
+            "date": e.date, "time": TIME_LABEL.get(e.timing, "n/a"), "timing": e.timing, "symbol": e.symbol,
             "name": _fval(f, i, "name"), "market_cap": _fval(f, i, "market_cap"), "sector": _fval(f, i, "sector"),
             "price": _fval(f, i, "price"), "change_pct": _fval(f, i, "change_pct"),
             "eps_estimate": e.eps_estimate, "num_estimates": e.num_estimates, "fiscal_quarter": e.fiscal_quarter,
@@ -147,17 +153,18 @@ def run_calendar(p: RunParams) -> Output:
 CAL_PARAMS = (Param("start", "From", "date", today), Param("end", "To", "date", rel_date(7)), MIN_MCAP, UNIVERSE_ONLY,
               *SCOPE)
 CALENDAR = ReportDef(
-    CAL_ID, "Earnings Calendar", "Earnings",
+    CAL_ID, "Earnings calendar", "Earnings",
     "Upcoming earnings with timing, estimates, the options-implied move vs the average historical move.",
     CAL_PARAMS, CAL_COLS, run_calendar, ("market_cap", "desc"),
-    (NOTE_TIMING, NOTE_HIST, "Events whose reaction session has already started show no implied move.",
+    (NOTE_TIMING, NOTE_HIST, NOTE_TIME_NA, "Events whose reaction session has already started show no implied move.",
      "Implied moves need a stored option chain: only chain-universe symbols (watchlists, recently opened, most "
-     "liquid by option volume) have one.", C.NOTE_IV_RANK))
+     "liquid by option volume) have one.", C.NOTE_IV_RANK),
+    method=METHOD_MOVES)
 
 
 # ============================================================================ results
 RES_COLS = (
-    Col("date", "Date", "date"), Col("time", "Time", "badge"), *C.DESC_SHORT,
+    Col("date", "Date", "date"), Col("time", "Time", "badge", description=TIME_DESC), *C.DESC_SHORT,
     *group("Results", (Col("fiscal_quarter", "Fiscal qtr", "text", default_hidden=True),
                        Col("eps_actual", "EPS actual", "num2"), Col("eps_estimate", "EPS est", "num2"),
                        Col("surprise_pct", "Surprise", "pct_signed"))),
@@ -200,7 +207,7 @@ def run_results(p: RunParams) -> Output:
 
 
 RESULTS = ReportDef(
-    "earnings-results", "Earnings Results", "Earnings",
+    "earnings-results", "Earnings results", "Earnings",
     "Recent reporters: EPS vs estimate and the stock's gap, move and drift after the report.",
     (Param("start", "From", "date", rel_date(-7)), Param("end", "To", "date", today), MIN_MCAP, UNIVERSE_ONLY, *SCOPE),
     RES_COLS, run_results, ("date", "desc"),
@@ -210,7 +217,7 @@ RESULTS = ReportDef(
 
 # ============================================================================ pattern screener
 PAT_COLS = (
-    Col("date", "Next earnings", "date"), Col("time", "Time", "badge"), *C.DESC_SHORT,
+    Col("date", "Next earnings", "date"), Col("time", "Time", "badge", description=TIME_DESC), *C.DESC_SHORT,
     Col("price", "Price", "money", C.G_QUOTE),
     *group("History", (Col("events", "# Events", "int"), Col("up_pct", "% Up", "pct"),
                        Col("avg_move", "Avg move", "pct_signed"), Col("avg_abs_move", "Avg |move|", "pct"),
@@ -244,7 +251,7 @@ def run_pattern(p: RunParams) -> Output:
             continue
         s = earn_a.earnings_stats(h)
         i = pos.get(e.symbol)
-        rows.append({"date": e.date, "time": TIME_LABEL.get(e.timing, "—"), "symbol": e.symbol,
+        rows.append({"date": e.date, "time": TIME_LABEL.get(e.timing, "n/a"), "symbol": e.symbol,
                      "name": _fval(f, i, "name"), "market_cap": _fval(f, i, "market_cap"),
                      "sector": _fval(f, i, "sector"), "price": _fval(f, i, "price"), "events": s["count"],
                      "up_pct": s["up_pct"], "avg_move": s["avg_move"], "avg_abs_move": s["avg_abs_move"],
@@ -256,18 +263,19 @@ def run_pattern(p: RunParams) -> Output:
 
 
 PATTERN = ReportDef(
-    "earnings-pattern-screener", "Earnings Pattern Screener", "Earnings",
+    "earnings-pattern-screener", "Earnings pattern screener", "Earnings",
     "Upcoming reporters with their historic earnings reaction: % up, average move, pre- and post-event drift.",
     (p_select("lookback", "Past events", "8", (("4", "Last 4"), ("8", "Last 8"), ("12", "Last 12"))),
      p_int("window", "Reporting within days", 14, 0, 90), p_int("min_events", "Min past events", 4, 1, 12),
      MIN_MCAP, UNIVERSE_ONLY, *SCOPE),
-    PAT_COLS, run_pattern, ("avg_abs_move", "desc"), (NOTE_HIST, "Drift windows are in trading days."))
+    PAT_COLS, run_pattern, ("avg_abs_move", "desc"), (NOTE_HIST, "Drift windows are in trading days."),
+    method=METHOD_MOVES[1:])
 
 
 # ============================================================================ option strategy screener
 STRAT_COLS = (
     *C.DESC_SHORT[:2], Col("strategy", "Strategy", "text", default_hidden=True), Col("label", "Strategy", "text"),
-    Col("next_earnings", "Next earnings", "date"), Col("time", "Time", "badge"),
+    Col("next_earnings", "Next earnings", "date"), Col("time", "Time", "badge", description=TIME_DESC),
     *group("Backtest", (Col("trades", "# Trades", "int"), Col("win_rate", "Win rate", "pct"),
                         Col("median_return", "Median return", "pct_signed",
                             description="% of max(debit or max risk, 0.5% of spot); typical outcome"),
@@ -314,7 +322,7 @@ def run_strategy_screener(p: RunParams) -> Output:
             if r["trades"] < p["min_trades"]:
                 continue
             rows.append({**r, "symbol": sym, "name": _fval(f, i, "name"),
-                         "next_earnings": ev.date if ev else None, "time": TIME_LABEL.get(ev.timing, "—") if ev else None,
+                         "next_earnings": ev.date if ev else None, "time": TIME_LABEL.get(ev.timing, "n/a") if ev else None,
                          "pricing": f"{r['real_count']} real / {r['model_count']} model"})
     if skipped:
         notes.append(f"{skipped} symbol(s) skipped (no price/earnings history).")
@@ -324,7 +332,7 @@ def run_strategy_screener(p: RunParams) -> Output:
 
 
 STRATEGY_SCREENER = ReportDef(
-    "earnings-option-strategy-screener", "Earnings Option Strategy Screener", "Earnings",
+    "earnings-option-strategy-screener", "Earnings option strategy screener", "Earnings",
     "Backtests 30 option and stock strategies around each upcoming reporter's past earnings events "
     "(entry/exit in trading days relative to the reaction day).",
     (p_int("window", "Reporting within days", 7, 0, 60), p_int("lookback", "Past events", 8, 1, 12),
@@ -334,11 +342,14 @@ STRATEGY_SCREENER = ReportDef(
      p_int("min_trades", "Min trades", 3, 0, 12), p_int("max_symbols", "Max symbols", 40, 1, 300),
      MIN_MCAP, UNIVERSE_ONLY, *SCOPE),
     STRAT_COLS, run_strategy_screener, ("median_return", "desc"),
-    ("Real stored EOD option mids are used when available (spread ≤ 25%); otherwise Black-Scholes with the "
-     "SPEC IV proxy — see the pricing mix. Option history starts with the collector, so most trades are model-priced.",
-     "Expiry = first listed expiry on/after the exit date (≥ 2 days after for short premium).",
-     optbacktest.EVENT_RETURN_NOTE,
-     optbacktest.EVENT_VOL_NOTE))
+    ("Most trades are priced with a model, because stored option prices start on the day the collector began; "
+     "the pricing column shows the mix.",
+     "Returns are P/L per dollar at risk. Averages of few trades swing on outliers: compare the median.",
+     "Expiry = first listed expiry on/after the exit date (≥ 2 days after for short premium)."),
+    method=("Real stored end-of-day option mids are used when available (spread ≤ 25%); otherwise Black-Scholes with "
+            "the IV proxy.",
+            optbacktest.EVENT_RETURN_NOTE,
+            optbacktest.EVENT_VOL_NOTE))
 
 
 # ============================================================================ today's opportunities
@@ -365,13 +376,14 @@ def run_opportunities(p: RunParams) -> Output:
 
 
 OPPORTUNITIES = ReportDef(
-    "earnings-todays-opportunities", "Today's Earnings Opportunities", "Earnings",
+    "earnings-todays-opportunities", "Earnings opportunities", "Earnings",
     "Today's and the next session's reporters ranked by the gap between implied and historical moves.",
-    (MIN_MCAP, UNIVERSE_ONLY, *SCOPE), OPP_COLS, run_opportunities, ("move_gap", "desc"), (NOTE_TIMING, NOTE_HIST))
+    (MIN_MCAP, UNIVERSE_ONLY, *SCOPE), OPP_COLS, run_opportunities, ("move_gap", "desc"),
+    (NOTE_TIMING, NOTE_HIST, NOTE_TIME_NA), method=METHOD_MOVES)
 
 # ============================================================================ upcoming summary
 SUM_COLS = (Col("date", "Date", "date"), Col("count", "# Reporting", "int"), Col("bmo", "BMO", "int"),
-            Col("amc", "AMC", "int"), Col("unknown", "Time n/a", "int"),
+            Col("amc", "AMC", "int"), Col("unknown", "Time n/a", "int", description="Reporters that have not announced before open / after close"),
             Col("total_market_cap", "Total market cap", "bigmoney"),
             Col("notable", "Notable (top 5 by market cap)", "text"))
 
@@ -396,7 +408,7 @@ def run_summary(p: RunParams) -> Output:
 
 
 SUMMARY = ReportDef(
-    "earnings-upcoming-summary", "Upcoming Earnings Summary", "Earnings",
+    "earnings-upcoming-summary", "Upcoming earnings summary", "Earnings",
     "Per day for the next 30 days: number of reporters, BMO/AMC split, total market cap and notable names.",
     (p_int("days", "Days ahead", 30, 1, 90), MIN_MCAP, UNIVERSE_ONLY), SUM_COLS, run_summary, ("date", "asc"))
 

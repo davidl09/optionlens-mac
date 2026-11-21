@@ -19,7 +19,8 @@ def test_types_ts_has_the_interfaces():
                  "PresetPayload", "Alert", "Notification"):
         assert name in TYPES.raw
     assert TYPES.interface_fields("ReportResult") == {"id", "title", "asof", "params", "columns", "rows",
-                                                      "truncated", "notes", "extra", "source"}
+                                                      "truncated", "notes", "method", "empty_reason",
+                                                      "extra", "source"}
 
 
 def test_report_defs(api):

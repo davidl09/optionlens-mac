@@ -56,11 +56,15 @@ TECH = group(G_TECH, (
 
 # ---- volatility
 VOL_CORE = group(G_VOL, (
-    Col("iv30", "IV30", "vol"),
-    Col("iv_rank", "IV Rank", "pct", description="52w IV rank over stored IV30 history (needs ≥ 20 days)"),
-    Col("iv_pct", "IV Pct", "pct", description="Share of stored IV30 values below today's (needs ≥ 20 days)"),
-    Col("hv20", "HV20", "vol"),
-    Col("hv60", "HV60", "vol", default_hidden=True),
+    Col("iv30", "IV30", "vol", description="Implied volatility for 30 days to expiry, annualized (vol points)"),
+    Col("iv_rank", "IV Rank", "pct", description="Where today's IV30 sits between its 52-week low (0%) and high (100%); "
+        "needs 20 stored days"),
+    Col("iv_pct", "IV Pct", "pct", description="Share of the last year's stored IV30 values below today's; needs 20 "
+        "stored days"),
+    Col("hv20", "HV20", "vol", description="Historical volatility: how much the price actually moved over the last "
+        "20 sessions, annualized"),
+    Col("hv60", "HV60", "vol", default_hidden=True, description="Historical volatility over the last 60 sessions, "
+        "annualized"),
     Col("iv_hv_ratio", "IV/HV", "ratio", description="IV30 / HV20"),
 ))
 IV_CHANGES = group(G_VOL, (
@@ -69,8 +73,8 @@ IV_CHANGES = group(G_VOL, (
     Col("iv30_chg_5d", "IV30 5d chg (pts)", "vol", description="IV30 − IV30 five stored days earlier"),
 ))
 TERM = group(G_VOL, (
-    Col("iv60", "IV60", "vol"),
-    Col("iv90", "IV90", "vol"),
+    Col("iv60", "IV60", "vol", description="Implied volatility for 60 days to expiry, annualized"),
+    Col("iv90", "IV90", "vol", description="Implied volatility for 90 days to expiry, annualized"),
     Col("term_slope", "Term slope", "vol", description="IV90 − IV30 (vol points)"),
     Col("skew25_30", "25Δ skew", "vol", description="Put 25Δ IV − call 25Δ IV at 30 days"),
 ))
@@ -81,7 +85,7 @@ OPT = group(G_OPT, (
     Col("avg_option_volume_20d", "Avg Opt Vol (20d)", "int",
         description="Mean daily option volume of the prior stored days (needs ≥ 5)"),
     Col("rel_option_volume", "Rel Opt Vol", "ratio", description="Option volume / 20d average"),
-    Col("pc_volume_ratio", "P/C Vol", "ratio"),
+    Col("pc_volume_ratio", "P/C Vol", "ratio", description="Put/call ratio: put volume ÷ call volume"),
     Col("total_oi", "Total OI", "int"),
 ))
 FLOW = group(G_OPT, (
@@ -115,15 +119,14 @@ MOVERS = (*DESC, *QUOTE, Col("rel_volume", "Rel Vol", "ratio", G_TECH), Col("avg
           Col("iv_rank", "IV Rank", "pct", G_VOL), *CATALYSTS[:2])
 
 # Notes shared by every frame-derived report.
-NOTE_CHAIN_UNIVERSE = ("Needs full option chains, which are collected only for the chain universe (watchlist "
-                       "symbols, symbols opened recently and the most liquid symbols by option volume); other "
-                       "symbols are not covered.")
-NOTE_IV_RANK = ("IV rank / IV percentile need ≥ 20 stored daily IV30 values (collected since the first "
-                "sweep); they are blank until then.")
-NOTE_OPT_AVG = ("Average option volume = mean of up to 20 prior collected days (fewer while history builds — "
-                "see the days column); blank when no prior day is collected yet (never estimated).")
-NOTE_DIVS = "Dividend data (yield, ex-dates) covers Nasdaq-listed securities only; NYSE/ARCA listings show blanks."
-NOTE_DELAY = "Quotes and chains are ~15 min delayed (CBOE delayed feed)."
+NOTE_CHAIN_UNIVERSE = ("Covers the chain universe only: watchlist symbols, recently opened symbols and the most "
+                       "liquid symbols by option volume.")
+NOTE_IV_RANK = "IV rank and IV percentile stay blank until 20 days of IV30 are stored."
+NOTE_OPT_AVG = ("Average option volume uses up to 20 prior collected days (fewer while history builds) and is blank "
+                "before the first one; it is never estimated.")
+NOTE_DIVS = "Dividend data covers Nasdaq-listed securities only; NYSE and NYSE Arca listings show blanks."
+NOTE_DELAY = ("Prices are IBKR quotes (real-time or 15-minute delayed, per your market-data subscriptions); "
+              "outside the session, the last daily close.")
 
 
 def keys(cols) -> list[str]:

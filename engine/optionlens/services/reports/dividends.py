@@ -17,9 +17,11 @@ from .common import (MIN_MCAP, SCOPE, UNIVERSE_ONLY, bar_lists, base_mask, frame
 from .universe import Frame
 
 HISTORY_YEARS = 10
-NOTES = (C.NOTE_DIVS, "Yield = indicated annual rate (latest regular amount × payments per year) / price; special / "
-         "one-off payments (flagged) are left out of the rate, yield, frequency and growth. It needs "
-         "≥ 2 stored regular payments (per-symbol dividend histories are collected weekly), blank until then.")
+NOTES = (C.NOTE_DIVS, "Yield = the yearly rate of regular dividends ÷ price. One-off special payments are flagged and "
+         "left out.")
+METHOD = ("Indicated annual rate = latest regular amount × payments per year; special / one-off payments are left out "
+          "of the rate, yield, frequency and growth. It needs ≥ 2 stored regular payments (per-symbol dividend "
+          "histories are collected weekly) and is blank until then.",)
 
 
 def _by_symbol(divs: Sequence[Dividend]) -> dict[str, list[Dividend]]:
@@ -110,16 +112,16 @@ def run_announcements(p: RunParams) -> Output:
 
 FILTERS = (MIN_MCAP, UNIVERSE_ONLY, *SCOPE)
 CALENDAR = ReportDef(
-    "dividend-calendar", "Dividend Calendar", "Dividends", "Ex-dividend dates in a date range.",
+    "dividend-calendar", "Dividend calendar", "Dividends", "Ex-dividend dates in a date range.",
     (Param("start", "From", "date", today), Param("end", "To", "date", rel_date(14)), *FILTERS),
-    EVENT_COLS, run_calendar, ("ex_date", "asc"), NOTES)
+    EVENT_COLS, run_calendar, ("ex_date", "asc"), NOTES, method=METHOD)
 FUTURE = ReportDef(
-    "future-ex-dates", "Future Ex-Dividend Dates", "Dividends", "Every announced ex-dividend date from today on.",
-    (p_int("days", "Days ahead", 365, 1, 730), *FILTERS), EVENT_COLS, run_future, ("ex_date", "asc"), NOTES)
+    "future-ex-dates", "Future ex-dividend dates", "Dividends", "Every announced ex-dividend date from today on.",
+    (p_int("days", "Days ahead", 365, 1, 730), *FILTERS), EVENT_COLS, run_future, ("ex_date", "asc"), NOTES, method=METHOD)
 ANNOUNCEMENTS = ReportDef(
-    "dividend-announcements", "Dividend Announcements", "Dividends", "Dividends by declaration date.",
+    "dividend-announcements", "Dividend announcements", "Dividends", "Dividends by declaration date.",
     (Param("start", "Declared from", "date", rel_date(-7)), Param("end", "Declared to", "date", today), *FILTERS),
-    EVENT_COLS, run_announcements, ("declared_date", "desc"), NOTES)
+    EVENT_COLS, run_announcements, ("declared_date", "desc"), NOTES, method=METHOD)
 
 # ============================================================================ increases
 INC_COLS = (*C.DESC_SHORT, *group("Dividend", (
@@ -154,10 +156,10 @@ def run_increases(p: RunParams) -> Output:
 
 
 INCREASES = ReportDef(
-    "dividend-increases", "Dividend Increases", "Dividends",
+    "dividend-increases", "Dividend increases", "Dividends",
     "The latest regular dividend is larger than the previous regular one.",
     (p_int("within_days", "Declared/ex within days", 90, 1, 730), *FILTERS), INC_COLS, run_increases,
-    ("increase_pct", "desc"), NOTES)
+    ("increase_pct", "desc"), NOTES, method=METHOD)
 
 # ============================================================================ best dividends
 BEST_COLS = (*C.DESC_SHORT, Col("price", "Price", "money", C.G_QUOTE), *group("Dividend", (
@@ -192,9 +194,9 @@ def run_best(p: RunParams) -> Output:
 
 
 BEST = ReportDef(
-    "best-dividends", "Best Dividends", "Dividends", "Ranked by indicated yield, with payout history.",
+    "best-dividends", "Best dividends", "Dividends", "Ranked by indicated yield, with payout history.",
     (p_num("min_yield", "Min yield", 0.02, 0, 1, step=0.005), p_int("min_payments", "Min past payments", 8, 0),
-     *FILTERS), BEST_COLS, run_best, ("yield", "desc"), NOTES)
+     *FILTERS), BEST_COLS, run_best, ("yield", "desc"), NOTES, method=METHOD)
 
 # ============================================================================ capture
 CAP_COLS = (*C.DESC_SHORT, Col("price", "Price", "money", C.G_QUOTE),
@@ -235,11 +237,12 @@ def run_capture(p: RunParams) -> Output:
 
 
 CAPTURE = ReportDef(
-    "dividend-capture", "Dividend Capture", "Dividends",
+    "dividend-capture", "Dividend capture", "Dividends",
     "Historic dividend-capture statistics for symbols with an ex-date coming up.",
     (p_int("days", "Ex-date within days", 30, 1, 120), p_int("years", "History years", 5, 1, 10), *FILTERS),
     CAP_COLS, run_capture, ("avg_total_return", "desc"),
-    (*NOTES, "Capture = buy at the close before the ex-date, sell at the ex-date close; ignores taxes and costs."))
+    (*NOTES, "Capture = buy at the close before the ex-date, sell at the ex-date close; ignores taxes and costs."),
+    method=METHOD)
 
 # ============================================================================ REITs / MLPs / CEFs
 REIT_COLS = (*C.DESC, *pick(C.QUOTE, "price", "change_pct"), Col("vehicle", "Vehicle", "badge", C.G_DESC),
@@ -270,7 +273,7 @@ def run_reits(p: RunParams) -> Output:
 
 
 REITS = ReportDef(
-    "reits-mlps", "REITs, MLPs & Closed-End Funds", "Dividends",
+    "reits-mlps", "REITs, MLPs & closed-end funds", "Dividends",
     "Real-estate investment trusts, master limited partnerships and closed-end funds with yield and ex-dates.",
     (p_select("vehicle", "Vehicle", "all", (("all", "All"), ("REIT", "REITs"), ("MLP", "MLPs"), ("CEF", "Closed-end funds"))),
      MIN_MCAP, UNIVERSE_ONLY, *SCOPE),
@@ -312,8 +315,8 @@ def run_comparison(p: RunParams) -> Output:
 
 
 COMPARISON = ReportDef(
-    "dividend-comparison", "Dividend Comparison", "Dividends", "Side-by-side dividend profile of a list of symbols.",
+    "dividend-comparison", "Dividend comparison", "Dividends", "Side-by-side dividend profile of a list of symbols.",
     (Param("symbols", "Symbols", "symbols", ["KO", "PEP", "PG", "JNJ", "XOM", "CVX", "T", "VZ"]),),
-    CMP_COLS, run_comparison, ("yield", "desc"), NOTES)
+    CMP_COLS, run_comparison, ("yield", "desc"), NOTES, method=METHOD)
 
 REPORTS = (CALENDAR, FUTURE, ANNOUNCEMENTS, INCREASES, BEST, CAPTURE, REITS, COMPARISON)

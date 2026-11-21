@@ -42,11 +42,12 @@ async def run_splits(p: RunParams) -> Output:
 
 SPLITS = ReportDef(
     "splits-calendar", "Stock splits", "Stocks", "Announced stock splits: recent (30 days) and upcoming.",
-    (Param("only_universe", "Universe only", "bool", False, help="Only symbols in the tracked universe"),),
+    (Param("only_universe", "Universe only", "bool", False, help="Only the symbols OptionLens tracks every day"),),
     SPLIT_COLS, run_splits, ("execution_date", "asc"),
-    (NOTE_SOURCE, "Ratio is new : old shares (\"1 : 50\" is a 1-for-50 reverse split, factor 0.02; \"8 : 1\" is "
-                  "forward). A bare \"5%\" is a stock dividend (factor 1.05). Nasdaq lists events from 30 days back "
-                  "to about three weeks ahead; delay is up to the 6 h cache."))
+    (NOTE_SOURCE, "Ratio is new : old shares: \"1 : 50\" is a 1-for-50 reverse split, \"8 : 1\" a forward split."),
+    method=("Factor = new ÷ old shares (\"1 : 50\" → 0.02). A bare \"5%\" is a stock dividend (factor 1.05). Nasdaq "
+            "lists events from 30 days back to about three weeks ahead; changes can take up to 6 h (cache) to "
+            "appear.",))
 
 # ============================================================================ IPOs
 IPO_STATUSES = (("priced", "Priced"), ("upcoming", "Upcoming"), ("filed", "Filed"))

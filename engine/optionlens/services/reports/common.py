@@ -20,7 +20,7 @@ SCOPE = (SYMBOLS, WATCHLIST)
 KIND = Param("kind", "Type", "select", "all",
              options=(("all", "All"), ("stock", "Stocks"), ("etf", "ETFs"), ("index", "Indices")))
 UNIVERSE_ONLY = Param("universe_only", "Universe only", "bool", True,
-                      help="Only symbols in the tracked universe (else also on-demand visited symbols)")
+                      help="Only the symbols OptionLens tracks every day. Off: also symbols you opened outside it")
 MIN_PRICE = Param("min_price", "Min price", "number", 5.0, min=0, step=1)
 MIN_STOCK_VOLUME = Param("min_volume", "Min volume", "int", 100_000, min=0, step=10_000)
 MIN_MCAP = Param("min_market_cap", "Min market cap", "number", None, min=0, help="Dollars, e.g. 1e10")

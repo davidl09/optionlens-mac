@@ -115,3 +115,25 @@ def test_param_validation_unit():
     assert registry.parse_params(b, {"backwardation_only": "true"})["backwardation_only"] is True
     with pytest.raises(ParamError):
         registry.parse_params(b, {"backwardation_only": "maybe"})
+
+
+def test_empty_reason_and_method_text():
+    """An empty result says why: the run's own notes, else the report's reason, else (chain-based) no chain."""
+    from optionlens.services.reports.base import Output
+    from optionlens.services.reports.columns import NOTE_CHAIN_UNIVERSE
+    d = registry.REPORTS["put-protection"]
+    assert NOTE_CHAIN_UNIVERSE in d.notes and d.method
+    assert registry.empty_reason(d, Output([])) == registry.NO_CHAIN_MATCH
+    assert registry.empty_reason(d, Output([], ["Nothing yet."])) == "Nothing yet."
+    assert registry.empty_reason(registry.REPORTS["market-movers"], Output([])) is None
+    res = registry.finalize(d, registry.parse_params(d, {}), Output([]))
+    assert res["empty_reason"] == registry.NO_CHAIN_MATCH and res["method"] == list(d.method)
+    assert "empty_reason" not in registry.finalize(d, registry.parse_params(d, {}), Output([{"symbol": "AAPL"}]))
+
+
+def test_titles_are_sentence_case_and_unique():
+    titles = [d.title for d in registry.REPORTS.values()]
+    assert len(titles) == len(set(titles))
+    for t in titles:
+        rest = t.split(" ")[1:]
+        assert all(not (w[:1].isupper() and w[1:].islower()) or w in ("SPY",) for w in rest), t

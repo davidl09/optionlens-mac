@@ -20,8 +20,8 @@ from .common import (KIND, SCOPE, UNIVERSE_ONLY, bar_lists, base_mask, columnar_
                      p_num, p_select)
 
 UOV_ID = "unusual-option-volume"
-NOTE_PROXY_VOLUME = ("Option volume is the day's total per contract from the delayed CBOE chain; there is no "
-                     "trade-level tape, so sizes are not individual trades and buy/sell side is unknown.")
+NOTE_PROXY_VOLUME = ("Option volume is each contract's total for the day; it does not show individual trades or "
+                     "whether they were buys or sells.")
 RIGHT = p_select("right", "Type", "all", (("all", "Calls & puts"), ("C", "Calls"), ("P", "Puts")))
 
 
@@ -82,10 +82,11 @@ def run_uov(p: RunParams) -> Output:
     out = frame_output(f, m, UOV_COLS, rename=_UOV_RENAME, extra=extra,
                        sort=("rel_volume", True) if f.opt_history_days > 0 else ("vol_oi", True))
     if not out.rows:
-        out.notes.append("No symbol qualifies right now: option volume ≥ "
+        out.notes.append("No symbol qualifies right now: it needs option volume ≥ "
                          f"{p['min_volume']:,} and relative option volume ≥ {p['min_rel_volume']:g}× its average "
                          f"(or, with no prior collected day, volume / open interest ≥ {p['min_vol_oi']:g})."
-                         if len(f) and np.isfinite(ov).any() else "No option chains collected yet (first sweep pending).")
+                         if len(f) and np.isfinite(ov).any() else "No option volume collected yet: the IBKR bridge collects it for every symbol "
+                         "during market hours.")
     n_interim = int((m & ~has_avg).sum())
     if n_interim:
         out.notes.append(f"Interim criterion for {n_interim} symbol(s) with no prior collected day of option "
@@ -122,14 +123,16 @@ def _uov_history(p: RunParams) -> Output:
 
 
 UOV = ReportDef(
-    UOV_ID, "Unusual Option Volume", "Options",
+    UOV_ID, "Unusual option volume", "Options",
     "Symbols whose option volume today is a multiple of their 20-day average, with call/put mix, premium, "
     "moneyness breakdown and upcoming catalysts.",
     (p_num("min_rel_volume", "Min relative volume", 2.0, 0, step=0.5),
      p_int("min_volume", "Min option volume", 1000, 0, step=500),
-     p_num("min_vol_oi", "Interim: min volume / OI", 0.5, 0, step=0.05,
-           help="Used only for symbols with no prior collected day of option volume"),
-     p_int("lookback_days", "Lookback days", 0, 0, 10, help="> 0: show stored daily snapshots instead"),
+     p_num("min_vol_oi", "First days: min volume ÷ OI", 0.5, 0, step=0.05,
+           help="Used only while a symbol has no earlier day of option volume to average: its option volume ÷ "
+                "open interest (OI) must reach this instead"),
+     p_int("lookback_days", "Show past days", 0, 0, 10,
+           help="0 = today's list. 1–10 = the lists stored at the end of each of the last N days"),
      KIND, *SCOPE),
     UOV_COLS, run_uov, ("rel_volume", "desc"),
     (NOTE_PROXY_VOLUME, C.NOTE_OPT_AVG, C.NOTE_IV_RANK, C.NOTE_DIVS))
@@ -152,7 +155,7 @@ def run_iv_rankings(p: RunParams) -> Output:
 
 
 IV_RANKINGS = ReportDef(
-    "iv-rankings", "IV Rankings", "Options",
+    "iv-rankings", "IV rankings", "Options",
     "IV30 with its 52-week rank and percentile, recent IV changes, HV20, IV/HV, IV60/IV90, term slope and skew.",
     (p_select("sort", "Sort by", "iv_rank", IVR_SORTS), p_int("min_option_volume", "Min option volume", 100, 0),
      KIND, *SCOPE),
@@ -185,7 +188,7 @@ def run_iv_movers(p: RunParams) -> Output:
 
 
 IV_MOVERS = ReportDef(
-    "iv-movers", "IV Movers", "Options", "Biggest one-day IV30 changes, up or down (vol points and percent).",
+    "iv-movers", "IV movers", "Options", "Biggest one-day IV30 changes, up or down (vol points and percent).",
     (p_select("side", "Direction", "both", (("both", "Up & down"), ("up", "Up"), ("down", "Down"))),
      p_int("min_option_volume", "Min option volume", 500, 0), KIND, *SCOPE),
     IVM_COLS, run_iv_movers, None, ("IV change compares today's IV30 with the previous stored day.",))
@@ -204,7 +207,7 @@ def run_volume_leaders(p: RunParams) -> Output:
 
 
 VOLUME_LEADERS = ReportDef(
-    "option-volume-leaders", "Option Volume Leaders", "Options",
+    "option-volume-leaders", "Option volume leaders", "Options",
     "Highest total option volume today with call/put split, put/call ratio, premium and volume vs average.",
     (p_int("min_volume", "Min option volume", 1000, 0), KIND, *SCOPE),
     OVL_COLS, run_volume_leaders, ("option_volume", "desc"), (NOTE_PROXY_VOLUME, C.NOTE_OPT_AVG))
@@ -262,7 +265,7 @@ def run_oi_changes(p: RunParams) -> Output:
 
 
 OI_CHANGES = ReportDef(
-    "oi-changes", "Open Interest Changes", "Options",
+    "oi-changes", "Open interest changes", "Options",
     "Contracts with the largest open-interest change versus the previous stored end-of-day snapshot.",
     (p_int("min_change", "Min |OI change|", 500, 0), p_select("side", "Direction", "both",
                                                               (("both", "Both"), ("increase", "Increases"), ("decrease", "Decreases"))),
@@ -304,7 +307,7 @@ def run_large_volume(p: RunParams) -> Output:
 
 
 LARGE_VOLUME = ReportDef(
-    "large-volume-contracts", "Large Volume Contracts", "Options",
+    "large-volume-contracts", "Large volume contracts", "Options",
     "Single contracts with large daily volume or premium (a proxy for large trades).",
     (p_int("min_volume", "Min volume", 2000, 0, step=500),
      p_num("min_premium", "Min premium ($)", 1_000_000, 0, help="Also include contracts with premium ≥ this"),
@@ -378,7 +381,7 @@ def run_option_screener(p: RunParams) -> Output:
 
 
 OPTION_SCREENER = ReportDef(
-    "option-screener", "Option Screener", "Options",
+    "option-screener", "Option screener", "Options",
     "Per-contract screener over the universe: price, spread, volume/OI, greeks, moneyness, breakeven, "
     "premium yield, probability ITM and earnings-before-expiry flag.",
     (RIGHT, p_int("dte_min", "Min DTE", 7, 0), p_int("dte_max", "Max DTE", 60, 0),
@@ -435,11 +438,11 @@ def run_broad_view(p: RunParams) -> Output:
 
 
 BROAD_VIEW = ReportDef(
-    "options-broad-view", "Options Broad View", "Options",
+    "options-broad-view", "Options broad view", "Options",
     "Option volume, put/call ratio, premium, average IV30 and IV rank per sector and for the whole universe, "
-    "plus the market put/call volume history (extra.pc_history).",
+    "plus the market's daily put/call volume history.",
     (UNIVERSE_ONLY, *SCOPE), BV_COLS, run_broad_view, ("option_volume", "desc"),
-    ("P/C history covers days collected since the first sweep.", C.NOTE_IV_RANK))
+    ("P/C (put/call) history starts on the first day the collector ran.", C.NOTE_IV_RANK))
 
 
 # ============================================================================ put protection
@@ -495,15 +498,16 @@ def _fv(x) -> float | None:
 
 
 PUT_PROTECTION = ReportDef(
-    "put-protection", "Protective Put Cost", "Options",
+    "put-protection", "Protective put cost", "Options",
     "Cost of a protective put near the target DTE and % out of the money for each symbol (ask as % of spot, "
     "annualized).",
     (p_int("target_dte", "Target DTE", 30, 1, 400), p_num("otm_pct", "% OTM", 0.05, 0, 0.5, step=0.01),
      p_int("min_oi", "Min OI", 0, 0), KIND, UNIVERSE_ONLY, *SCOPE),
     PP_COLS, run_put_protection, ("annualized_cost", "asc"),
-    ("Uses the listed expiry nearest the target DTE and the highest listed strike at or below spot × (1 − % OTM), "
-     "so the put is at least that far out of the money (symbols without one are left out); cost at the ask.",
-     C.NOTE_CHAIN_UNIVERSE))
+    ("Uses the expiry nearest the target DTE and a put at least the chosen % out of the money, bought at the ask.",
+     C.NOTE_CHAIN_UNIVERSE),
+    method=("Listed expiry nearest the target DTE; the highest listed strike at or below spot × (1 − % OTM), so the "
+            "put is at least that far out of the money (symbols without one are left out); cost = ask / spot.",))
 
 REPORTS = (UOV, IV_RANKINGS, IV_MOVERS, VOLUME_LEADERS, OI_CHANGES, LARGE_VOLUME, OPTION_SCREENER, BROAD_VIEW,
            PUT_PROTECTION)

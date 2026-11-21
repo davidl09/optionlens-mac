@@ -31,11 +31,14 @@ def run_term(p: RunParams) -> Output:
 
 
 TERM = ReportDef(
-    "term-structure-screener", "Term Structure Screener", "Volatility",
+    "term-structure-screener", "Term structure screener", "Volatility",
     "Constant-maturity IV30/60/90/180, slope and backwardation flag (IV30 > IV90 × 1.05).",
     (Param("backwardation_only", "Backwardation only", "bool", False), MIN_OPT_VOL, KIND, *SCOPE),
     TERM_COLS, run_term, ("term_ratio", "desc"),
-    ("Constant-maturity IVs interpolate ATM IV in total variance between listed expiries.", C.NOTE_CHAIN_UNIVERSE))
+    ("IV30, IV60, IV90 and IV180 are implied volatilities for a fixed number of days to expiry, interpolated between "
+     "listed expiries.", C.NOTE_CHAIN_UNIVERSE),
+    method=("Constant-maturity IVs interpolate at-the-money IV in total variance (IV² × T) between the listed expiries "
+            "around each tenor.",))
 
 SKEW_COLS = (*C.DESC_SHORT, *pick(C.QUOTE, "price", "change_pct"),
              *group(C.G_VOL, (Col("skew25_30", "25Δ skew (put − call)", "vol"),
@@ -53,10 +56,11 @@ def run_skew(p: RunParams) -> Output:
 
 
 SKEW = ReportDef(
-    "skew-screener", "Skew Screener", "Volatility", "30-day 25-delta skew, put skew and its historic rank.",
+    "skew-screener", "Skew screener", "Volatility", "30-day 25-delta skew, put skew and its historic rank.",
     (MIN_OPT_VOL, KIND, *SCOPE), SKEW_COLS, run_skew, ("skew25_30", "desc"),
-    ("Skew uses feed deltas, interpolated to 30 days in variance.", "Skew rank needs ≥ 20 stored days.",
-     C.NOTE_CHAIN_UNIVERSE))
+    ("Skew compares put and call implied volatility at the same distance from the money (25 delta), 30 days out. "
+     "Skew rank stays blank until 20 days are stored.", C.NOTE_CHAIN_UNIVERSE),
+    method=("Uses the deltas IBKR reports for each contract, interpolated to 30 days in variance.",))
 
 PREM_COLS = (*C.DESC_SHORT, *pick(C.QUOTE, "price", "change_pct"),
              *group(C.G_VOL, (Col("iv30", "IV30", "vol"), Col("hv20", "HV20", "vol"), Col("hv30", "HV30", "vol"),
@@ -75,9 +79,11 @@ def run_premium(p: RunParams) -> Output:
 
 
 PREMIUM = ReportDef(
-    "iv-hv-premium", "IV vs HV Risk Premium", "Volatility", "Implied minus realized volatility (HV20/HV30), ratio and rank.",
+    "iv-hv-premium", "IV vs HV risk premium", "Volatility", "Implied minus realized volatility (HV20/HV30), ratio and rank.",
     (MIN_OPT_VOL, KIND, *SCOPE), PREM_COLS, run_premium, ("iv_hv30_spread", "desc"),
-    ("HV = close-to-close log-return stdev × √252.", "Premium rank needs ≥ 20 stored days."))
+    ("HV (historical volatility) measures how much the price actually moved; IV − HV is the premium options "
+     "charge over it. Premium rank stays blank until 20 days are stored.",),
+    method=("HV = standard deviation of daily close-to-close log returns × √252.",))
 
 # ============================================================================ straddles
 STRADDLE_COLS = (Col("symbol", "Symbol", "symbol"), Col("name", "Name", "text"), Col("spot", "Spot", "money"),
@@ -121,7 +127,7 @@ def run_zero_dte(p: RunParams) -> Output:
 
 
 ZERO_DTE = ReportDef(
-    "zero-dte-straddles", "0DTE Straddles", "Volatility",
+    "zero-dte-straddles", "0DTE straddles", "Volatility",
     "At-the-money straddles expiring today for SPX, XSP, SPY, QQQ, IWM and any symbol with an expiry today.",
     (Param("include_all", "Include every symbol with an expiry today", "bool", True), *SCOPE),
     ZDTE_COLS, run_zero_dte, ("straddle_pct", "desc"),

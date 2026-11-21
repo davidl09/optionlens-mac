@@ -126,56 +126,59 @@ class Spec:
 
 
 SPECS = (
-    Spec("covered-calls", "Covered Calls", "Buy 100 shares and sell one call: static and if-called returns, "
+    Spec("covered-calls", "Covered calls", "Buy 100 shares and sell one call: static and if-called returns, "
          "downside protection and probability of assignment.", _delta(0.15, 0.50, "call"), "static_annualized", "C"),
-    Spec("naked-puts", "Naked / Cash-Secured Puts", "Sell one put: return on cash and on Reg-T margin, "
+    Spec("naked-puts", "Naked / cash-secured puts", "Sell one put: return on cash and on Reg-T margin, "
          "breakeven and probability OTM.", _delta(0.10, 0.35, "put"), "return_on_cash_annualized", "P"),
-    Spec("long-calls", "Long Calls", "Buy one call.", _delta(0.30, 0.70, "call"), "ev_hv", "C"),
-    Spec("long-puts", "Long Puts", "Buy one put.", _delta(0.30, 0.70, "put"), "ev_hv", "P"),
-    Spec("bull-call-spreads", "Bull Call Spreads (debit)", "Buy a call, sell a higher call, same expiry.",
+    Spec("long-calls", "Long calls", "Buy one call.", _delta(0.30, 0.70, "call"), "ev_hv", "C"),
+    Spec("long-puts", "Long puts", "Buy one put.", _delta(0.30, 0.70, "put"), "ev_hv", "P"),
+    Spec("bull-call-spreads", "Bull call spreads (debit)", "Buy a call, sell a higher call, same expiry.",
          (*_delta(0.35, 0.70, "long call"), *WIDTH), "ev_hv", "C"),
-    Spec("bear-put-spreads", "Bear Put Spreads (debit)", "Buy a put, sell a lower put, same expiry.",
+    Spec("bear-put-spreads", "Bear put spreads (debit)", "Buy a put, sell a lower put, same expiry.",
          (*_delta(0.35, 0.70, "long put"), *WIDTH), "ev_hv", "P"),
-    Spec("bull-put-spreads", "Bull Put Spreads (credit)", "Sell a put, buy a lower put, same expiry.",
+    Spec("bull-put-spreads", "Bull put spreads (credit)", "Sell a put, buy a lower put, same expiry.",
          (*_delta(0.15, 0.40, "short put"), *WIDTH), "return_on_risk", "P"),
-    Spec("bear-call-spreads", "Bear Call Spreads (credit)", "Sell a call, buy a higher call, same expiry.",
+    Spec("bear-call-spreads", "Bear call spreads (credit)", "Sell a call, buy a higher call, same expiry.",
          (*_delta(0.15, 0.40, "short call"), *WIDTH), "return_on_risk", "C"),
-    Spec("iron-condors-short", "Short Iron Condors", "Sell an OTM put spread and an OTM call spread "
+    Spec("iron-condors-short", "Short iron condors", "Sell an OTM put spread and an OTM call spread "
          "(short inner strikes, long outer).", (*_delta(0.10, 0.30, "short strikes"), *WIDTH), "return_on_risk", None),
-    Spec("iron-condors-long", "Long Iron Condors", "Buy an OTM put spread and an OTM call spread "
+    Spec("iron-condors-long", "Long iron condors", "Buy an OTM put spread and an OTM call spread "
          "(long inner strikes, short outer).", (*_delta(0.10, 0.35, "inner strikes"), *WIDTH), "ev_hv", None),
-    Spec("call-butterflies-long", "Long Call Butterflies", "+1/−2/+1 calls with equal wings.",
+    Spec("call-butterflies-long", "Long call butterflies", "+1/−2/+1 calls with equal wings.",
          (*_delta(0.30, 0.70, "body"), *WIDTH), "ev_hv", "C"),
-    Spec("call-butterflies-short", "Short Call Butterflies", "−1/+2/−1 calls with equal wings.",
+    Spec("call-butterflies-short", "Short call butterflies", "−1/+2/−1 calls with equal wings.",
          (*_delta(0.30, 0.70, "body"), *WIDTH), "ev_hv", "C"),
-    Spec("put-butterflies-long", "Long Put Butterflies", "+1/−2/+1 puts with equal wings.",
+    Spec("put-butterflies-long", "Long put butterflies", "+1/−2/+1 puts with equal wings.",
          (*_delta(0.30, 0.70, "body"), *WIDTH), "ev_hv", "P"),
-    Spec("put-butterflies-short", "Short Put Butterflies", "−1/+2/−1 puts with equal wings.",
+    Spec("put-butterflies-short", "Short put butterflies", "−1/+2/−1 puts with equal wings.",
          (*_delta(0.30, 0.70, "body"), *WIDTH), "ev_hv", "P"),
-    Spec("iron-butterflies-short", "Short Iron Butterflies", "Sell the ATM straddle and buy wings.",
+    Spec("iron-butterflies-short", "Short iron butterflies", "Sell the ATM straddle and buy wings.",
          (*_delta(0.40, 0.60, "body call"), *WIDTH), "return_on_risk", None),
-    Spec("iron-butterflies-long", "Long Iron Butterflies", "Buy the ATM straddle and sell wings.",
+    Spec("iron-butterflies-long", "Long iron butterflies", "Buy the ATM straddle and sell wings.",
          (*_delta(0.40, 0.60, "body call"), *WIDTH), "ev_hv", None),
-    Spec("calendar-calls", "Call Calendars", "Sell a front call, buy a later call at the same strike.",
+    Spec("calendar-calls", "Call calendars", "Sell a front call, buy a later call at the same strike.",
          (*_delta(0.35, 0.65, "front call"), *CAL_GAP), "ev_hv", "C"),
-    Spec("calendar-puts", "Put Calendars", "Sell a front put, buy a later put at the same strike.",
+    Spec("calendar-puts", "Put calendars", "Sell a front put, buy a later put at the same strike.",
          (*_delta(0.35, 0.65, "front put"), *CAL_GAP), "ev_hv", "P"),
-    Spec("atm-straddles", "ATM Straddles", "Call and put at the strike nearest spot, per expiry (long or short).",
+    Spec("atm-straddles", "ATM straddles", "Call and put at the strike nearest spot, per expiry (long or short).",
          SIDE, "ev_hv", None),
     Spec("strangles", "Strangles", "OTM call and put with matching |delta| (long or short).",
          (*SIDE, *_delta(0.15, 0.35, "legs")), "ev_hv", None),
-    Spec("synthetic-long", "Synthetic Long Stock", "Buy a call and sell a put at the same strike and expiry; "
+    Spec("synthetic-long", "Synthetic long stock", "Buy a call and sell a put at the same strike and expiry; "
          "parity gap shows the discount/premium vs stock after carry.", _delta(0.35, 0.65, "call"),
          "parity_gap_mid", None),
 )
 assert {s.id for s in SPECS} == set(st.SCREENER_IDS)
 
-NOTES = ("Probabilities and EVs use a lognormal model (expiry ATM IV, drift r − q; HV: HV30, zero drift); "
-         "EV is the undiscounted expected P/L at expiry.",
-         "Natural pricing: buy at ask, sell at bid. Mid pricing uses (bid + ask)/2 per leg.",
-         "Index option variants: set symbols=SPX,NDX,RUT,XSP.",
-         "IV rank needs ≥ 20 stored daily IV30 values (blank until then).",
+NOTES = ("Probability of profit (PoP) and expected value (EV) come from a standard price model, not from past "
+         "trades.",
+         "Natural pricing buys at the ask and sells at the bid; mid pricing uses the midpoint of each leg.",
+         "For index options, set Symbols to SPX,NDX,RUT,XSP.",
+         C.NOTE_IV_RANK,
          C.NOTE_CHAIN_UNIVERSE)
+METHOD = ("PoP and EV use a lognormal model with the expiry's ATM IV and drift r − q; EV (HV) uses HV30 and zero "
+          "drift. EV is the undiscounted expected P/L at expiry.",
+          "Mid pricing: (bid + ask) / 2 per leg.")
 
 
 def _screen_params(spec: Spec, p: RunParams) -> st.ScreenParams:
@@ -217,5 +220,5 @@ def _columns(spec: Spec) -> tuple[Col, ...]:
 
 REPORTS = tuple(
     ReportDef(s.id, s.title, "Strategies", s.description, (*SHARED, *s.params), _columns(s), _runner(s),
-              (s.sort, "desc" if s.descending else "asc"), NOTES)
+              (s.sort, "desc" if s.descending else "asc"), NOTES, METHOD)
     for s in SPECS)
