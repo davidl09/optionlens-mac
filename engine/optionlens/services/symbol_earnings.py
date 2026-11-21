@@ -2,7 +2,7 @@
 per-strategy BacktestTrade list."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Sequence
 
 from ..analytics import calendar as cal
@@ -15,6 +15,7 @@ from ..analytics.stats import bar_arrays
 from ..models import Bar, EarningsEvent
 from ..repo import earnings as earn_repo
 from ..repo import options as options_repo
+from ..repo import report_snapshots as snaps_repo
 from . import context as ctx
 from .errors import BadRequest, NotFound
 
@@ -59,22 +60,44 @@ def _past_rows(symbol: str, events: Sequence[EarningsEvent], bars: Sequence[Bar]
                              implied_moves=_stored_implied(symbol, events, bars), iv30_by_date=iv30)
 
 
+CALENDAR_REPORT_ID = "earnings-calendar"   # its daily snapshots keep each upcoming event's implied move
+
+
+def snapshot_implied_moves(symbols: Sequence[str] | None, start: date, end: date) -> dict[tuple[str, date], list]:
+    """{(symbol, event date): [(snapshot date, implied move)] ascending} from the earnings calendar's daily
+    report snapshots (the implied move each day before the event, while a chain was stored)."""
+    out: dict[tuple[str, date], list] = {}
+    for sn in snaps_repo.read_snapshots(CALENDAR_REPORT_ID, start, end, list(symbols) if symbols else None):
+        pl = sn["payload"]
+        if pl.get("implied_move") is not None and pl.get("date"):
+            out.setdefault((sn["symbol"], date.fromisoformat(str(pl["date"])[:10])), []).append((sn["date"], pl["implied_move"]))
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def implied_before(snaps: list, reaction: date) -> float | None:
+    """The last snapshot implied move taken before the reaction session (None without one)."""
+    before = [v for d, v in snaps if d < reaction]
+    return before[-1] if before else None
+
+
 def _stored_implied(symbol: str, events: Sequence[EarningsEvent], bars: Sequence[Bar]) -> dict[date, float]:
-    """Implied earnings move from the stored EOD chain of the pre-event close (when archived)."""
-    eod_days = set(options_repo.eod_dates(symbol))
-    if not eod_days:
+    """Implied earnings move of each past event: from the stored EOD chain of the pre-event close when archived,
+    else the earnings calendar's last snapshot before the reaction day."""
+    if not events:
         return {}
+    eod_days = set(options_repo.eod_dates(symbol))
     a = bar_arrays(bars)
+    snaps = snapshot_implied_moves([symbol], min(e.date for e in events) - timedelta(days=10), ctx.today())
     out = {}
     for ev in events:
         react, _ = earn_a.reaction_from_arrays(a, ev.date, ev.timing)
-        if react is None or (i := a.index_of(react)) is None or i == 0 or a.dates[i - 1] not in eod_days:
+        if react is None or (i := a.index_of(react)) is None or i == 0:
             continue
-        ca = ctx.eod_chain_arrays(symbol, a.dates[i - 1])
-        if ca is not None:
-            v = earn_a.implied_earnings_move(cm.expiry_term_rows(ca), react, ca.spot)["implied_move_pct"]
-            if v is not None:
-                out[ev.date] = v
+        ca = ctx.eod_chain_arrays(symbol, a.dates[i - 1]) if a.dates[i - 1] in eod_days else None
+        v = earn_a.implied_earnings_move(cm.expiry_term_rows(ca), react, ca.spot)["implied_move_pct"] if ca else None
+        v = v if v is not None else implied_before(snaps.get((symbol, ev.date), []), react)
+        if v is not None:
+            out[ev.date] = v
     return out
 
 

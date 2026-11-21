@@ -172,6 +172,8 @@ export interface VolSeasonality {
 // ---------------- earnings ----------------
 export interface EarningsEventRow {
   date: ISODate; timing: "bmo" | "amc" | "unknown"; timing_inferred: boolean; reaction_date: ISODate | null;
+  /** "BMO", "AMC", "AMC (inferred)" (unknown timing read off the price gaps; timing then holds the inferred one), "n/a". */
+  timing_label?: string;
   fiscal_quarter: string | null; eps_estimate: number | null; eps_actual: number | null; surprise_pct: number | null;
   pre_close: number | null; gap_pct: number | null; move_pct: number | null; max_move_pct: number | null;
   pre_drift_5: number | null; pre_drift_10: number | null;

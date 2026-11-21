@@ -79,6 +79,10 @@ def test_event_rows_moves_and_drifts():
     assert r["eps_actual"] == 1.2 and r["surprise_pct"] == 0.2 and r["fiscal_quarter"] == "Q3"
     u = rows[1]
     assert u["timing_inferred"] and u["reaction_date"] == date(2025, 10, 15)
+    # unknown timing read off the gaps is shown as such, never "UNKNOWN" while it was inferred
+    assert (u["timing"], u["timing_label"]) == ("amc", "AMC (inferred)")
+    assert (rows[2]["timing"], rows[2]["timing_label"]) == ("bmo", "BMO (inferred)")
+    assert r["timing_label"] == "AMC"
     assert u["gap_pct"] == pytest.approx(0.10)
     assert u["implied_move_pct"] is None and u["iv30_before"] is None
     assert er.event_rows(events, bars, limit=1)[0]["date"] == date(2025, 11, 26)

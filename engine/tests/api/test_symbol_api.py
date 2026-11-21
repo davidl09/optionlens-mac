@@ -1,7 +1,7 @@
 """Per-symbol endpoints: values against the seeded fixtures, error mapping and on-demand paths."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -164,3 +164,17 @@ def test_bars_carry_full_history_smas_on_short_ranges(client):
     assert last["sma200"] == pytest.approx(float(np.mean(closes[-200:])))
     assert last["sma50"] == pytest.approx(float(np.mean(closes[-50:])))
     assert all(r["sma20"] is not None for r in rows)
+
+
+def test_earnings_history_takes_the_implied_move_from_calendar_snapshots(client):
+    """Without an archived pre-event chain, a past event's implied move comes from the earnings calendar's last
+    daily snapshot before the reaction day (it showed '—' while the stats had one)."""
+    from optionlens.repo import report_snapshots as snaps
+    from optionlens.services import symbol_earnings
+    ev = client.get("/api/symbol/AAPL/earnings").json()["events"][0]
+    react = date.fromisoformat(ev["reaction_date"])
+    day_before = react - timedelta(days=3)
+    snaps.write_snapshots(day_before, symbol_earnings.CALENDAR_REPORT_ID,
+                          [{"symbol": "AAPL", "date": ev["date"], "implied_move": 0.0331}])
+    got = client.get("/api/symbol/AAPL/earnings").json()["events"][0]
+    assert got["implied_move_pct"] == pytest.approx(0.0331) and got["timing_label"] == "AMC"

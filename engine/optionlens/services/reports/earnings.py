@@ -11,11 +11,10 @@ import numpy as np
 from ...analytics import chainmetrics as cm
 from ...analytics import earnings as earn_a
 from ...analytics import optbacktest
-from ...analytics.calendar import next_trading_day
+from ...analytics.calendar import is_trading_day, next_trading_day
 from ...models import EarningsEvent
 from ...repo import bars as bars_repo
 from ...repo import earnings as earn_repo
-from ...repo import report_snapshots as snaps_repo
 from .. import context
 from .. import symbol_earnings
 from . import columns as C
@@ -23,7 +22,7 @@ from .base import Col, Output, Param, ReportDef, RunParams, group, rel_date, tod
 from .common import MIN_MCAP, SCOPE, UNIVERSE_ONLY, bar_lists, frame, p_int, p_select
 from .universe import Frame
 
-CAL_ID = "earnings-calendar"
+CAL_ID = symbol_earnings.CALENDAR_REPORT_ID
 HISTORY_YEARS = 4
 TIME_LABEL = {"bmo": "BMO", "amc": "AMC", "unknown": "—"}
 NOTE_TIMING = ("Implied move = ATM straddle of the first expiry on/after the reaction day / spot (reaction day: "
@@ -181,22 +180,16 @@ def run_results(p: RunParams) -> Output:
     evs = _events_in(p, f, p["start"], min(p["end"], today()))
     syms = sorted({e.symbol for e in evs})
     hist = history_rows(syms, before=today() + timedelta(days=1))
-    snaps: dict[tuple[str, date], list[tuple[date, float]]] = {}
-    for sn in snaps_repo.read_snapshots(CAL_ID, p["start"] - timedelta(days=10), p["end"], syms or None):
-        pl = sn["payload"]
-        if pl.get("implied_move") is not None and pl.get("date"):
-            snaps.setdefault((sn["symbol"], date.fromisoformat(str(pl["date"])[:10])), []).append(
-                (sn["date"], pl["implied_move"]))
+    snaps = symbol_earnings.snapshot_implied_moves(syms or None, p["start"] - timedelta(days=10), p["end"])
     rows = []
     for e in evs:
         ev_row = next((r for r in hist.get(e.symbol, []) if r["date"] == e.date), None)
         if ev_row is None:
             continue
         i = pos.get(e.symbol)
-        before = [v for d, v in sorted(snaps.get((e.symbol, e.date), [])) if d < ev_row["reaction_date"]]
-        imp = before[-1] if before else None
+        imp = symbol_earnings.implied_before(snaps.get((e.symbol, e.date), []), ev_row["reaction_date"])
         mv = ev_row["move_pct"]
-        rows.append({"date": e.date, "time": TIME_LABEL.get(ev_row["timing"], "—"), "symbol": e.symbol,
+        rows.append({"date": e.date, "time": ev_row["timing_label"], "symbol": e.symbol,
                      "name": _fval(f, i, "name"), "market_cap": _fval(f, i, "market_cap"), "sector": _fval(f, i, "sector"),
                      "fiscal_quarter": e.fiscal_quarter, "eps_actual": e.eps_actual, "eps_estimate": e.eps_estimate,
                      "surprise_pct": e.surprise_pct, "reaction_date": ev_row["reaction_date"],
@@ -354,12 +347,21 @@ OPP_COLS = (*CAL_COLS[:2], *CAL_COLS[2:], Col("move_gap", "Implied − historica
 
 
 def run_opportunities(p: RunParams) -> Output:
+    """Reporters whose reaction is in the current or next session: today's and the next session's events on a
+    trading day; on a weekend or holiday the next session's only (said in the notes)."""
     t = today()
-    rows, f = calendar_rows(p, t, next_trading_day(t))
+    nxt = next_trading_day(t)
+    rows, f = calendar_rows(p, t, nxt)
     for r in rows:
         r["move_gap"] = (r["implied_move"] - r["avg_abs_move"]
                          if r["implied_move"] is not None and r["avg_abs_move"] is not None else None)
-    return _empty_note(Output(rows, asof=f.asof))
+    out = _empty_note(Output(rows, asof=f.asof))
+    if not is_trading_day(t):
+        out.notes.append(f"Markets are closed today ({t:%A}): these are the next session's reporters ({nxt.isoformat()}).")
+    if rows and all(r["implied_move"] is None for r in rows):
+        out.notes.append("Implied moves need a stored option chain of each reporter; none is stored for these yet "
+                         "(open a symbol, or connect IB Gateway, to fetch one).")
+    return out
 
 
 OPPORTUNITIES = ReportDef(

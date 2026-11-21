@@ -74,3 +74,11 @@ def test_protective_put_is_out_of_the_money_by_at_least_the_target(api):
         for r in rows:
             assert r["strike"] <= r["price"] * (1 - otm) + 1e-6
             assert r["otm_pct"] == pytest.approx(1 - r["strike"] / r["price"]) and r["otm_pct"] >= otm - 1e-9
+
+
+def test_todays_earnings_opportunities_on_a_weekend_say_which_session(api, monkeypatch):
+    from datetime import date
+    from optionlens.services.reports import earnings
+    monkeypatch.setattr(earnings, "today", lambda: date(2026, 11, 21))      # Saturday
+    notes = api.get("/api/reports/earnings-todays-opportunities").json()["notes"]
+    assert any("Markets are closed today (Saturday)" in n and "2026-11-23" in n for n in notes)

@@ -71,6 +71,24 @@ def reaction_date(event_date: date, timing: str, bars: Sequence[Bar]) -> tuple[d
     return reaction_from_arrays(bar_arrays(bars), event_date, timing)
 
 
+TIMING_LABELS = {"bmo": "BMO", "amc": "AMC", "unknown": "n/a"}
+
+
+def inferred_timing(ev, react: date) -> str:
+    """bmo/amc read off the inferred reaction day of an unknown-timing event ('unknown' when the event fell on a
+    non-trading day: both readings give the same session)."""
+    bmo_day = ev.date if cal.is_trading_day(ev.date) else cal.next_trading_day(ev.date)
+    if bmo_day == cal.next_trading_day(ev.date):
+        return "unknown"
+    return "bmo" if react == bmo_day else "amc"
+
+
+def timing_label(timing: str, inferred: bool = False) -> str:
+    """'BMO' / 'AMC', 'AMC (inferred)' when read off the price gaps, 'n/a' when unknown."""
+    base = TIMING_LABELS.get(timing, "n/a")
+    return f"{base} (inferred)" if inferred and timing in ("bmo", "amc") else base
+
+
 def _ret(a: float, b: float) -> float | None:
     v = a / b - 1.0
     return float(v) if math.isfinite(v) else None
@@ -83,8 +101,10 @@ def _event_row(a: BarArrays, ev: EarningsEvent, implied: Mapping[date, float] | 
         return None
     r = a.index_of(react)
     p = r - 1
+    timing = inferred_timing(ev, react) if inferred else ev.timing
     row = {
-        "date": ev.date, "timing": ev.timing, "timing_inferred": inferred, "reaction_date": react,
+        "date": ev.date, "timing": timing, "timing_inferred": inferred and timing != "unknown",
+        "timing_label": timing_label(timing, inferred), "reaction_date": react,
         "fiscal_quarter": ev.fiscal_quarter, "eps_estimate": ev.eps_estimate,
         "eps_actual": ev.eps_actual, "surprise_pct": ev.surprise_pct,
         "pre_close": None, "gap_pct": None, "move_pct": None, "max_move_pct": None,
