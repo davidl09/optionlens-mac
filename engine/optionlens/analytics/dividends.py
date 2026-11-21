@@ -1,7 +1,7 @@
 """Dividend analytics (SPEC §6 "Dividend capture", §8 dividends tab, §7 dividend reports).
 
-Regular dividends are those whose `kind` does not mention "special"/"extra"/"liquidat"/"return of
-capital". Pure functions.
+Regular dividends exclude one-offs: a `kind` mentioning "special"/"extra"/"liquidat"/"return of capital", or
+an amount far above the symbol's usual payment (one_offs). Pure functions.
 """
 from __future__ import annotations
 
@@ -16,16 +16,38 @@ from optionlens.analytics.stats import bar_arrays
 from optionlens.models import Bar, Dividend
 
 _IRREGULAR = ("special", "extra", "liquidat", "return of capital")
+ONE_OFF_FACTOR = 2.5       # an amount this many times the median of the symbol's other payments is a one-off
+ONE_OFF_WINDOW_DAYS = 730  # ... of the payments within two years either side
+ONE_OFF_MIN_PEERS = 3
 
 
-def is_regular(d: Dividend) -> bool:
+def _kind_irregular(d: Dividend) -> bool:
     k = (d.kind or "").lower()
-    return not any(w in k for w in _IRREGULAR)
+    return any(w in k for w in _IRREGULAR)
+
+
+def one_offs(divs: Sequence[Dividend]) -> set[tuple[date, float]]:
+    """(ex_date, amount) of special / one-off payments: the kind says so ("special", "extra", ...), or — Nasdaq
+    often lists a special dividend as plain "Cash" (COST's $15) — the amount is ≥ ONE_OFF_FACTOR × the median of
+    the symbol's other payments within ONE_OFF_WINDOW_DAYS (at least ONE_OFF_MIN_PEERS of them)."""
+    pos = [d for d in divs if d.amount and d.amount > 0]
+    out = set()
+    for d in pos:
+        peers = [x.amount for x in pos if x is not d and not _kind_irregular(x)
+                 and abs((x.ex_date - d.ex_date).days) <= ONE_OFF_WINDOW_DAYS]
+        if _kind_irregular(d) or (len(peers) >= ONE_OFF_MIN_PEERS and d.amount >= ONE_OFF_FACTOR * float(np.median(peers))):
+            out.add((d.ex_date, d.amount))
+    return out
+
+
+def regular(divs: Sequence[Dividend]) -> list[Dividend]:
+    """Positive payments that are not one-offs (see one_offs): the basis of annual rate, yield, frequency and growth."""
+    odd = one_offs(divs)
+    return [d for d in divs if d.amount and d.amount > 0 and (d.ex_date, d.amount) not in odd]
 
 
 def _regular_sorted(divs: Sequence[Dividend], asof: date | None = None) -> list[Dividend]:
-    return sorted((d for d in divs if is_regular(d) and d.amount and d.amount > 0
-                   and (asof is None or d.ex_date <= asof)), key=lambda d: d.ex_date)
+    return sorted((d for d in regular(divs) if asof is None or d.ex_date <= asof), key=lambda d: d.ex_date)
 
 
 def frequency(divs: Sequence[Dividend], asof: date | None = None) -> int | None:
@@ -52,10 +74,9 @@ def annual_rate(divs: Sequence[Dividend], asof: date) -> float | None:
     return reg[-1].amount * f
 
 
-def _ttm(divs: Sequence[Dividend], end: date, regular_only: bool) -> float:
+def _ttm(divs: Sequence[Dividend], end: date) -> float:
     start = end - timedelta(days=365)
-    return float(sum(d.amount for d in divs if start < d.ex_date <= end and d.amount
-                     and (not regular_only or is_regular(d))))
+    return float(sum(d.amount for d in divs if start < d.ex_date <= end and d.amount))
 
 
 TRAILING_COVERAGE_DAYS = 365   # stored history must reach back this far before trailing_yield is used
@@ -72,7 +93,7 @@ def trailing_yield(divs: Sequence[Dividend], price: float | None, asof: date) ->
     0 when there are none or price is unknown."""
     if not price or price <= 0:
         return 0.0
-    return _ttm(divs, asof, regular_only=False) / price
+    return _ttm(divs, asof) / price
 
 
 def growth(divs: Sequence[Dividend], asof: date, years: int) -> float | None:
@@ -84,7 +105,7 @@ def growth(divs: Sequence[Dividend], asof: date, years: int) -> float | None:
     past_end = asof - timedelta(days=round(365.25 * years))
     if reg[0].ex_date > past_end:  # history does not reach the earlier window
         return None
-    now_v, past_v = _ttm(reg, asof, True), _ttm(reg, past_end, True)
+    now_v, past_v = _ttm(reg, asof), _ttm(reg, past_end)
     if now_v <= 0 or past_v <= 0:
         return None
     return (now_v / past_v) ** (1.0 / years) - 1.0
@@ -144,6 +165,7 @@ def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
                      price: float | None, asof: date) -> dict:
     """Dividends shape. history/capture newest first."""
     rate = annual_rate(divs, asof)
+    odd = one_offs(divs)
     cap = capture_rows([d for d in divs if d.ex_date <= asof], bars)
     return {
         "symbol": symbol,
@@ -155,7 +177,8 @@ def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
         "growth_5y": growth(divs, asof, 5),
         "next": next_dividend(divs, price, asof),
         "history": [{"ex_date": d.ex_date, "amount": d.amount, "pay_date": d.pay_date,
-                     "record_date": d.record_date, "declared_date": d.declared_date, "kind": d.kind}
+                     "record_date": d.record_date, "declared_date": d.declared_date, "kind": d.kind,
+                     "one_off": (d.ex_date, d.amount) in odd}
                     for d in sorted(divs, key=lambda x: x.ex_date, reverse=True)],
         "capture": cap,
         "capture_stats": capture_stats(cap),

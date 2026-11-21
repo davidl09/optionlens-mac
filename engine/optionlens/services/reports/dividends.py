@@ -17,7 +17,8 @@ from .common import (MIN_MCAP, SCOPE, UNIVERSE_ONLY, bar_lists, base_mask, frame
 from .universe import Frame
 
 HISTORY_YEARS = 10
-NOTES = (C.NOTE_DIVS, "Yield = indicated annual rate (latest regular amount × payments per year) / price; it needs "
+NOTES = (C.NOTE_DIVS, "Yield = indicated annual rate (latest regular amount × payments per year) / price; special / "
+         "one-off payments (flagged) are left out of the rate, yield, frequency and growth. It needs "
          "≥ 2 stored regular payments (per-symbol dividend histories are collected weekly), blank until then.")
 
 
@@ -62,6 +63,8 @@ def _rate_fields(divs: list[Dividend], price: float | None, asof: date) -> dict:
 EVENT_COLS = (
     Col("ex_date", "Ex-date", "date"), *C.DESC_SHORT,
     *group("Dividend", (Col("amount", "Amount", "money"), Col("kind", "Type", "badge"),
+                        Col("one_off", "One-off", "bool", description="Special / one-off payment: not in the annual "
+                            "rate, yield or frequency (its type says so, or it is ≥ 2.5× the usual amount)"),
                         Col("annual_rate", "Annual rate", "money"), Col("yield", "Yield", "pct"),
                         Col("frequency", "Payments / yr", "int", default_hidden=True),
                         Col("declared_date", "Declared", "date"), Col("record_date", "Record", "date", default_hidden=True),
@@ -78,6 +81,7 @@ def _event_rows(p: RunParams, by: str, start: date, end: date) -> Output:
     evs = [d for d in div_repo.between(start, end, by=by, symbols=p.scope) if _allowed(f, p, d.symbol, pos)]
     hist = _history(sorted({d.symbol for d in evs}))
     rows = []
+    odd = {s: div_a.one_offs(h) for s, h in hist.items()}
     for d in evs:
         i = pos.get(d.symbol)
         price = _fval(f, i, "price")
@@ -86,6 +90,7 @@ def _event_rows(p: RunParams, by: str, start: date, end: date) -> Output:
                      "amount": d.amount, "kind": d.kind, "declared_date": d.declared_date, "record_date": d.record_date,
                      "pay_date": d.pay_date, "days_to_ex": (d.ex_date - t).days, "price": price,
                      "change_pct": _fval(f, i, "change_pct"), "iv30": _fval(f, i, "iv30"),
+                     "one_off": (d.ex_date, d.amount) in odd.get(d.symbol, div_a.one_offs([d])),
                      **_rate_fields(hist.get(d.symbol, [d]), price, max(t, d.ex_date))})
     return Output(rows, asof=f.asof)
 
@@ -133,7 +138,7 @@ def run_increases(p: RunParams) -> Output:
     for sym, divs in _history(p.scope).items():
         if not _allowed(f, p, sym, pos):
             continue
-        reg = [d for d in divs if div_a.is_regular(d) and d.amount > 0]
+        reg = div_a.regular(divs)
         if len(reg) < 2 or not div_a.is_dividend_increase(divs):
             continue
         last, prev = reg[-1], reg[-2]
@@ -170,7 +175,7 @@ def run_best(p: RunParams) -> Output:
     for sym, divs in _history(p.scope, years=HISTORY_YEARS).items():
         if not _allowed(f, p, sym, pos):
             continue
-        reg = [d for d in divs if div_a.is_regular(d) and d.amount > 0 and d.ex_date <= t]
+        reg = [d for d in div_a.regular(divs) if d.ex_date <= t]
         if len(reg) < p["min_payments"]:
             continue
         i = pos.get(sym)

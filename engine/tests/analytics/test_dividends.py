@@ -106,7 +106,7 @@ def test_dividend_summary_shape():
     assert s["next"] == {"ex_date": date(2026, 2, 10), "amount": 0.27, "days": (date(2026, 2, 10) - ASOF).days,
                          "yield": pytest.approx(0.0104)}
     assert s["history"][0]["ex_date"] == date(2026, 2, 10)
-    assert set(s["history"][0]) == {"ex_date", "amount", "pay_date", "record_date", "declared_date", "kind"}
+    assert set(s["history"][0]) == {"ex_date", "amount", "pay_date", "record_date", "declared_date", "kind", "one_off"}
     assert all(r["ex_date"] <= ASOF for r in s["capture"])
     nov = next(r for r in s["capture"] if r["ex_date"] == date(2025, 11, 10))
     assert nov["total_return"] == pytest.approx(0.0026)
@@ -121,3 +121,19 @@ def test_covers_trailing_year_requires_a_year_of_history():
     assert not covers_trailing_year(one, date(2026, 11, 19)) and not covers_trailing_year([], date(2026, 11, 19))
     year = one + [Dividend("X", date(2025, 11, 10), 0.5, None, None, None, "cash")]
     assert covers_trailing_year(year, date(2026, 11, 19))
+
+
+def test_a_special_dividend_listed_as_cash_is_not_annualized():
+    """COST-style: Nasdaq lists a $15 special as plain 'Cash' between $1.30 quarterlies. It must not become the
+    annual rate (4 × $15) or yield, nor change frequency or growth; it is flagged as a one-off."""
+    ds = [div(date(y, m, 10), 1.16 if y < 2025 else 1.30) for y in (2023, 2024, 2025) for m in (2, 5, 8, 11)]
+    ds.append(div(date(2025, 11, 25), 15.00))
+    asof = date(2025, 11, 30)
+    assert dv.one_offs(ds) == {(date(2025, 11, 25), 15.0)}
+    assert dv.annual_rate(ds, asof) == pytest.approx(1.30 * 4) and dv.frequency(ds, asof) == 4
+    assert dv.growth(ds, asof, 1) == pytest.approx(1.30 / 1.16 - 1, rel=0.01)
+    s = dv.dividend_summary("T", ds, [], 920.0, asof)
+    assert s["yield"] == pytest.approx(5.2 / 920)
+    assert [h["one_off"] for h in s["history"]][:2] == [True, False]
+    raised = [div(date(2025, m, 10), 0.50) for m in (2, 5, 8)] + [div(date(2025, 11, 10), 0.60)]
+    assert dv.one_offs(raised) == set()                       # an ordinary raise is regular

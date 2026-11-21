@@ -194,7 +194,8 @@ export interface Dividends {
   symbol: string; annual_rate: number | null; yield: number | null; frequency: number | null; // payments/yr
   growth_1y: number | null; growth_3y: number | null; growth_5y: number | null;
   next: NextDividend | null;
-  history: { ex_date: ISODate; amount: number; pay_date: ISODate | null; record_date: ISODate | null; declared_date: ISODate | null; kind: string }[];
+  history: { ex_date: ISODate; amount: number; pay_date: ISODate | null; record_date: ISODate | null; declared_date: ISODate | null; kind: string;
+    one_off?: boolean }[];   // special / one-off: left out of annual_rate, yield, frequency and growth
   capture: { ex_date: ISODate; amount: number; pre_close: number | null; ex_close: number | null; price_return: number | null; total_return: number | null; recovery_days: number | null }[];
   capture_stats: { count: number; avg_total_return: number | null; win_rate: number | null; avg_recovery_days: number | null };
 }
