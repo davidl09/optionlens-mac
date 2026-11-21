@@ -1,6 +1,6 @@
-// Live engine / bridge status from the desktop app (null in a plain browser).
+// Live engine / bridge / update status from the desktop app (null in a plain browser).
 import { useEffect, useState } from "react";
-import type { BridgeStatus, EngineStatus } from "../../electron/shared/api";
+import type { BridgeStatus, EngineStatus, UpdateStatus } from "../../electron/shared/api";
 import { desktop } from "../desktop";
 
 function useDesktopStatus<T>(initial: (() => Promise<T>) | null, subscribe: ((cb: (v: T) => void) => () => void) | null): T | null {
@@ -21,4 +21,8 @@ export function useEngineStatus(): EngineStatus | null {
 
 export function useBridgeStatus(): BridgeStatus | null {
   return useDesktopStatus(desktop ? desktop.bridgeStatus : null, desktop ? desktop.onBridgeStatus : null);
+}
+
+export function useUpdateStatus(): UpdateStatus | null {
+  return useDesktopStatus(desktop ? desktop.updateStatus : null, desktop ? desktop.onUpdateStatus : null);
 }

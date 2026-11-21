@@ -1,13 +1,14 @@
 // /settings — desktop app settings: the engine (status, restart, data import), the IBKR bridge
-// (live status, connection settings, cancel work) and launch at login.
+// (live status, connection settings, cancel work), launch at login and updates.
 import { FormEvent, useEffect, useState } from "react";
 import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus, type LoginItemStatus } from "../../electron/shared/api";
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
 import { Card, ErrorBox, InfoBox, Spinner } from "../components/ui";
+import { UpdatesCard } from "../components/UpdatesCard";
 import { desktop } from "../desktop";
-import { useBridgeStatus, useEngineStatus } from "../state/desktop";
+import { useBridgeStatus, useEngineStatus, useUpdateStatus } from "../state/desktop";
 
 const PORTS: { value: string; label: string }[] = [
   { value: "auto", label: "Automatic (4001 → 7496 → 4002 → 7497)" },
@@ -117,6 +118,7 @@ function BridgeForm({ settings, onSave }: { settings: AppSettings; onSave: (s: A
 export default function SettingsPage() {
   const engine = useEngineStatus();
   const bridge = useBridgeStatus();
+  const update = useUpdateStatus();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loginItem, setLoginItem] = useState<LoginItemStatus | null>(null);
   useEffect(() => { void desktop?.settings().then(setSettings); void desktop?.loginItemStatus().then(setLoginItem); }, []);
@@ -125,7 +127,7 @@ export default function SettingsPage() {
     return (
       <div className="stack">
         <div className="page-head"><h1 className="page-title">Settings</h1></div>
-        <InfoBox>Settings (engine, IBKR bridge, launch at login) are available in the OptionLens desktop app.</InfoBox>
+        <InfoBox>Settings (engine, IBKR bridge, launch at login, updates) are available in the OptionLens desktop app.</InfoBox>
       </div>
     );
   }
@@ -156,6 +158,7 @@ export default function SettingsPage() {
           <p className="muted small">Notifications from your alerts appear as macOS notifications; clicking one opens it here.</p>
         </Card>
       )}
+      {settings && update && <UpdatesCard u={update} settings={settings} onSave={save} />}
     </div>
   );
 }

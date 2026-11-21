@@ -1,6 +1,7 @@
 // Desktop-mode smoke: a fake preload API (window.optionlens) stands in for the Electron main process.
 // Checks the engine gate, base-URL + Bearer token client, IBKR refresh on symbol pages, the bridge
-// indicator / settings page, main-process navigation and the engine-unreachable banner.
+// indicator / settings page (including Settings → Updates), main-process navigation and the
+// engine-unreachable banner.
 import { expect, Page, test } from "@playwright/test";
 import { handle } from "./mocks";
 import { skew } from "./mocks/symbol";
@@ -9,8 +10,8 @@ const BASE = "http://127.0.0.1:59999";
 const TOKEN = "per-launch-token-abcdefghijklmnop";
 
 /** `refresh`: what refreshSymbol answers; "manual" = it stays pending until __finishRefresh(result). */
-async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string } = {}) {
-  await page.addInitScript(({ base, token, state, refresh, tws }) => {
+async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string; update?: Record<string, unknown> } = {}) {
+  await page.addInitScript(({ base, token, state, refresh, tws, update }) => {
     const listeners: Record<string, ((v: unknown) => void)[]> = {};
     const on = (ch: string) => (cb: (v: unknown) => void) => { (listeners[ch] ??= []).push(cb); return () => undefined; };
     const engine = {
@@ -25,6 +26,8 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
     };
     const w = window as unknown as Record<string, unknown>;
     w.__refreshCalls = [] as string[];
+    w.__updateCalls = [] as string[];
+    w.__saved = [] as unknown[];
     w.__cancelRefreshCalls = [] as string[];
     w.__emit = (ch: string, v: unknown) => (listeners[ch] ?? []).forEach((cb) => cb(v));
     let finish: ((r: unknown) => void) | null = null;
@@ -32,8 +35,14 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
     w.__startEngine = () => { (w.__emit as (c: string, v: unknown) => void)("engine", { ...engine, state: "running", connection: { baseUrl: base, token } }); };
     w.optionlens = {
       engine: async () => engine, restartEngine: async () => undefined, importData: async () => ({ ok: false, cancelled: true }),
-      settings: async () => ({ bridge: { enabled: true, port: null, clientId: 17, marketDataLines: 100 }, launchAtLogin: false }),
-      saveSettings: async (s: { bridge: { clientId: number } }) => (s.bridge.clientId >= 0 ? { ok: true } : { ok: false, error: "Client ID must be a whole number ≥ 0." }),
+      settings: async () => ({ bridge: { enabled: true, port: null, clientId: 17, marketDataLines: 100 }, launchAtLogin: false,
+        updates: { auto: false, source: "davidl09/optionlens-mac" } }),
+      saveSettings: async (s: { bridge: { clientId: number }; updates: { source: string } }) => {
+        (w.__saved as unknown[]).push(s);
+        if (s.bridge.clientId < 0) return { ok: false, error: "Client ID must be a whole number ≥ 0." };
+        if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(s.updates.source)) return { ok: false, error: "The update source must be a GitHub repository written as owner/repo." };
+        return { ok: true };
+      },
       bridgeStatus: async () => bridge,
       loginItemStatus: async () => "requires-approval",
       refreshSymbol: async (sym: string) => {
@@ -42,10 +51,22 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       },
       cancelRefresh: async (sym: string) => { (w.__cancelRefreshCalls as string[]).push(sym); },
       cancelJobs: async () => undefined,
-      onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"),
+      updateStatus: async () => update,
+      checkForUpdates: async () => { (w.__updateCalls as string[]).push("check"); },
+      installUpdate: async () => { (w.__updateCalls as string[]).push("install"); return { ok: true }; },
+      dismissUpdateNotice: async () => { (w.__updateCalls as string[]).push("dismiss"); },
+      onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"), onUpdateStatus: on("update"),
     };
-  }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running", refresh: opts.refresh ?? { status: "refreshed" }, tws: opts.tws ?? "connected" });
+  }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running", refresh: opts.refresh ?? { status: "refreshed" }, tws: opts.tws ?? "connected",
+    update: { ...UP_TO_DATE, ...opts.update } });
 }
+
+const UP_TO_DATE = {
+  phase: "up-to-date", currentVersion: "0.1.3", progress: null, error: null, blocked: null, skipped: false, notice: null, checkedAt: "2026-11-21T20:00:00Z",
+  latest: { version: "0.1.3", notes: "", url: "https://github.com/davidl09/optionlens-mac/releases/tag/v0.1.3", publishedAt: "2026-11-21T19:00:00Z" },
+};
+const emit = (page: Page, channel: string, v: unknown) => page.evaluate(([c, x]) => (window as unknown as { __emit: (c: string, v: unknown) => void }).__emit(c as string, x), [channel, v] as const);
+const updateCalls = (page: Page) => page.evaluate(() => (window as unknown as { __updateCalls: string[] }).__updateCalls);
 
 interface Seen { auth: (string | null)[]; hosts: Set<string>; unmocked: string[] }
 
@@ -151,10 +172,10 @@ test("settings page shows engine, bridge status and saves bridge settings", asyn
   await expect(page.getByText("13/40 (1 failed)")).toBeVisible();
   await expect(page.getByText("macOS needs your approval")).toBeVisible();   // login item waiting for approval
   await page.getByLabel("API port").selectOption("4002");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved. The bridge reconnects")).toBeVisible();
   await page.getByLabel("Client ID").fill("-3");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Client ID must be a whole number")).toBeVisible();
 });
 
@@ -175,4 +196,64 @@ test("engine unreachable: banner with retry, then recovery reloads the page", as
   await page.getByRole("button", { name: "Retry" }).first().click();
   await expect(page.getByText("Job runs")).toBeVisible();
   await expect(page.locator(".conn-banner")).toHaveCount(0);
+});
+
+test("Settings → Updates: up to date, available (notes as plain text), downloading %, ready, error", async ({ page }) => {
+  await fakeDesktop(page);
+  await mockEngine(page);
+  await page.goto("/settings");
+  const card = page.locator(".updates");
+  await expect(card).toHaveAttribute("data-phase", "up-to-date");
+  await expect(card.getByText("OptionLens is up to date.")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Download and install" })).toHaveCount(0);
+  await card.getByRole("button", { name: "Check now" }).click();
+  await expect.poll(() => updateCalls(page)).toEqual(["check"]);
+
+  const latest = { version: "0.1.4", notes: "## Fixes\n<b>bold</b> <img src=x onerror=\"window.__xss=1\">", url: "https://github.com/x", publishedAt: null };
+  await emit(page, "update", { ...UP_TO_DATE, phase: "available", latest });
+  await expect(card.getByText("Version 0.1.4 is available.")).toBeVisible();
+  await expect(card.locator(".release-notes pre")).toHaveText(latest.notes);             // shown as text
+  await expect(card.locator(".release-notes b, .release-notes img")).toHaveCount(0);       // never as HTML
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
+  await card.getByRole("button", { name: "Download and install" }).click();
+  await expect.poll(() => updateCalls(page)).toEqual(["check", "install"]);
+
+  await emit(page, "update", { ...UP_TO_DATE, phase: "downloading", latest, progress: 0.42 });
+  await expect(card.getByText("Downloading version 0.1.4…")).toBeVisible();
+  await expect(card.getByRole("progressbar", { name: "Update download" })).toHaveAttribute("aria-valuenow", "42");
+  await expect(card.getByText("42%")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Check now" })).toBeDisabled();
+
+  await emit(page, "update", { ...UP_TO_DATE, phase: "ready", latest, blocked: "Waiting until the Mac is idle to restart into the update." });
+  await expect(card.getByText("Version 0.1.4 is downloaded and verified.")).toBeVisible();
+  await expect(card.locator(".warn-box", { hasText: "Waiting until the Mac is idle" })).toBeVisible();
+  await card.getByRole("button", { name: "Restart and install" }).click();
+  await expect.poll(() => updateCalls(page)).toEqual(["check", "install", "install"]);
+
+  await emit(page, "update", { ...UP_TO_DATE, phase: "error", latest, error: "The download's SHA-256 (x) does not match the release (y); it was deleted." });
+  await expect(card.getByRole("alert")).toContainText("does not match the release");
+  await expect(card.getByRole("button", { name: "Download and install" })).toBeVisible();     // retry
+});
+
+test("Settings → Updates: move-to-Applications, rollback notice, automatic mode and the update source", async ({ page }) => {
+  await fakeDesktop(page, { update: { phase: "available", blocked: "Move OptionLens to the Applications folder first (then open it from there), so it can update itself.",
+    notice: "OptionLens 0.1.4 did not start correctly, so 0.1.3 was restored. 0.1.4 will not be installed automatically.", skipped: true,
+    latest: { version: "0.1.4", notes: "", url: "https://github.com/x", publishedAt: null } } });
+  await mockEngine(page);
+  await page.goto("/settings");
+  const card = page.locator(".updates");
+  await expect(card.getByText("Move OptionLens to the Applications folder first")).toBeVisible();
+  await expect(card.getByText("This version was rolled back on this Mac")).toBeVisible();
+  await card.getByRole("button", { name: "Dismiss" }).click();
+  await expect.poll(() => updateCalls(page)).toEqual(["dismiss"]);
+
+  await card.getByLabel("Install updates automatically").check();
+  const saved = () => page.evaluate(() => (window as unknown as { __saved: { updates: unknown }[] }).__saved.map((s) => s.updates));
+  await expect.poll(saved).toEqual([{ auto: true, source: "davidl09/optionlens-mac" }]);
+  await card.getByLabel("Update source").fill("https://github.com/x/y");
+  await card.getByRole("button", { name: "Save source" }).click();
+  await expect(card.getByRole("alert")).toContainText("owner/repo");
+  await card.getByLabel("Update source").fill("someone/fork");
+  await card.getByRole("button", { name: "Save source" }).click();
+  await expect(card.getByText("Saved. OptionLens checks this repository for updates.")).toBeVisible();
 });
