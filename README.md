@@ -1,80 +1,141 @@
-# OptionLens for Mac
+# OptionLens
 
-OptionLens is a self-hosted options and stock analytics workstation for one user. It is one Mac app:
+OptionLens is a self-hosted options and stock analytics workstation for one user. It is one desktop app
+for macOS, Windows (x64) and Linux (x64):
 
 - **The app** (Electron): the analytics UI, served from `app://optionlens`.
 - **The engine** (Python, `engine/`): FastAPI + DuckDB + a scheduler. The app starts it as a local
-  sidecar on `127.0.0.1` with a random per-launch token and stops it when you quit. Your data stays in
-  `~/Library/Application Support/OptionLens/data`.
+  sidecar on `127.0.0.1` with a random per-launch token and stops it when you quit. Your data stays on
+  your computer (see [Where things are](#where-things-are)).
 - **The IBKR bridge** (in the app): connects to your running **IB Gateway** (or TWS) and pushes option
   chains, universe-wide option statistics, IV/HV history and VIX-family data into the engine.
 
-OptionLens keeps running in the menu bar when you close its window, so collection and the bridge
-continue. Use **Quit OptionLens** in the menu-bar menu to stop everything.
+OptionLens keeps running in the tray (the macOS menu bar, the Windows notification area, the Linux
+AppIndicator area) when you close its window, so collection and the bridge continue. Use **Quit OptionLens**
+in the tray menu to stop everything. On a Linux desktop without a tray (plain GNOME without the
+AppIndicator extension), closing the window quits OptionLens.
 
 ## Install
 
-OptionLens needs macOS 12.3 (Monterey) or later. In Terminal:
+The installers download the latest release from [GitHub Releases](https://github.com/davidl09/optionlens-mac/releases),
+check its SHA-256 against the digest GitHub publishes for the file (no digest, no install), and never need
+administrator rights.
+
+**macOS** 12.3 (Monterey) or later, in Terminal:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/davidl09/optionlens-mac/main/install.sh | bash
 ```
 
-The [installer](install.sh) downloads the latest release for your Mac (Apple silicon or Intel) from
-[GitHub Releases](https://github.com/davidl09/optionlens-mac/releases), checks its SHA-256 against the
-digest GitHub publishes for the file, checks the app's bundle id, version and signature, quits a running
-OptionLens, keeps the installed app as a backup (in `~/Library/Application Support/OptionLens/backups`,
-the newest 2), moves the new app to **Applications** and opens it. It does not use `sudo`; if
-`/Applications` is not writable for your user it stops and says so.
+[install.sh](install.sh) picks the zip for your Mac (Apple silicon or Intel), checks the app's bundle id,
+version and signature, quits a running OptionLens, keeps the installed app as a backup (in
+`~/Library/Application Support/OptionLens/backups`, the newest 2), moves the new app to **Applications** and
+opens it. If `/Applications` is not writable for your user it stops and says so.
 
-**Manual install** (the same steps by hand): download `OptionLens-<version>-arm64.zip` (Apple silicon) or
-`OptionLens-<version>-x64.zip` (Intel) from the Releases page, check it with `shasum -a 256` against the
-SHA-256 shown for the file on the release page, and extract it with `ditto -x -k OptionLens-<version>-<arch>.zip .`
-(or double-click it in Finder). Move **OptionLens** to **Applications**. The app is ad-hoc signed, not
-signed with an Apple Developer ID, so a browser download is quarantined: remove the flag once with
-`xattr -dr com.apple.quarantine /Applications/OptionLens.app` (or right-click → **Open**). Files that the
-installer or the app itself download are not quarantined, so they open without that step.
+**Windows 10 or 11 (x64)**, in PowerShell (Windows PowerShell 5.1 or PowerShell 7):
+
+```
+irm https://raw.githubusercontent.com/davidl09/optionlens-mac/main/install.ps1 | iex
+```
+
+[install.ps1](install.ps1) downloads `OptionLens-<version>-win-x64-setup.exe`, checks it with `Get-FileHash`,
+keeps a copy in `%APPDATA%\OptionLens\backups` (so a later update can roll back to it), installs it silently
+for your user (in `%LOCALAPPDATA%\Programs`, with Start-menu and desktop shortcuts) and starts OptionLens.
+Quit a running OptionLens first.
+
+**Linux (x86_64)** with glibc 2.28 or newer, GTK 3 and FUSE (CI tests Ubuntu 24.04 and runs the engine on
+Ubuntu 22.04). In a terminal:
+
+```
+curl -fsSL https://raw.githubusercontent.com/davidl09/optionlens-mac/main/install.sh | bash
+```
+
+On Linux, install.sh downloads `OptionLens-<version>-linux-x64.AppImage`, checks it with `sha256sum` and
+that it is the OptionLens AppImage of that version, moves it to `~/.local/bin/OptionLens.AppImage`
+(`OPTIONLENS_BIN_DIR` sets another folder), adds **OptionLens** to your applications menu
+(`~/.local/share/applications/optionlens.desktop`) and starts it. AppImages need FUSE (`fusermount3` or
+`fusermount`; Debian/Ubuntu: `sudo apt install fuse3`), not `libfuse2`.
+
+**Manual downloads** from the Releases page; check the file against the SHA-256 shown for it there first
+(`shasum -a 256 <file>` on macOS, `Get-FileHash <file>` on Windows, `sha256sum <file>` on Linux):
+
+- macOS: `OptionLens-<version>-arm64.zip` (Apple silicon) or `OptionLens-<version>-x64.zip` (Intel). Extract it
+  with `ditto -x -k OptionLens-<version>-<arch>.zip .` (or double-click it in Finder) and move **OptionLens** to
+  **Applications**. The app is ad-hoc signed, not signed with an Apple Developer ID, so a browser download is
+  quarantined: remove the flag once with `xattr -dr com.apple.quarantine /Applications/OptionLens.app` (or
+  right-click → **Open**).
+- Windows: `OptionLens-<version>-win-x64-setup.exe` installs for your user and updates itself.
+  `OptionLens-<version>-win-x64.zip` is a portable folder (run `OptionLens.exe` from it); it does not update
+  itself. The files are not code-signed, so for a browser download Windows SmartScreen shows "Windows protected
+  your PC": click **More info**, then **Run anyway**.
+- Linux: `OptionLens-<version>-linux-x64.AppImage`. Make it executable (`chmod +x`) and run it; keep it in a
+  folder you own (such as `~/.local/bin`) so it can update itself.
+
+Files that the installers or the app itself download are not quarantined (macOS) and carry no
+Mark-of-the-Web (Windows), so they open without a Gatekeeper or SmartScreen prompt.
+
+## Where things are
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| App | `/Applications/OptionLens.app` | `%LOCALAPPDATA%\Programs\optionlens-mac\OptionLens.exe` | `~/.local/bin/OptionLens.AppImage` |
+| Data (database) | `~/Library/Application Support/OptionLens/data` | `%APPDATA%\OptionLens\data` | `~/.config/OptionLens/data` |
+| Settings, update state | `~/Library/Application Support/OptionLens` | `%APPDATA%\OptionLens` | `~/.config/OptionLens` |
+| Backups (app, database) | `…/OptionLens/backups` | `%APPDATA%\OptionLens\backups` | `~/.config/OptionLens/backups` |
+| Logs (`main.log`, `updater.log`) | `~/Library/Logs/OptionLens` | `%APPDATA%\OptionLens\logs` | `~/.config/OptionLens/logs` |
+| Launch at login | Login item (System Settings → General → Login Items) | Startup app (Task Manager → Startup apps) | `~/.config/autostart/optionlens.desktop` |
+
+Uninstalling (Windows: Settings → Apps; macOS/Linux: delete the app) keeps your data.
 
 ## Updating
 
 OptionLens updates itself: **Settings → Updates** shows the installed and latest versions and the release
 notes, with **Check now** and **Download and install**. It checks GitHub at launch and every 6 hours; when
-a new version is out, the menu-bar menu shows **Update available (x.y.z)…** and you get one notification
-for it. An update is downloaded over HTTPS, checked against the SHA-256 digest that GitHub publishes for
-the release file (no digest, no install), extracted, and its bundle id, version and signature are checked.
-OptionLens then quits (the engine stops normally) and a small helper swaps the app, keeps the previous one
-as a backup and opens the new version.
+a new version is out, the tray menu shows **Update available (x.y.z)…** and you get one notification for
+it. An update is downloaded over HTTPS and checked against the SHA-256 digest that GitHub publishes for the
+release file (no digest, no install); only the file for your system is used. Then it is checked and
+installed after OptionLens quits (the engine stops normally), and the new version opens:
+
+- **macOS**: the zip is extracted and the app's bundle id, version and signature are checked; a small helper
+  swaps the app and keeps the previous one as a backup.
+- **Windows**: the installer's version information (product name and version) is checked; after OptionLens
+  quits, it runs silently for your user (no prompts, no administrator rights) and OptionLens starts again.
+  The installer is kept in the backups folder; if it fails, the previous version's installer runs instead. A
+  copy from the portable zip does not update itself: Settings says how to install the new version.
+- **Linux**: the AppImage's name and version are checked, it is put next to the running AppImage, and after
+  OptionLens quits it replaces it (one rename) and starts; the previous AppImage is kept as a backup. Only an
+  AppImage in a folder you can write to updates itself; otherwise Settings says what to do.
 
 - **Install updates automatically** (off by default) downloads new versions in the background and installs
-  them when the Mac has been idle for 5 minutes with no OptionLens window focused, or when you click
-  **Restart now** on the "ready" notification or in the menu-bar menu. Never while the engine collects the
+  them when the computer has been idle for 5 minutes with no OptionLens window focused, or when you click
+  **Restart now** on the "ready" notification or in the tray menu. Never while the engine collects the
   closing data (16:15–16:50 New York time on weekdays) or while a data import runs.
 - Before a new version's engine first opens your database, the database is copied to
-  `~/Library/Application Support/OptionLens/backups/db-<previous version>-<time>.duckdb` (the newest 2 are kept).
+  `backups/db-<previous version>-<time>.duckdb` (the newest 2 are kept), on every OS.
 - If a new version's engine does not become healthy within 60 s, or the app crashes twice in its first
   2 minutes, OptionLens restores the previous version from its backup, opens it, tells you, and does not
-  install that version automatically again. It tries this once; the updater log is
-  `~/Library/Logs/OptionLens/updater.log`.
-- The app must run from a writable folder such as **Applications**. When macOS runs it from a read-only
-  place (a disk image, or a randomized "translocated" copy of a quarantined download), Settings says
-  **Move OptionLens to the Applications folder first**.
+  install that version automatically again. It tries this once; the details are in `updater.log`.
+- macOS: the app must run from a writable folder such as **Applications**. When macOS runs it from a
+  read-only place (a disk image, or a randomized "translocated" copy of a quarantined download), Settings
+  says **Move OptionLens to the Applications folder first**.
 - The update source is a GitHub repository (`owner/repo`, default `davidl09/optionlens-mac`); only assets
   of that repository's releases are downloaded. Drafts and prereleases are ignored, and older versions are
   never installed.
 
-**From 0.1.0–0.1.2** (dmg builds without the updater): run the one-line installer above once. Your data
-and settings stay where they are.
+**From 0.1.0–0.1.2 on macOS** (dmg builds without the updater): run the one-line installer above once. Your
+data and settings stay where they are.
 
 ### Importing data from an old OptionLens server (one time)
 
 If you ran OptionLens as a separate server before, copy its `optionlens.duckdb` (from the server's
-`OPTIONLENS_DATA_DIR`, with the server stopped) to the Mac. Then open **Settings → Engine → Import data…**
+`OPTIONLENS_DATA_DIR`, with the server stopped) to this computer. Then open **Settings → Engine → Import data…**
 and pick the file. The engine stops, the file is copied into the app's data folder (the current
 database is kept as a `.bak-<time>` backup) and the engine starts again.
 
 ## Connect IB Gateway (IBKR)
 
-The bridge talks to the IBKR API of IB Gateway or TWS on this Mac. It finds it automatically on the
+The bridge talks to the IBKR API of IB Gateway or TWS on this computer (IB Gateway runs on macOS, Windows
+and Linux; the ports and settings are the same on each). It finds it automatically on the
 default ports, in this order: **4001** (IB Gateway, live), **7496** (TWS, live), **4002** (IB Gateway, paper),
 **7497** (TWS, paper). You can set a different port in **Settings → Bridge connection**. The menu-bar
 menu and Settings show which one is connected and whether the account is live or paper.
@@ -85,6 +146,11 @@ In IB Gateway, open **Configure → Settings → API → Settings**:
 - Turn on **Read-Only API** (recommended: the bridge only reads data and never places orders).
 - Under **Trusted IPs**, add `127.0.0.1`.
 - In TWS, also turn on **Enable ActiveX and Socket Clients** (Global Configuration → API → Settings).
+
+IB Gateway must accept connections from `127.0.0.1` on the same computer; nothing else needs to be opened:
+the Windows Firewall prompt that IB Gateway (Java) may show is for other computers, and loopback connections
+work without allowing it. On Linux, run IB Gateway as your desktop user (its installer puts it in
+`~/Jts`); the bridge connects to it like on the other systems.
 
 IB Gateway restarts every night. The bridge reconnects automatically. If you log in to IBKR somewhere
 else with the same username (for example the mobile app), IBKR stops market data for this session; the
@@ -135,13 +201,17 @@ stopped. You can cancel bridge work from the menu-bar menu or from Settings.
 
 ## Notifications
 
-The app checks your alerts' notifications every minute and shows each new one as a macOS notification.
-Click a notification to open its page in OptionLens.
+The app checks your alerts' notifications every minute and shows each new one as a system notification
+(macOS Notification Center, Windows notifications, or your Linux desktop's notifications via libnotify).
+Click a notification to open its page in OptionLens. On Windows, notifications need the Start-menu shortcut
+that the installer creates (the portable zip has none).
 
 ## Troubleshooting
 
-- **"Starting the engine…" does not go away**: open **Settings → Engine** for the last error, or the log
-  at `~/Library/Logs/OptionLens/main.log`. **Restart engine** starts it again.
+- **"Starting the engine…" does not go away**: open **Settings → Engine** for the last error, or `main.log`
+  (see [Where things are](#where-things-are)). **Restart engine** starts it again.
+- **Linux: the AppImage does not start**: install FUSE (`sudo apt install fuse3`), or run it once with
+  `--appimage-extract-and-run`. OptionLens needs glibc 2.28 or newer.
 - **IBKR: not connected**: check that IB Gateway is running and logged in, that the API port is one of the
   ports above (or set it in Settings), and that `127.0.0.1` is a trusted IP. "Client id in use" means
   another API app uses the same client ID. The bridge tries the next 3 IDs; you can change the ID in Settings.
@@ -163,21 +233,34 @@ npm run e2e                     # mocked Playwright smoke suite against `vite pr
 ```
 
 `OPTIONLENS_PYTHON` and `OPTIONLENS_ENGINE_DIR` override the engine interpreter and directory in
-development. Packaging (CI does this on macOS for arm64 and x64): `./scripts/bundle-engine.sh`
-(relocatable CPython 3.13 from python-build-standalone via uv, with the engine and its locked
-dependencies), then `npm run dist:mac -- --arm64` (or `--x64`) builds `OptionLens.app` and
-`./scripts/zip-mac-app.sh arm64` packs it with `ditto` into `release/OptionLens-<version>-arm64.zip`.
-`./scripts/verify-mac-app.sh` and `./scripts/verify-mac-zip.sh` are the checks CI runs on the app and on
-the extracted zip. Releases: bump the version in `package.json` and `engine/pyproject.toml`, push a
-`v<version>` tag; the CI workflow builds both zips and attaches them to the GitHub Release.
+development. Packaging (CI does this for every OS): `./scripts/bundle-engine.sh` (relocatable CPython 3.13
+from python-build-standalone via uv, with the engine and its locked dependencies; on Windows run it in Git
+Bash), then:
+
+- macOS: `npm run dist:mac -- --arm64` (or `--x64`) builds `OptionLens.app`, and `./scripts/zip-mac-app.sh arm64`
+  packs it with `ditto` into `release/OptionLens-<version>-arm64.zip`. `./scripts/verify-mac-app.sh` and
+  `./scripts/verify-mac-zip.sh` are the checks CI runs on the app and on the extracted zip.
+- Windows: `npm run dist:win` builds `release/OptionLens-<version>-win-x64-setup.exe` (NSIS, per user) and
+  `release/OptionLens-<version>-win-x64.zip`.
+- Linux: `npm run dist:linux` builds `release/OptionLens-<version>-linux-x64.AppImage`;
+  `./scripts/check-linux-glibc.sh release/linux-unpacked` checks the glibc baseline (2.28).
+
+`./scripts/smoke-bundled-engine.sh <bundled python>` starts the bundled engine as the app does and stops it
+by closing its stdin (every OS); `e2e/packaged.spec.ts` (with `PACKAGED_APP`) drives the packaged app.
+`scripts/test-install-sh.sh` and `scripts/test-install-ps1.ps1` test the installers. Releases: bump the
+version in `package.json` and `engine/pyproject.toml`, push a `v<version>` tag; the CI workflow builds every
+OS (a failed leg blocks the release) and attaches the macOS zips, the Windows setup.exe and zip and the Linux
+AppImage to the GitHub Release.
 
 ### Layout
 
 - `src/`: renderer (React/Vite). `src/api/types.ts` is the API JSON contract (the engine's contract
   tests read it).
 - `electron/main`: engine sidecar, window, `app://` protocol and CSP, tray, IPC, notifications, settings.
-  `electron/main/updater`: the self-updater (GitHub release check, verified download, staging, the swap
-  helper, rollback, safe-window policy).
+  `electron/main/platform`: what differs per OS (launch at login, tray icons, notifications, menus, where the
+  bundled Python is). `electron/main/updater`: the self-updater (GitHub release check, verified download,
+  safe-window policy, rollback); `updater/installers` holds the per-OS install steps (macOS app swap, Windows
+  NSIS installer, Linux AppImage swap).
 - `electron/bridge`: IBKR bridge. `tws.ts` is the TWS contract. `ib-adapter.ts` implements it with
   [`@stoqey/ib`](https://github.com/stoqey/ib), a maintained TypeScript port of the official TWS API.
 - `electron/preload`: the `window.optionlens` API.
