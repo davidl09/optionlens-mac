@@ -36,7 +36,7 @@ function Test-OptionLensSha256([string]$Path, [string]$Expected) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -ceq $Expected
 }
 
-function Install-OptionLens {
+function Install-OptionLensApp {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'   # Windows PowerShell's progress bar slows Invoke-WebRequest down a lot
     if (-not [Environment]::Is64BitOperatingSystem) { throw 'OptionLens needs 64-bit Windows.' }
@@ -85,5 +85,5 @@ function Install-OptionLens {
 
 # Dot-sourced by scripts/test-install-ps1.ps1 with $OptionLensInstallerNoRun set: functions only.
 if (-not (Get-Variable -Name OptionLensInstallerNoRun -ValueOnly -ErrorAction SilentlyContinue)) {
-    try { Install-OptionLens } catch { Write-Host "OptionLens install failed: $($_.Exception.Message)" -ForegroundColor Red }
+    try { Install-OptionLensApp } catch { Write-Host "OptionLens install failed: $($_.Exception.Message)" -ForegroundColor Red }
 }

@@ -9,7 +9,7 @@ $script:failures = 0
 function Assert-Equal($Name, $Actual, $Expected) {
     if ($Actual -ceq $Expected) { Write-Host "ok   $Name" } else { Write-Host "FAIL $Name : expected [$Expected], got [$Actual]"; $script:failures++ }
 }
-function Assert-Throws($Name, [scriptblock]$Block, [string]$Pattern) {
+function Assert-Error($Name, [scriptblock]$Block, [string]$Pattern) {
     try { & $Block; Write-Host "FAIL $Name : no error"; $script:failures++ }
     catch { if ($_.Exception.Message -match $Pattern) { Write-Host "ok   $Name" } else { Write-Host "FAIL $Name : $($_.Exception.Message)"; $script:failures++ } }
 }
@@ -30,12 +30,12 @@ Assert-Equal 'picks the Windows installer' $a.Name 'OptionLens-0.1.4-win-x64-set
 Assert-Equal 'version' $a.Version '0.1.4'
 Assert-Equal 'url' $a.Url "https://github.com/$OptionLensRepo/releases/download/v0.1.4/OptionLens-0.1.4-win-x64-setup.exe"
 Assert-Equal 'sha256' $a.Sha256 $hex
-Assert-Throws 'refuses a draft' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $true) } 'draft'
-Assert-Throws 'refuses a missing digest' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false '') } 'SHA-256 digest'
-Assert-Throws 'refuses an upper-case or short digest' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false "sha256:$('C' * 64)") } 'SHA-256 digest'
-Assert-Throws 'refuses another repository''s URL' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false "sha256:$hex" 'someone/else') } 'unexpected download URL'
-Assert-Throws 'refuses a macOS-only release' { Get-OptionLensSetupAsset ('{"tag_name":"v0.1.3","draft":false,"prerelease":false,"assets":[{"name":"OptionLens-0.1.3-arm64.zip"}]}' | ConvertFrom-Json) } 'has no OptionLens-0.1.3-win-x64-setup.exe'
-Assert-Throws 'refuses an odd version' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4-beta.1') } 'unexpected release version'
+Assert-Error 'refuses a draft' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $true) } 'draft'
+Assert-Error 'refuses a missing digest' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false '') } 'SHA-256 digest'
+Assert-Error 'refuses an upper-case or short digest' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false "sha256:$('C' * 64)") } 'SHA-256 digest'
+Assert-Error 'refuses another repository''s URL' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4' $false "sha256:$hex" 'someone/else') } 'unexpected download URL'
+Assert-Error 'refuses a macOS-only release' { Get-OptionLensSetupAsset ('{"tag_name":"v0.1.3","draft":false,"prerelease":false,"assets":[{"name":"OptionLens-0.1.3-arm64.zip"}]}' | ConvertFrom-Json) } 'has no OptionLens-0.1.3-win-x64-setup.exe'
+Assert-Error 'refuses an odd version' { Get-OptionLensSetupAsset (Get-TestRelease '0.1.4-beta.1') } 'unexpected release version'
 
 $file = Join-Path ([IO.Path]::GetTempPath()) ('ol-hash-' + [guid]::NewGuid().ToString('N'))
 [IO.File]::WriteAllText($file, 'hello')
