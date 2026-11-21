@@ -64,7 +64,7 @@ jobs:
           Set-PSRepository PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser
           # Write-Host is the installer's console output (not pipeline data).
-          $issues = Invoke-ScriptAnalyzer -Path install.ps1, scripts/test-install-ps1.ps1 -Severity Warning, Error -ExcludeRule PSAvoidUsingWriteHost
+          $issues = 'install.ps1', 'scripts/test-install-ps1.ps1' | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Warning, Error -ExcludeRule PSAvoidUsingWriteHost }
           $issues | Format-Table -AutoSize
           if ($issues) { throw 'PSScriptAnalyzer found issues' }
 
