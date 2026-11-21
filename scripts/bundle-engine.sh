@@ -3,10 +3,22 @@
 # a relocatable CPython 3.13 (python-build-standalone via uv) with the engine's locked dependencies and
 # the engine itself (package `optionlens`, with its metadata so /api/health reports its version).
 # Run on the target architecture (wheels are platform-specific): CI runs it on arm64 and x64 macOS runners.
+# On macOS, wheels are resolved for the app's minimum macOS (electron-builder.yml minimumSystemVersion), not
+# for the build machine: a macOS 15 runner would otherwise pick numpy/scipy wheels that need macOS 14.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PY_VERSION="${PY_VERSION:-3.13}"
+MIN_MACOS="$(sed -n 's/^ *minimumSystemVersion: *"\{0,1\}\([0-9.]*\)"\{0,1\}.*/\1/p' electron-builder.yml)"
+PLATFORM_ARGS=()
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) PLATFORM_ARGS=(--python-platform aarch64-apple-darwin) ;;
+  Darwin-x86_64) PLATFORM_ARGS=(--python-platform x86_64-apple-darwin) ;;
+esac
+if [ "$(uname -s)" = Darwin ]; then
+  [ -n "$MIN_MACOS" ] || { echo "no minimumSystemVersion in electron-builder.yml" >&2; exit 1; }
+  export MACOSX_DEPLOYMENT_TARGET="$MIN_MACOS"   # uv: the macOS version --python-platform targets
+fi
 rm -rf build/python build/pyinst build/requirements.txt
 mkdir -p build
 
@@ -22,7 +34,7 @@ PY=build/python/bin/python3
 
 # 2. The engine's locked runtime dependencies (no dev deps, not the project itself).
 (cd engine && uv export --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o ../build/requirements.txt)
-uv pip install --python "$PY" --no-cache -r build/requirements.txt
+uv pip install --python "$PY" ${PLATFORM_ARGS[@]+"${PLATFORM_ARGS[@]}"} --no-cache -r build/requirements.txt
 
 # Not needed at runtime: Tk, IDLE, pip/ensurepip, headers, docs.
 rm -rf build/python/include build/python/share build/python/lib/itcl* build/python/lib/tcl* build/python/lib/tk* \
@@ -34,6 +46,8 @@ rm -rf build/python/include build/python/share build/python/lib/itcl* build/pyth
 uv pip install --python "$PY" --no-deps --no-cache ./engine
 "$PY" -m compileall -q build/python/lib >/dev/null
 
-# 4. Smoke: the bundled interpreter imports the engine and its CLI.
-PYTHONNOUSERSITE=1 "$PY" -c "import importlib.metadata as m, optionlens.cli, duckdb, fastapi; print('engine bundle ok', m.version('optionlens'))"
+# 4. Smoke: the bundled interpreter imports the engine and its CLI (and, on macOS, nothing needs a newer
+#    macOS than the app's minimum).
+PYTHONNOUSERSITE=1 "$PY" -c "import importlib.metadata as m, optionlens.cli, duckdb, fastapi, numpy, scipy.stats, pyarrow; print('engine bundle ok', m.version('optionlens'))"
+if [ "$(uname -s)" = Darwin ]; then "$PY" -I scripts/check-macos-minos.py build/python; fi
 du -sh build/python

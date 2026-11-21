@@ -14,17 +14,20 @@ continue. Use **Quit OptionLens** in the menu-bar menu to stop everything.
 
 ## Install
 
+OptionLens needs macOS 12.3 (Monterey) or later.
+
 1. Download the dmg for your Mac from the
    [Releases](https://github.com/davidl09/optionlens-mac/releases) page:
    `OptionLens-<version>-arm64.dmg` for Apple silicon (M1 or later), `-x64` for Intel Macs.
 2. Open the dmg and drag **OptionLens** to **Applications**.
-3. The app is not signed with an Apple Developer ID. The first time, **right-click OptionLens in
-   Applications → Open**, then click **Open** in the warning dialog. On macOS 15 or later, if no Open
-   button appears, open **System Settings → Privacy & Security** and click **Open Anyway**.
-   If macOS says the app "is damaged", remove the download quarantine flag and open it again:
+3. The app is not signed with an Apple Developer ID (it is ad-hoc signed), so macOS quarantines the
+   download. Remove the quarantine flag once, in Terminal:
    ```
    xattr -dr com.apple.quarantine /Applications/OptionLens.app
    ```
+   Then open OptionLens normally. (Without this step macOS may say the app "is damaged" or "cannot be
+   checked for malicious software"; right-click → **Open**, or **System Settings → Privacy & Security →
+   Open Anyway** on macOS 15, also works for the app itself.)
 
 ### Importing data from an old OptionLens server (one time)
 

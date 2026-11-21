@@ -20,7 +20,9 @@ mac:
   identity: null
   hardenedRuntime: false
   icon: build/icon.png
-  minimumSystemVersion: "12.0"
+  # scipy's arm64 wheels need macOS 12.3; scripts/bundle-engine.sh resolves wheels for this version and
+  # CI checks every bundled Mach-O against it (scripts/check-macos-minos.py).
+  minimumSystemVersion: "12.3"
   extendInfo:
     LSUIElement: false
     NSHumanReadableCopyright: OptionLens

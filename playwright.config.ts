@@ -12,6 +12,7 @@ export default defineConfig({
   workers: 2,
   reporter: [["list"]],
   use: { baseURL: "http://127.0.0.1:4173", viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, trace: "off", ...launch },
-  // The live suite (e2e/live.spec.ts) targets a running OptionLens server instead of vite preview.
-  webServer: process.env.LIVE_BASE_URL ? undefined : { command: "npx vite preview --host 127.0.0.1 --port 4173 --strictPort", url: "http://127.0.0.1:4173", reuseExistingServer: true, timeout: 30_000 },
+  // The live suite (e2e/live.spec.ts) targets a running OptionLens server instead of vite preview; the
+  // packaged-app test (e2e/packaged.spec.ts) launches the built app and needs no web server.
+  webServer: process.env.LIVE_BASE_URL || process.env.PACKAGED_APP ? undefined : { command: "npx vite preview --host 127.0.0.1 --port 4173 --strictPort", url: "http://127.0.0.1:4173", reuseExistingServer: true, timeout: 30_000 },
 });

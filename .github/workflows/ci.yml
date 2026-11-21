@@ -30,6 +30,30 @@ jobs:
       # Mocked Playwright suite against `vite preview` (uses the runner's Google Chrome; see playwright.config.ts).
       - run: npx playwright test e2e/smoke.spec.ts e2e/desktop.spec.ts --trace off
 
+  packaged:
+    # The packaged app as users get it: bundled Python engine started by the app, and the renderer
+    # (app://optionlens) loading data from it — what Chromium's Local Network Access checks could break.
+    name: Packaged app — bundled engine + renderer data (Linux, xvfb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: astral-sh/setup-uv@v6
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - run: npm ci
+      - name: Bundle Python + engine
+        run: ./scripts/bundle-engine.sh
+      - run: npm run dist:dir
+      - name: Bundled engine starts (LISTENING + health)
+        run: ./scripts/smoke-bundled-engine.sh release/linux-unpacked/resources/python/bin/python3
+      - name: Packaged renderer loads data from the engine
+        run: xvfb-run -a npx playwright test e2e/packaged.spec.ts --trace off
+        env:
+          PACKAGED_APP: release/linux-unpacked/optionlens-mac
+
   engine:
     name: Engine — pytest (Linux)
     runs-on: ubuntu-latest
@@ -45,7 +69,7 @@ jobs:
   mac:
     name: macOS dmg (${{ matrix.arch }})
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [app, engine]
+    needs: [app, engine, packaged]
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +95,14 @@ jobs:
         run: npm run dist:mac -- --${{ matrix.arch }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Verify the app — signature, minimum macOS, bundled engine starts from inside the .app
+        run: |
+          APP="$(ls -d release/mac*/OptionLens.app | head -n 1)"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          PY="$APP/Contents/Resources/python/bin/python3"
+          codesign --verify --strict "$PY"
+          "$PY" -I scripts/check-macos-minos.py "$APP/Contents/Resources/python"
+          ./scripts/smoke-bundled-engine.sh "$PY"
       - uses: actions/upload-artifact@v4
         with:
           name: OptionLens-${{ matrix.arch }}-dmg
