@@ -1,7 +1,7 @@
 // IPC handlers for the preload API (electron/shared/api.ts). Only frames served from app://optionlens may
 // call them; every argument from the renderer is validated here.
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import { IPC, JOB_KINDS, type AppSettings, type BridgeStatus, type EngineStatus, type JobKind, type LoginItemStatus, type RefreshResult, type Result } from "../shared/api";
+import { IPC, JOB_KINDS, type AppSettings, type BridgeStatus, type EngineStatus, type JobKind, type LoginItemStatus, type RefreshResult, type Result, type UpdateStatus } from "../shared/api";
 import { APP_ORIGIN } from "./protocol";
 
 export interface IpcBackend {
@@ -15,6 +15,10 @@ export interface IpcBackend {
   refreshSymbol(symbol: string): Promise<RefreshResult>;
   cancelRefresh(symbol: string): void;
   cancelJobs(kind?: JobKind): void;
+  updateStatus(): UpdateStatus;
+  checkForUpdates(): Promise<void>;
+  installUpdate(): Promise<Result>;
+  dismissUpdateNotice(): void;
 }
 
 const SYMBOL_RE = /^[A-Za-z0-9.^_-]{1,15}$/;
@@ -45,6 +49,10 @@ export function registerIpc(b: IpcBackend): void {
     if (typeof sym !== "string" || !SYMBOL_RE.test(sym)) throw new Error("invalid symbol");
     b.cancelRefresh(sym);
   });
+  handle(IPC.updateStatus, () => b.updateStatus());
+  handle(IPC.checkForUpdates, () => b.checkForUpdates());
+  handle(IPC.installUpdate, () => b.installUpdate());
+  handle(IPC.dismissUpdateNotice, () => b.dismissUpdateNotice());
   handle(IPC.cancelJobs, (kind) => {
     if (kind !== undefined && !(JOB_KINDS as readonly unknown[]).includes(kind)) throw new Error("invalid job kind");
     b.cancelJobs(kind as JobKind | undefined);

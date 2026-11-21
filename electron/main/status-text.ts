@@ -1,5 +1,5 @@
 // Human-readable status lines for the menu-bar icon (pure, so they are unit-tested).
-import type { BridgeStatus, EngineStatus } from "../shared/api";
+import type { BridgeStatus, EngineStatus, UpdateStatus } from "../shared/api";
 
 export function engineLine(e: EngineStatus): string {
   switch (e.state) {
@@ -33,4 +33,16 @@ export function bridgeLines(b: BridgeStatus): string[] {
 
 export function trayTooltip(e: EngineStatus, b: BridgeStatus): string {
   return [engineLine(e), bridgeLines(b)[0]].join("\n");
+}
+
+/** The menu-bar menu's update entry, if any: open Settings → Updates, or restart into a ready update. */
+export function updateMenuItem(u: UpdateStatus): { label: string; action: "settings" | "install" } | null {
+  const v = u.latest?.version;
+  if (!v) return null;
+  switch (u.phase) {
+    case "available": return { label: `Update available (${v})…`, action: "settings" };
+    case "downloading": return { label: `Downloading update (${v})… ${Math.round((u.progress ?? 0) * 100)}%`, action: "settings" };
+    case "ready": return { label: `Restart now to update (${v})`, action: "install" };
+    default: return null;
+  }
 }

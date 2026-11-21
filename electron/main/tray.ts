@@ -1,8 +1,8 @@
 // Menu-bar (Tray) icon: engine + IBKR status and the app's background controls.
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
-import type { BridgeStatus, EngineStatus, LoginItemStatus } from "../shared/api";
-import { bridgeLines, engineLine, trayTooltip } from "./status-text";
+import type { BridgeStatus, EngineStatus, LoginItemStatus, UpdateStatus } from "../shared/api";
+import { bridgeLines, engineLine, trayTooltip, updateMenuItem } from "./status-text";
 
 export interface TrayActions {
   open(): void;
@@ -10,10 +10,11 @@ export interface TrayActions {
   setBridgeEnabled(on: boolean): void;
   cancelBridgeWork(): void;
   setLaunchAtLogin(on: boolean): void;
+  installUpdate(): void;
   quit(): void;
 }
 
-export interface TrayState { engine: EngineStatus; bridge: BridgeStatus; loginItem: LoginItemStatus }
+export interface TrayState { engine: EngineStatus; bridge: BridgeStatus; loginItem: LoginItemStatus; update: UpdateStatus }
 
 export class AppTray {
   private readonly tray: Tray;
@@ -41,7 +42,9 @@ export class AppTray {
     const s = this.state();
     const info = (label: string): MenuItemConstructorOptions => ({ label, enabled: false });
     const busy = s.bridge.current !== null || Object.values(s.bridge.queued).some((n) => n > 0);
+    const update = updateMenuItem(s.update);
     const template: MenuItemConstructorOptions[] = [
+      ...(update ? [{ label: update.label, click: () => (update.action === "install" ? this.actions.installUpdate() : this.actions.openSettings()) }, { type: "separator" } as const] : []),
       info(engineLine(s.engine)),
       ...bridgeLines(s.bridge).map(info),
       { type: "separator" },

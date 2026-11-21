@@ -25,9 +25,35 @@ export interface BridgeSettings {
 /** What macOS has for "launch at login" ("requires-approval": the user must allow it in System Settings). */
 export type LoginItemStatus = "enabled" | "disabled" | "requires-approval" | "unsupported";
 
+export interface UpdateSettings {
+  /** Download updates in the background and install them at a safe moment. */
+  auto: boolean;
+  /** GitHub repository "owner/repo" whose releases are installed. */
+  source: string;
+}
+
 export interface AppSettings {
   bridge: BridgeSettings;
   launchAtLogin: boolean;
+  updates: UpdateSettings;
+}
+
+export type UpdatePhase = "idle" | "checking" | "up-to-date" | "available" | "downloading" | "ready" | "installing" | "error";
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  currentVersion: string;
+  /** The latest release seen (notes are plain text: never rendered as HTML). */
+  latest: { version: string; notes: string; url: string; publishedAt: string | null } | null;
+  /** 0..1 while downloading. */
+  progress: number | null;
+  error: string | null;
+  /** Why the update cannot be installed right now (app location, safe-window policy), else null. */
+  blocked: string | null;
+  /** The latest version was rolled back before and is not installed automatically. */
+  skipped: boolean;
+  /** A message about an earlier update (rollback, failed install) until dismissed. */
+  notice: string | null;
+  checkedAt: string | null;
 }
 
 /** Bridge work kinds in §6 order: on-demand first, the rest share time by weight (bridge/scheduler.ts). */
@@ -82,6 +108,12 @@ export interface DesktopApi {
   onNavigate(cb: (path: string) => void): () => void;
   /** Progress of a running importData copy (bytes). */
   onImportProgress(cb: (p: { copied: number; total: number }) => void): () => void;
+  updateStatus(): Promise<UpdateStatus>;
+  checkForUpdates(): Promise<void>;
+  /** Downloads the latest release if needed, then restarts into it (when the safe-window policy allows). */
+  installUpdate(): Promise<Result>;
+  dismissUpdateNotice(): Promise<void>;
+  onUpdateStatus(cb: (s: UpdateStatus) => void): () => void;
 }
 
 export const IPC = {
@@ -95,6 +127,11 @@ export const IPC = {
   refreshSymbol: "bridge:refresh",
   cancelRefresh: "bridge:cancel-refresh",
   cancelJobs: "bridge:cancel",
+  updateStatus: "update:status",
+  checkForUpdates: "update:check",
+  installUpdate: "update:install",
+  dismissUpdateNotice: "update:dismiss-notice",
+  updateEvent: "event:update",
   engineEvent: "event:engine",
   bridgeEvent: "event:bridge",
   navigateEvent: "event:navigate",

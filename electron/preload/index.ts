@@ -24,6 +24,11 @@ const api: DesktopApi = {
   onBridgeStatus: (cb) => subscribe(IPC.bridgeEvent, cb),
   onNavigate: (cb) => subscribe(IPC.navigateEvent, cb),
   onImportProgress: (cb) => subscribe(IPC.importProgressEvent, cb),
+  updateStatus: () => ipcRenderer.invoke(IPC.updateStatus),
+  checkForUpdates: () => ipcRenderer.invoke(IPC.checkForUpdates),
+  installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
+  dismissUpdateNotice: () => ipcRenderer.invoke(IPC.dismissUpdateNotice),
+  onUpdateStatus: (cb) => subscribe(IPC.updateEvent, cb),
 };
 
 contextBridge.exposeInMainWorld("optionlens", api);

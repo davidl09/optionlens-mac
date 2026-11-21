@@ -1,9 +1,11 @@
 // App settings: defaults, validation of user input (fail fast with a message) and tolerant parsing
 // of the stored file (unknown/invalid fields fall back to defaults so a bad file never bricks the app).
-import type { AppSettings, BridgeSettings } from "../shared/api";
+import type { AppSettings, BridgeSettings, UpdateSettings } from "../shared/api";
+import { DEFAULT_UPDATE_REPO, isRepoSlug } from "./updater/repo";
 
 export const DEFAULT_BRIDGE: BridgeSettings = { enabled: true, port: null, clientId: 17, marketDataLines: 100 };
-export const DEFAULT_SETTINGS: AppSettings = { bridge: DEFAULT_BRIDGE, launchAtLogin: false };
+export const DEFAULT_UPDATES: UpdateSettings = { auto: false, source: DEFAULT_UPDATE_REPO };
+export const DEFAULT_SETTINGS: AppSettings = { bridge: DEFAULT_BRIDGE, launchAtLogin: false, updates: DEFAULT_UPDATES };
 
 /** Ports tried in order when no explicit port is configured. */
 export const AUTO_PORTS = [4001, 7496, 4002, 7497] as const;
@@ -33,21 +35,33 @@ export function validateBridgeSettings(v: unknown): Check<BridgeSettings> {
   return { ok: true, value: { enabled: v.enabled, port: v.port as number | null, clientId: v.clientId, marketDataLines: v.marketDataLines } };
 }
 
+export function validateUpdateSettings(v: unknown): Check<UpdateSettings> {
+  if (!isObj(v)) return { ok: false, error: "Update settings must be an object." };
+  if (typeof v.auto !== "boolean") return { ok: false, error: "“Install updates automatically” must be true or false." };
+  const source = typeof v.source === "string" ? v.source.trim() : v.source;
+  if (!isRepoSlug(source)) return { ok: false, error: "The update source must be a GitHub repository written as owner/repo." };
+  return { ok: true, value: { auto: v.auto, source } };
+}
+
 export function validateSettings(v: unknown): Check<AppSettings> {
   if (!isObj(v)) return { ok: false, error: "Settings must be an object." };
   const bridge = validateBridgeSettings(v.bridge);
   if (!bridge.ok) return bridge;
   if (typeof v.launchAtLogin !== "boolean") return { ok: false, error: "“Launch at login” must be true or false." };
-  return { ok: true, value: { bridge: bridge.value, launchAtLogin: v.launchAtLogin } };
+  const updates = validateUpdateSettings(v.updates);
+  if (!updates.ok) return updates;
+  return { ok: true, value: { bridge: bridge.value, launchAtLogin: v.launchAtLogin, updates: updates.value } };
 }
 
 /** Stored file → settings; each section independently falls back to its default when invalid. */
 export function parseStoredSettings(raw: unknown): AppSettings {
   const o = isObj(raw) ? raw : {};
   const bridge = validateBridgeSettings(isObj(o.bridge) ? { ...DEFAULT_BRIDGE, ...o.bridge } : DEFAULT_BRIDGE);
+  const updates = validateUpdateSettings(isObj(o.updates) ? { ...DEFAULT_UPDATES, ...o.updates } : DEFAULT_UPDATES);
   return {
     bridge: bridge.ok ? bridge.value : DEFAULT_BRIDGE,
     launchAtLogin: typeof o.launchAtLogin === "boolean" ? o.launchAtLogin : DEFAULT_SETTINGS.launchAtLogin,
+    updates: updates.ok ? updates.value : DEFAULT_UPDATES,
   };
 }
 
