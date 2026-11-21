@@ -66,10 +66,17 @@ jobs:
           uv sync --frozen
           uv run pytest -q
 
+  shell:
+    name: Shell scripts — shellcheck (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version && shellcheck install.sh scripts/*.sh
+
   mac:
-    name: macOS dmg (${{ matrix.arch }})
+    name: macOS zip (${{ matrix.arch }})
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: [app, engine, packaged]
+    needs: [app, engine, packaged, shell]
     strategy:
       fail-fast: false
       matrix:
@@ -89,28 +96,29 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
       - name: Bundle Python + engine for ${{ matrix.arch }}
         run: ./scripts/bundle-engine.sh
-      - name: Build dmg
+      - name: Build OptionLens.app
         run: npm run dist:mac -- --${{ matrix.arch }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Verify the app — signature, minimum macOS, bundled engine starts from inside the .app
-        run: |
-          APP="$(ls -d release/mac*/OptionLens.app | head -n 1)"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          PY="$APP/Contents/Resources/python/bin/python3"
-          codesign --verify --strict "$PY"
-          "$PY" -I scripts/check-macos-minos.py "$APP/Contents/Resources/python"
-          ./scripts/smoke-bundled-engine.sh "$PY"
+        run: ./scripts/verify-mac-app.sh "$(ls -d release/mac*/OptionLens.app | head -n 1)"
+      - name: Zip the app (ditto)
+        run: echo "ZIP=$(./scripts/zip-mac-app.sh ${{ matrix.arch }})" >> "$GITHUB_ENV"
+      - name: Verify the zip — extract with ditto, same checks on the extracted app
+        run: ./scripts/verify-mac-zip.sh "$ZIP"
       - uses: actions/upload-artifact@v4
         with:
-          name: OptionLens-${{ matrix.arch }}-dmg
-          path: release/*.dmg
+          name: OptionLens-${{ matrix.arch }}-zip
+          path: ${{ env.ZIP }}
           if-no-files-found: error
 
   release:
-    name: Attach dmgs to the GitHub Release
+    name: Attach the zips to the GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: mac
     runs-on: ubuntu-latest
@@ -119,10 +127,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: OptionLens-*-dmg
+          pattern: OptionLens-*-zip
           merge-multiple: true
-          path: dmg
+          path: zip
+      - run: ls -l zip && test "$(ls zip/*.zip | wc -l)" -eq 2
       - uses: softprops/action-gh-release@v2
         with:
-          files: dmg/*.dmg
+          files: zip/*.zip
+          fail_on_unmatched_files: true
           generate_release_notes: true

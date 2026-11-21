@@ -1,5 +1,6 @@
-# electron-builder: macOS dmg (unsigned, ad-hoc signed after packing), one per architecture
-# (the bundled Python wheels are architecture-specific). Linux `dir` is only for local checks.
+# electron-builder: macOS OptionLens.app (unsigned, ad-hoc signed after packing), one per architecture
+# (the bundled Python wheels are architecture-specific). scripts/zip-mac-app.sh packs it into the release
+# zip with ditto (install.sh and the in-app updater install from that zip). Linux `dir` is only for local checks.
 appId: app.optionlens.mac
 productName: OptionLens
 copyright: OptionLens
@@ -16,7 +17,7 @@ asar: true
 afterPack: scripts/after-pack.cjs
 mac:
   category: public.app-category.finance
-  target: dmg
+  target: dir
   identity: null
   hardenedRuntime: false
   icon: build/icon.png
@@ -30,9 +31,6 @@ mac:
   extraResources:
     - from: build/python
       to: python
-dmg:
-  artifactName: OptionLens-${version}-${arch}.${ext}
-  writeUpdateInfo: false
 linux:
   target: dir
   category: Finance
