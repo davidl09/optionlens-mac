@@ -6,7 +6,7 @@ import type { Chain, Leg, OptionRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { StatGrid } from "../../components/StatGrid";
 import { AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
-import { fmt, isMissing, signClass } from "../../lib/format";
+import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
 import { describeLeg, useLegs } from "../../state/legs";
 import { ExpiryPills, useQueryValue, useSym } from "./shared";
@@ -70,9 +70,11 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
       return <td key={c.key} className={`${base} ${hot ? "hot" : ""}`} title={hot ? "Volume exceeds open interest" : undefined}>{fmt(v, "int")}</td>;
     }
     if (c.key === "last") {
-      return <td key={c.key} className={base}><Link to={`/s/${chain.symbol}/contract/${encodeURIComponent(row.osi)}`} title="Contract history">{isMissing(v) ? "—" : fmt(v, "num2")}</Link></td>;
+      return <td key={c.key} className={base}><Link to={`/s/${chain.symbol}/contract/${encodeURIComponent(row.osi)}`} title={row.last_ts ? `Last trade ${fmtDateTime(row.last_ts)} — contract history` : "Contract history"}>{isMissing(v) ? "—" : fmt(v, "num2")}</Link></td>;
     }
     if (isMissing(v)) return <td key={c.key} className={base}><NullValue hint={c.key === "iv" ? "Feed reported no IV for this contract." : undefined} /></td>;
+    const computed = computedHint(row, c.key);
+    if (computed) return <td key={c.key} className={base} title={computed}><i>{fmt(v, c.fmt === "money" ? "num2" : c.fmt)}</i></td>;
     return <td key={c.key} className={`${base} ${c.key === "change" ? signClass(v) : ""}`}>{fmt(v, c.fmt === "money" ? "num2" : c.fmt)}</td>;
   };
 
@@ -111,6 +113,17 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
       </table>
     </div>
   );
+}
+
+/** Why an IV / greek cell is shown in italics: the engine computed it because the feed sent none. */
+function computedHint(row: OptionRow, key: Col["key"]): string | null {
+  if (key === "iv" && (row.iv_source === "computed_mid" || row.iv_source === "computed_last")) {
+    return `Computed by OptionLens (Black-Scholes) from the ${row.iv_source === "computed_mid" ? "bid/ask mid" : "last trade of the session"}: the feed sent no IV`;
+  }
+  if ((key === "delta" || key === "gamma" || key === "theta" || key === "vega") && row.greeks_source === "computed") {
+    return "Computed by OptionLens (Black-Scholes) from the IV: the feed sent no greeks";
+  }
+  return null;
 }
 
 /** A row whose source differs from the chain's (e.g. reconstructed among IBKR rows) is badged at its strike. */

@@ -412,7 +412,7 @@ def dedupe_roots(cols: dict[str, np.ndarray], extra_key: str | None = None) -> d
 
 
 _SRC_FIELDS = ("osi", "expiry", "strike", "right", "bid", "ask", "last", "change", "volume", "oi", "iv",
-               "delta", "gamma", "theta", "vega", "rho", "theo")
+               "delta", "gamma", "theta", "vega", "rho", "theo", "last_ts", "iv_source", "greeks_source")
 
 
 def num(v: Any) -> float | None:
@@ -440,8 +440,10 @@ def _contracts(symbol: str, cols: dict[str, np.ndarray], expiries: list[date]) -
             volume=count(g["volume"][i]), oi=count(g["oi"][i]),
             iv=num(iv) if iv and iv == iv and iv > 0 else None,
             delta=num(g["delta"][i]), gamma=num(g["gamma"][i]), theta=num(g["theta"][i]),
-            vega=num(g["vega"][i]), rho=num(g["rho"][i]), theo=num(g["theo"][i])))
+            vega=num(g["vega"][i]), rho=num(g["rho"][i]), theo=num(g["theo"][i]),
+            last_ts=as_utc(g["last_ts"][i]), iv_source=g["iv_source"][i], greeks_source=g["greeks_source"][i]))
     return out
+
 
 
 def _arrays(symbol: str, cols: dict[str, np.ndarray], *, r: float, asof: datetime | None = None, q: float = 0.0,
@@ -466,7 +468,7 @@ def _arrays(symbol: str, cols: dict[str, np.ndarray], *, r: float, asof: datetim
         asof=asof or as_utc(cols["ts"].max()),
         symbol=symbol, osi=cols["osi"], src=_contracts(symbol, cols, expiries) if with_src else None,
         r=r, q=q, hv30=hv30, iv_rank=iv_rank, next_earnings=next_event.date if next_event else None,
-        next_reaction=expected_reaction_day(next_event) if next_event else None)
+        next_reaction=expected_reaction_day(next_event) if next_event else None, iv_source=cols.get("iv_source"))
 
 
 _derived: "weakref.WeakKeyDictionary[ChainArrays, dict]" = weakref.WeakKeyDictionary()

@@ -22,7 +22,7 @@ def aapl():
 def test_keys_exact(aapl):
     _, _, m = aapl
     assert set(m) == set(cm.METRIC_KEYS)
-    assert len(cm.METRIC_KEYS) == 31
+    assert len(cm.METRIC_KEYS) == 32 and m["iv_computed"] is False   # the fixture chain has feed IVs
 
 
 def test_iv30_close_to_cboe(aapl):
@@ -173,7 +173,7 @@ def test_expiry_term_rows_feed_earnings_implied_move(aapl):
     snap, _, _ = aapl
     ca = ChainArrays.from_snapshot(snap)
     rows = cm.expiry_term_rows(ca)
-    assert set(rows[0]) == {"expiry", "dte", "t", "atm_iv", "straddle"}
+    assert set(rows[0]) == {"expiry", "dte", "t", "atm_iv", "atm_iv_computed", "straddle"}
     out = earnings.implied_earnings_move(rows, date(2026, 11, 24), snap.quote.price)
     assert out["expiry_used"] == date(2026, 11, 25)
     r = next(x for x in rows if x["expiry"] == date(2026, 11, 25))

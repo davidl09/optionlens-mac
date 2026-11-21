@@ -22,7 +22,7 @@ METRIC_KEYS = (
     "call_premium", "put_premium", "call_vol_otm", "call_vol_atm", "call_vol_itm",
     "put_vol_otm", "put_vol_atm", "put_vol_itm", "call_prem_otm", "call_prem_atm",
     "call_prem_itm", "put_prem_otm", "put_prem_atm", "put_prem_itm", "net_delta_volume",
-    "straddle30_pct", "expected_move30_pct",
+    "straddle30_pct", "expected_move30_pct", "iv_computed",
 )
 
 
@@ -100,6 +100,7 @@ def expiry_infos(ca: ChainArrays) -> list[dict]:
         out.append({
             "expiry": ca.expiries[i], "dte": int(ca.dte[sl][0]),
             "is_monthly": is_monthly_expiry(ca.expiries[i]), "atm_iv": atm[i]["atm_iv"],
+            "atm_iv_computed": atm[i]["atm_iv_computed"],
             "straddle": strad[i]["straddle"],
             "call_volume": int(v[c].sum()), "put_volume": int(v[~c].sum()),
             "call_oi": int(oi[c].sum()), "put_oi": int(oi[~c].sum()),
@@ -128,18 +129,31 @@ def compute_chain_metrics(chain, now: datetime) -> dict:
     return metrics_from_arrays(ca, iv30_cboe=chain.quote.iv30)
 
 
+def iv_metric_layer(term: list[dict]) -> tuple[list[dict], bool | None]:
+    """The per-expiry ATM IVs a chain-wide IV metric (IV30…IV360 interpolation, front ATM IV, 25-delta skew) is
+    computed from, and whether they are engine-computed (None: no IV at all). One layer for the whole metric:
+    the expiries with a source ATM IV when there is at least one (DTE >= 1), else the computed ones — a term
+    structure never interpolates a source IV against a computed one."""
+    usable = [r for r in term if r["atm_iv"] is not None and r["dte"] >= 1]
+    if not usable:
+        return term, None
+    computed = all(r["atm_iv_computed"] for r in usable)
+    return [r if r["atm_iv_computed"] == computed else {**r, "atm_iv": None} for r in term], computed
+
+
 def metrics_from_arrays(ca: ChainArrays, iv30_cboe: float | None = None) -> dict:
     out: dict = {k: None for k in METRIC_KEYS}
     out["iv30_cboe"] = iv30_cboe
     if len(ca) == 0 or not ca.spot or ca.spot <= 0:
         return out
-    term = vol.atm_iv_by_expiry(ca)
+    term, computed = iv_metric_layer(vol.atm_iv_by_expiry(ca))
+    out["iv_computed"] = computed
     cm = vol.constant_maturity(term)
     for d, v in cm.items():
         out[f"iv{d}"] = v
     front = next((r for r in term if r["dte"] >= 1 and r["atm_iv"] is not None), None)
     out["atm_iv_front"] = front["atm_iv"] if front else None
-    sk = vol.skew_30(ca, cm[30])
+    sk = vol.skew_30(ca.iv_layer(bool(computed)), cm[30])
     out["skew25_30"], out["put_skew_30"] = sk["skew25_30"], sk["put_skew_30"]
     out.update(flow_totals(ca))
     strad = straddle_rows(ca)
@@ -256,7 +270,8 @@ def implied_moves(ca: ChainArrays, earnings_date: date | None = None) -> list[di
 
 def term_structure(ca: ChainArrays) -> list[dict]:
     """TermPoint rows (all expiries, including DTE 0)."""
-    return [{"expiry": r["expiry"], "dte": r["dte"], "atm_iv": r["atm_iv"]} for r in vol.atm_iv_by_expiry(ca)]
+    return [{"expiry": r["expiry"], "dte": r["dte"], "atm_iv": r["atm_iv"], "atm_iv_computed": r["atm_iv_computed"]}
+            for r in vol.atm_iv_by_expiry(ca)]
 
 
 def smile(ca: ChainArrays, expiry: date) -> list[dict]:

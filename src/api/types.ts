@@ -105,8 +105,19 @@ export interface OptionRow {
   delta: number | null; gamma: number | null; theta: number | null; vega: number | null; rho: number | null; theo: number | null;
   itm: boolean;
   source?: DataSource;
+  /** When `last` traded (null = unknown: on a weekend snapshot it can be days old). */
+  last_ts?: ISODateTime | null;
+  /** Where `iv` came from: the chain source, or computed by the engine from the mid / a current-session last (Black-Scholes). */
+  iv_source?: IvSource | null;
+  /** Where delta/gamma/theta/vega came from: the chain source, or computed by the engine from `iv`. */
+  greeks_source?: DataSource | "computed" | null;
 }
-export interface ExpiryInfo { expiry: ISODate; dte: number; is_monthly: boolean; atm_iv: number | null; straddle: number | null; call_volume: number; put_volume: number; call_oi: number; put_oi: number; source?: DataSource }
+export type IvSource = DataSource | "computed_mid" | "computed_last";
+export interface ExpiryInfo {
+  expiry: ISODate; dte: number; is_monthly: boolean; atm_iv: number | null; straddle: number | null; call_volume: number; put_volume: number; call_oi: number; put_oi: number; source?: DataSource;
+  /** atm_iv is from engine-computed IVs (the source gave none near the money for this expiry). */
+  atm_iv_computed?: boolean;
+}
 export interface Chain {
   symbol: string; underlying: Quote; asof: ISODateTime;
   expiries: ExpiryInfo[];
@@ -142,7 +153,7 @@ export interface ContractHistory {
 }
 
 // ---------------- volatility ----------------
-export interface TermPoint { expiry: ISODate; dte: number; atm_iv: number | null }
+export interface TermPoint { expiry: ISODate; dte: number; atm_iv: number | null; atm_iv_computed?: boolean }
 export interface Volatility {
   symbol: string; asof: ISODateTime | null;
   iv30: number | null; iv30_asof: ISODate | null; iv_rank: number | null; iv_percentile: number | null; history_days: number;  // as SymbolSummary

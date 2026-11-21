@@ -451,7 +451,7 @@ class _Ctx:
             for k in self.g:
                 feed = self.g[k][miss]
                 self.g[k][miss] = np.where(np.isfinite(feed), feed, g[k])
-        self.atm_by_exp = vol.atm_iv_array(ca)
+        self.atm_by_exp = vol.atm_iv_layered(ca)[0]
         self.key = ca.exp_idx.astype(np.int64) * 10**10 + np.round(ca.strike * 1000).astype(np.int64)
 
     def rows(self, call: bool, dte_window: bool = True) -> np.ndarray:

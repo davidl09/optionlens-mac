@@ -8,13 +8,14 @@ is calendar days from the as-of date (New York) to expiry.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Iterable, Sequence
 
 import numpy as np
 
 from .calendar import NY, year_fraction_to_expiry
+from .computed_iv import is_computed
 
 
 @dataclass(frozen=True, eq=False)
@@ -47,6 +48,7 @@ class ChainArrays:
     osi: np.ndarray                 # object: OSI codes (None when not supplied)
     src: np.ndarray                 # object: the source contract rows (None when not supplied)
     next_reaction: date | None = None   # expected reaction session of the next earnings (timing-aware)
+    iv_computed: np.ndarray | None = None   # bool: the row's IV was computed by the engine (computed_iv); None = none
 
     def __len__(self) -> int:
         return len(self.strike)
@@ -75,6 +77,12 @@ class ChainArrays:
         ev = self.next_reaction or self.next_earnings
         return np.array([ev is not None and self.asof_date <= ev <= e for e in self.expiries], dtype=bool)
 
+    def iv_layer(self, computed: bool) -> "ChainArrays":
+        """This chain with only the source IVs (computed=False) or only the engine-computed IVs (True); the other
+        rows' IV is NaN. IV metrics are computed on one layer at a time, never on a mix (vol.atm_iv_layers)."""
+        flag = self.iv_computed if self.iv_computed is not None else np.zeros(len(self), dtype=bool)
+        return replace(self, iv=np.where(flag == computed, self.iv, np.nan))
+
     def expiry_slices(self) -> list[slice]:
         """Contiguous row slice per unique expiry (rows are expiry-sorted)."""
         bounds = np.searchsorted(self.exp_idx, np.arange(len(self.expiries) + 1))
@@ -86,10 +94,11 @@ class ChainArrays:
                      osi: Sequence[str] | None = None, src: Sequence[Any] | None = None,
                      r: float = 0.0, q: float = 0.0, hv30: float | None = None,
                      iv_rank: float | None = None, next_earnings: date | None = None,
-                     next_reaction: date | None = None) -> "ChainArrays":
+                     next_reaction: date | None = None, iv_source: Sequence[str | None] | None = None) -> "ChainArrays":
         """Build from column sequences (e.g. a DB result). ``right`` holds "C"/"P"; None entries
         become NaN (volume/oi: 0); iv <= 0 means unknown. ``src`` (optional) are the source rows used
-        by OptionRow outputs (chainmetrics.top_contracts / oi_changes)."""
+        by OptionRow outputs (chainmetrics.top_contracts / oi_changes). ``iv_source`` (optional) marks
+        engine-computed IVs (computed_iv.is_computed)."""
         exp_list = list(expiry)
         expiries = tuple(sorted(set(exp_list)))
         pos = {e: i for i, e in enumerate(expiries)}
@@ -128,6 +137,7 @@ class ChainArrays:
             delta=col(delta)[order], gamma=col(gamma)[order], theta=col(theta)[order], vega=col(vega)[order],
             t=exp_t[ei] if n else np.zeros(0), dte=exp_dte[ei] if n else np.zeros(0, int),
             osi=osi_a[order], src=src_a[order], next_reaction=next_reaction,
+            iv_computed=None if iv_source is None else np.array([is_computed(v) for v in iv_source], dtype=bool)[order],
         )
 
     @classmethod
@@ -138,7 +148,7 @@ class ChainArrays:
         rows = list(contracts)
         cols = {name: [getattr(c, name, None) for c in rows]
                 for name in ("expiry", "strike", "right", "bid", "ask", "last", "volume", "oi", "iv",
-                             "delta", "gamma", "theta", "vega", "osi")}
+                             "delta", "gamma", "theta", "vega", "osi", "iv_source")}
         return cls.from_columns(**cols, spot=spot, asof=asof, src=rows,
                                 symbol=symbol or (rows[0].symbol if rows else ""), **kw)
 
@@ -162,4 +172,6 @@ def option_row(c: Any, spot: float) -> dict:
         "volume": None if c.volume is None else int(c.volume), "oi": None if c.oi is None else int(c.oi), "iv": c.iv,
         "delta": c.delta, "gamma": c.gamma, "theta": c.theta, "vega": c.vega, "rho": c.rho,
         "theo": c.theo, "itm": bool(itm),
+        "last_ts": getattr(c, "last_ts", None), "iv_source": getattr(c, "iv_source", None),
+        "greeks_source": getattr(c, "greeks_source", None),
     }

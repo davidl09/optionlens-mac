@@ -117,17 +117,31 @@ def iv_rank_current(dates: Sequence, iv30: Sequence[float | None], session) -> d
 
 # ----------------------------------------------------------------------------- implied vol
 def atm_iv_by_expiry(ca: ChainArrays) -> list[dict]:
-    """Per expiry {expiry, dte, t, atm_iv}: at each strike average call & put IV (whichever is
-    known), take the nearest strikes with IV at/below and at/above spot, interpolate linearly in
-    strike to spot (one-sided -> that strike's IV). Vectorized across expiries."""
-    atm = atm_iv_array(ca)
+    """Per expiry {expiry, dte, t, atm_iv, atm_iv_computed}: atm_iv_layered (source IVs first, engine-computed
+    IVs only for an expiry the source gives no ATM IV for; never a mix within one expiry)."""
+    atm, computed = atm_iv_layered(ca)
     t, dte = ca.exp_t, ca.exp_dte
     return [{"expiry": e, "dte": int(dte[i]), "t": float(t[i]),
-             "atm_iv": None if np.isnan(atm[i]) else float(atm[i])} for i, e in enumerate(ca.expiries)]
+             "atm_iv": None if np.isnan(atm[i]) else float(atm[i]), "atm_iv_computed": bool(computed[i])}
+            for i, e in enumerate(ca.expiries)]
+
+
+def atm_iv_layered(ca: ChainArrays) -> tuple[np.ndarray, np.ndarray]:
+    """(ATM IV per expiry, bool: it came from engine-computed IVs). Each expiry's ATM IV is atm_iv_array of one IV
+    layer (ChainArrays.iv_layer): the source's when it yields one, else the computed one."""
+    src = atm_iv_array(ca.iv_layer(False))
+    none = np.zeros(len(ca.expiries), dtype=bool)
+    if ca.iv_computed is None or not ca.iv_computed.any():
+        return src, none
+    mdl = atm_iv_array(ca.iv_layer(True))
+    use = np.isnan(src) & ~np.isnan(mdl)
+    return np.where(use, mdl, src), use
 
 
 def atm_iv_array(ca: ChainArrays) -> np.ndarray:
-    """ATM IV per unique expiry (NaN when no strike has an IV)."""
+    """ATM IV per unique expiry (NaN when no strike has an IV): at each strike average call & put IV (whichever
+    is known), take the nearest strikes with IV at/below and at/above spot, interpolate linearly in strike to
+    spot (one-sided -> that strike's IV). Vectorized across expiries. Uses ca.iv as given (see atm_iv_layered)."""
     ne = len(ca.expiries)
     out = np.full(ne, np.nan)
     ok = np.isfinite(ca.iv)

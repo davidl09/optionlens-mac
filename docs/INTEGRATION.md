@@ -78,7 +78,8 @@ POST /api/ingest/chain
                   "rth_close": 348.7 },             // final chains: regular-session close of session_date
                                                     // (daily TRADES bar, useRTH); optional, null if unknown
   "contracts": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C",
-                   "bid": 9.1, "ask": 9.3, "last": 9.2, "volume": 812, "oi": 15321,
+                   "bid": 9.1, "ask": 9.3, "last": 9.2, "last_ts": "...",   // last_ts: when `last` traded (optional)
+                   "volume": 812, "oi": 15321,
                    "iv": 0.251, "delta": 0.52, "gamma": 0.011, "theta": -0.12, "vega": 0.41 } ] }
 → 200 {"stored": n_contracts, "symbol": "AAPL"}
 ```
@@ -88,6 +89,27 @@ session's close in metrics, the archive's `underlying` and the moneyness referen
 session's close. The bridge centres a closing chain's strikes on `rth_close` too. Greeks (`iv`, `delta`, ...)
 are TWS's model values computed from the live underlying, i.e. possibly an after-hours price; the engine
 stores them as sent.
+
+**Computed IV and greeks.** Delayed data, and weekends especially, bring few TWS model computations. For a
+contract without a source IV the engine solves one (Black-Scholes, `analytics.bs.implied_vol`) from the mid when
+bid and ask are both > 0, else from `last` only when that trade is from the snapshot's session (`last_ts` at/after
+its 09:30 ET open; without `last_ts`, a volume > 0). Inputs: the underlying price at the time of the quotes, `r`
+from the rates table, `q` from the dividend-yield helper, T to 16:00 ET on expiry. The quotes' time is
+`fetched_at` during the session, else the session's close (an evening or weekend snapshot holds the closing
+quotes; the underlying is then that session's stored daily close when there is one). A price outside the
+no-arbitrage bounds leaves the IV null. A contract without a source delta gets delta, gamma, theta and vega from
+its IV (source or computed). Source values are never replaced and `theo` is never computed. Every row says where
+its values came from — `OptionRow.iv_source`: the chain source (`"ibkr"`) | `"computed_mid"` | `"computed_last"` |
+null; `OptionRow.greeks_source`: the chain source | `"computed"` | null — and the chain shows computed values
+in italics with an explanation. `OptionRow.last_ts` is the last trade's time when the source gave it (a weekend
+`last` can be days old). Reconstructed archives (option-bars) are labelled `computed_last` / `computed` the same way.
+
+IV metrics never mix the two silently. ATM IV per expiry (`ExpiryInfo.atm_iv`, term structure, implied moves,
+strategy probabilities) is computed from one IV layer per expiry: the source IVs when they give one, else the
+computed ones (`ExpiryInfo.atm_iv_computed` / `TermPoint.atm_iv_computed` = true). The chain-wide metrics of a
+session (IV30…IV360 constant-maturity interpolation, front ATM IV, 25-delta skews) use one layer for the whole
+chain: the expiries with a source ATM IV when there is at least one, else the computed ones; the metrics row's
+`iv_computed` says which (null: no IV at all). So IV30 is never interpolated between a source IV and a computed one.
 
 Server builds OSI codes, stores through the same pipeline as any other chain source (latest chain,
 quote, today's metrics row; `final` also writes the end-of-day archive for `session_date`). A chain from

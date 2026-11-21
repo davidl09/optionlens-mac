@@ -8,7 +8,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from ..analytics.calendar import NY, last_completed_session, now_ny
+from ..analytics import computed_iv
+from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
+from ..analytics.chain import ChainArrays
 from ..jobs import bridge_plan, catchup, chains, hooks
 from ..jobs._util import session_close, session_date
 from ..jobs.marketdata import VIX_FAMILY
@@ -59,7 +61,26 @@ def _contract(symbol: str, c: dict) -> OptionContract:
         strike=float(c["strike"]), right=c["right"], bid=c.get("bid"), ask=c.get("ask"), last=c.get("last"),
         change=None, volume=ctx.count(c.get("volume")), oi=ctx.count(c.get("oi")),
         iv=iv if iv and iv > 0 else None, delta=c.get("delta"), gamma=c.get("gamma"), theta=c.get("theta"),
-        vega=c.get("vega"), rho=None, theo=None)
+        vega=c.get("vega"), rho=None, theo=None, last_ts=c.get("last_ts"))
+
+
+def _with_computed_iv(quote: Quote, contracts: list[OptionContract], fetched: datetime,
+                      source: str) -> list[OptionContract]:
+    """Source IV/greeks labelled with `source`, missing ones computed (analytics.computed_iv) at the time the
+    prices were current: fetched_at during the session, else the session's close (an evening or weekend
+    snapshot holds the closing quotes), with the underlying's regular-session close then when stored."""
+    day = session_date(fetched)
+    close = session_close(day)
+    asof = min(fetched, close)
+    spot = quote.price
+    if fetched >= close:
+        b = bars_repo.get_bars(quote.symbol, start=day, end=day)
+        if len(b["close"]) and ctx.num(b["close"][-1]):
+            spot = float(b["close"][-1])
+    r = ctx.risk_free_rate(day)
+    q = ctx.dividend_yield(quote.symbol, spot, ChainArrays.from_contracts(contracts, spot, asof, symbol=quote.symbol))
+    return computed_iv.fill_iv_greeks(contracts, spot=spot, asof=asof, r=r, q=q,
+                                      session_start=datetime.combine(day, OPEN, NY), source=source)
 
 
 def _check_final(day: date | None, fetched_at: datetime) -> date:
@@ -82,8 +103,9 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     if fetched > now + CLOCK_SKEW:
         raise BadRequest(f"fetched_at {fetched.isoformat()} is in the future")
     day = _check_final(body.get("session_date"), fetched) if body.get("final") else None
-    snap = ChainSnapshot(_quote(sym, body["underlying"], fetched, body["delayed"], day is not None),
-                         tuple(_contract(sym, c) for c in body["contracts"]), fetched, body["delayed"])
+    quote = _quote(sym, body["underlying"], fetched, body["delayed"], day is not None)
+    contracts = _with_computed_iv(quote, [_contract(sym, c) for c in body["contracts"]], fetched, source)
+    snap = ChainSnapshot(quote, tuple(contracts), fetched, body["delayed"])
     chains.store_chain(snap, fetched, final=day is not None, source=source)
     if day is not None:
         ctx.invalidate()

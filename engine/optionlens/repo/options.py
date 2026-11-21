@@ -13,14 +13,15 @@ from ._sql import aware, columns, insert_arrow, query, scalar, split_by, to_colu
 from .quotes import get_quote
 
 _CONTRACT_FIELDS = ("symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "change",
-                    "volume", "oi", "iv", "delta", "gamma", "theta", "vega", "rho", "theo")
+                    "volume", "oi", "iv", "delta", "gamma", "theta", "vega", "rho", "theo", "last_ts",
+                    "iv_source", "greeks_source")
 _LATEST_COLS = ('o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.change, '
                 'o.volume, o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, o.rho, o.theo, o.ts, '
-                'q.price AS underlying')
+                'o.last_ts, o.iv_source, o.greeks_source, q.price AS underlying')
 _EOD_COLS = ('date, symbol, osi, expiry, strike, "right", bid, ask, last, volume, oi, iv, delta, '
-             'gamma, theta, vega, underlying')
+             'gamma, theta, vega, underlying, iv_source, greeks_source')
 _EOD_FIELDS = ("date", "symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "volume", "oi",
-               "iv", "delta", "gamma", "theta", "vega", "underlying", "source")
+               "iv", "delta", "gamma", "theta", "vega", "underlying", "iv_source", "greeks_source", "source")
 
 IBKR = "ibkr"
 RECONSTRUCTED = "reconstructed"
@@ -47,6 +48,7 @@ def replace_option_latest(snap: ChainSnapshot, source: str | None = None) -> int
     symbol = snap.quote.symbol
     uniq = list({c.osi: c for c in snap.contracts}.values())
     data = to_columns(uniq, _CONTRACT_FIELDS)
+    data["last_ts"] = [utc_naive(t) for t in data["last_ts"]]
     data["ts"] = [utc_naive(snap.fetched_at)] * len(uniq)
     data["source"] = [source] * len(uniq)
     data["delayed"] = [snap.delayed] * len(uniq)
@@ -99,7 +101,7 @@ def get_chain(symbol: str, expiry: date | None = None) -> ChainSnapshot | None:
     if quote is None or not rows:
         return None
     fetched = max(r.pop("ts") for r in rows)
-    return ChainSnapshot(quote, tuple(OptionContract(**r) for r in rows), fetched)
+    return ChainSnapshot(quote, tuple(OptionContract(**{**r, "last_ts": aware(r["last_ts"])}) for r in rows), fetched)
 
 
 def expiries(symbol: str) -> list[date]:
@@ -184,7 +186,7 @@ def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | 
         cur.execute(f"""
             INSERT INTO option_eod ({_EOD_COLS}, source)
             SELECT ?::DATE, o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.volume,
-                   o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price, o.source
+                   o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price, o.iv_source, o.greeks_source, o.source
             FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
             WHERE o.ts >= ? AND o.symbol IN (SELECT unnest(?::VARCHAR[]))
               AND NOT (COALESCE(o.bid, 0) = 0 AND COALESCE(o.oi, 0) = 0 AND COALESCE(o.volume, 0) = 0)
@@ -197,7 +199,7 @@ def write_eod_chain(day: date, snap: ChainSnapshot, source: str | None) -> int:
     precedence rules as write_option_eod). Returns rows written (0 when outranked)."""
     symbol = snap.quote.symbol
     uniq = [c for c in {c.osi: c for c in snap.contracts}.values() if _keep(c)]
-    data = {f: [getattr(c, f) for c in uniq] for f in _EOD_FIELDS[2:16]}
+    data = {f: [getattr(c, f) for c in uniq] for f in _EOD_FIELDS[2:16] + ("iv_source", "greeks_source")}
     n = len(uniq)
     data.update(date=[day] * n, symbol=[symbol] * n, underlying=[snap.quote.price] * n, source=[source] * n)
     with db.write() as cur:

@@ -172,3 +172,13 @@ ALTER TABLE metrics_daily ALTER COLUMN source DROP DEFAULT;
 ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
 ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
+-- Provenance of IV and greeks (docs/INTEGRATION.md §6 "Computed IV and greeks"): the chain source's name
+-- ('ibkr', ...) when it sent them, 'computed_mid' / 'computed_last' (IV) and 'computed' (greeks) when the engine
+-- derived them, NULL = none. last_ts: time of the last trade when the source said. metrics_daily.iv_computed:
+-- the row's chain IV metrics (iv30..iv360, atm_iv_front, skews) come from engine-computed IVs.
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS last_ts TIMESTAMP;
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS iv_source VARCHAR;
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS greeks_source VARCHAR;
+ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS iv_source VARCHAR;
+ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS greeks_source VARCHAR;
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS iv_computed BOOLEAN;

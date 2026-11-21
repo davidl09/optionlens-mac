@@ -15,7 +15,7 @@ from typing import Iterable, Mapping, Sequence
 
 import numpy as np
 
-from ..analytics import bs
+from ..analytics import bs, computed_iv
 from ..analytics import dividends as div
 from ..analytics.calendar import NY, is_trading_day, now_ny, prev_trading_day, year_fraction_to_expiry
 from ..config import get_settings
@@ -85,6 +85,7 @@ def reconstruct_rows(symbol: str, day: date, bars: Iterable[Mapping], spot: floa
             "right": right, "last": float(close), "volume": None if b.get("volume") is None else int(b["volume"]),
             "iv": iv, "delta": g.get("delta"), "gamma": g.get("gamma"), "theta": g.get("theta"),
             "vega": g.get("vega"), "underlying": spot,
+            "iv_source": computed_iv.COMPUTED_LAST if iv else None, "greeks_source": computed_iv.COMPUTED if iv else None,
         })
     return out
 

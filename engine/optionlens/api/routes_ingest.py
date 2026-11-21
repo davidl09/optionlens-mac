@@ -46,6 +46,7 @@ class ContractIn(_In):
     bid: Price | None = None
     ask: Price | None = None
     last: Price | None = None
+    last_ts: AwareDatetime | None = None   # when `last` traded
     volume: Count | None = None
     oi: Count | None = None
     iv: Num | None = None

@@ -159,6 +159,52 @@ def test_contracts_with_unknown_oi_or_volume_are_served_in_the_chain(client):
     context.invalidate()
 
 
+def test_missing_iv_and_greeks_are_computed_and_labelled(client):
+    """Weekend / delayed chains carry few model computations: the engine solves IV from the mid (else a last of the
+    session) and derives greeks from it, each labelled; feed values keep the feed's label; theo is never computed."""
+    body = _chain(contracts=[
+        _contract(120.0, "C", gamma=0.02, theta=-0.05, vega=0.12),
+        _contract(120.0, "P", iv=None, delta=None, bid=2.0, ask=2.2),
+        _contract(125.5, "C", iv=None, delta=None, bid=None, ask=None, last=1.5, volume=7,
+                  last_ts="2026-11-19T19:10:00+00:00"),
+        _contract(115.0, "P", iv=None, delta=None, bid=None, ask=None, last=0.4, volume=None,
+                  last_ts="2026-11-18T19:10:00+00:00")])                       # a trade of the day before: no IV
+    assert client.post("/api/ingest/chain", json=body).status_code == 200
+    from optionlens.services import context
+    context.invalidate()
+    ch = client.get("/api/symbol/DELL/chain").json()
+    rows = {(r["strike"], r["right"]): r for r in ch["calls"] + ch["puts"]}
+    feed, mid, last, stale = rows[(120.0, "C")], rows[(120.0, "P")], rows[(125.5, "C")], rows[(115.0, "P")]
+    assert (feed["iv_source"], feed["greeks_source"], feed["iv"]) == ("ibkr", "ibkr", 0.3)
+    assert mid["iv_source"] == "computed_mid" and 0.05 < mid["iv"] < 2 and mid["greeks_source"] == "computed"
+    assert -1 < mid["delta"] < 0 and mid["theo"] is None
+    assert last["iv_source"] == "computed_last" and last["last_ts"].startswith("2026-11-19T19:10")
+    assert (stale["iv"], stale["iv_source"], stale["delta"], stale["greeks_source"]) == (None, None, None, None)
+    assert ch["expiries"][0]["atm_iv_computed"] is False
+    client.post("/api/ingest/chain", json=_chain())
+    context.invalidate()
+
+
+def test_a_weekend_snapshot_is_solved_at_the_session_close():
+    """A Saturday chain holds Friday's closing quotes: time to expiry is measured from Friday 16:00 ET."""
+    from optionlens.analytics import bs
+    from optionlens.analytics.calendar import NY, year_fraction_to_expiry
+    from optionlens.models import OptionContract, Quote
+    from optionlens.services import ingest
+    fri_close = datetime(2026, 11, 20, 16, 0, tzinfo=NY)
+    saturday = datetime(2026, 11, 21, 14, 0, tzinfo=timezone.utc)
+    t = year_fraction_to_expiry(date(2026, 11, 27), fri_close)
+    q = ingest.ctx.dividend_yield("DELL", 120.0)
+    price = bs.price(120.0, 120.0, t, ingest.ctx.risk_free_rate(date(2026, 11, 20)), q, 0.8, "C")
+    c = OptionContract(osi="DELL261127C00120000", symbol="DELL", expiry=date(2026, 11, 27), strike=120.0, right="C",
+                       bid=price - 0.01, ask=price + 0.01, last=None, change=None, volume=None, oi=None, iv=None,
+                       delta=None, gamma=None, theta=None, vega=None, rho=None, theo=None)
+    quote = Quote(symbol="DELL", ts=saturday, price=120.0, change=None, change_pct=None, open=None, high=None, low=None,
+                  prev_close=None, volume=None, bid=None, ask=None, iv30=None)
+    (out,) = ingest._with_computed_iv(quote, [c], saturday, "ibkr")
+    assert out.iv_source == "computed_mid" and out.iv == pytest.approx(0.8, abs=0.01)
+
+
 def test_ingest_final_chain_archives_the_session(client):
     close = datetime(2026, 11, 18, 21, 25, tzinfo=timezone.utc)   # 16:25 ET
     r = client.post("/api/ingest/chain", json=_chain(final=True, session_date="2026-11-18",
@@ -312,10 +358,11 @@ def test_ingest_option_bars_reconstruct_archive(client):
 
 
 def test_large_volume_contracts_without_greeks_show_unknown_not_zero(client):
-    """A delayed chain without model computations: IV, delta and delta volume are null, never 0."""
+    """A delayed chain without model computations nor a price to compute them from: IV, delta and delta volume are
+    null, never 0."""
     body = _chain(delayed=True)
     for c in body["contracts"]:
-        c.update(iv=None, delta=None, gamma=None, theta=None, vega=None, volume=5000)
+        c.update(iv=None, delta=None, gamma=None, theta=None, vega=None, volume=5000, bid=None, ask=None, last=None)
     assert client.post("/api/ingest/chain", json=body).status_code == 200
     rows = [r for r in client.get("/api/reports/large-volume-contracts?min_volume=1000&symbols=DELL").json()["rows"]]
     assert rows and all(r["delta"] is None and r["iv"] is None and r["delta_volume"] is None for r in rows)

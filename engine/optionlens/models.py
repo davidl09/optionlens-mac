@@ -47,6 +47,9 @@ class OptionContract:
     vega: float | None
     rho: float | None
     theo: float | None
+    last_ts: datetime | None = None   # when `last` traded (None = unknown)
+    iv_source: str | None = None      # chain source name, 'computed_mid' / 'computed_last', None = no IV
+    greeks_source: str | None = None  # chain source name, 'computed', None = no greeks
 
     @property
     def mid(self) -> float | None:

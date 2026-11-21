@@ -196,7 +196,9 @@ def test_reconstruct_rows_math():
     assert rows[0]["iv"] == pytest.approx(0.32, abs=1e-6)
     assert rows[0]["delta"] == pytest.approx(bs.delta(spot, k, t, r, q, 0.32, "C"), abs=1e-6)
     assert rows[0]["last"] == pytest.approx(c) and rows[0]["underlying"] == spot
+    assert (rows[0]["iv_source"], rows[0]["greeks_source"]) == ("computed_last", "computed")
     assert rows[1]["iv"] is None and rows[1]["delta"] is None                      # below intrinsic
+    assert (rows[1]["iv_source"], rows[1]["greeks_source"]) == (None, None)
     assert catchup.reconstruct_rows("AAPL", day, [_bar(day, k, "C", c)], None, r, q)[0]["iv"] is None
 
 
