@@ -9,7 +9,7 @@ TIMEOUT="${2:-90}"
 DATA="$(mktemp -d)"
 OUT="$DATA/stdout"
 trap 'kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; rm -rf "$DATA"' EXIT
-env -u PYTHONHOME -u PYTHONPATH PYTHONNOUSERSITE=1 PYTHONUNBUFFERED=1 OPTIONLENS_DATA_DIR="$DATA" OPTIONLENS_NO_SCHEDULER=1 \
+env -u PYTHONHOME -u PYTHONPATH PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 OPTIONLENS_DATA_DIR="$DATA" OPTIONLENS_NO_SCHEDULER=1 \
   OPTIONLENS_API_TOKEN="smoke-test-token-0123456789" "$PY" -m optionlens.cli serve --port 0 >"$OUT" 2>"$DATA/stderr" &
 PID=$!
 for _ in $(seq 1 "$((TIMEOUT * 2))"); do
