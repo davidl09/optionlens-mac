@@ -67,7 +67,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
     }
     switch (parts[3]) {
       case "summary": return ok(s.summary(sym));
-      case "bars": return ok(s.bars(q.get("range") ?? "1y"));
+      case "bars": return ok(s.bars(sym, q.get("range") ?? "1y"));
       case "price-action": return ok(s.priceAction());
       case "chain": return ok(s.chain(sym, exp));
       case "activity": return ok(s.activity(sym, exp));

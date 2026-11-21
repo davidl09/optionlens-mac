@@ -12,16 +12,25 @@ export function quote(sym: string): Quote {
   return { symbol: sym, ts: NOW, price: SPOT, change: 2.87, change_pct: 0.01256, open: 229.1, high: 232.05, low: 228.4, prev_close: 228.55, volume: 48_211_300, bid: 231.4, ask: 231.44, iv30: 0.274, source: "ibkr", delayed: false };
 }
 
-export function bars(range: string): Bar[] {
-  const n = { "1m": 21, "3m": 63, "6m": 126, "1y": 252, "3y": 756, "5y": 1260, "10y": 2520, max: 2520 }[range] ?? 252;
+/** Stored daily history: 10 years, except DELL (a short history: no SMA 200 yet). */
+const HISTORY_DAYS = (sym: string) => (sym === "DELL" ? 150 : 2520);
+
+/** Like the engine's /bars: the range's bars, with SMAs over the full stored history. */
+export function bars(sym: string, range: string): Bar[] {
+  const total = HISTORY_DAYS(sym);
+  const n = Math.min(total, { "1m": 21, "3m": 63, "6m": 126, "1y": 252, "3y": 756, "5y": 1260, "10y": 2520, max: 2520 }[range] ?? 252);
   reseed(11);
-  const closes = walk(n, SPOT * 0.8);
+  const closes = walk(total, SPOT * 0.8);
   const scale = SPOT / closes[closes.length - 1];
-  return tradingDays(n).map((date, i) => {
-    const c = round(closes[i] * scale);
+  const scaled = closes.map((c) => round(c * scale));
+  const sma = (i: number, w: number) => (i + 1 >= w ? round(scaled.slice(i + 1 - w, i + 1).reduce((a, b) => a + b, 0) / w) : null);
+  const all = tradingDays(total).map((date, i) => {
+    const c = scaled[i];
     const o = round(c * (1 + (rnd() - 0.5) * 0.01));
-    return { date, open: o, high: round(Math.max(o, c) * (1 + rnd() * 0.01)), low: round(Math.min(o, c) * (1 - rnd() * 0.01)), close: c, volume: Math.round(between(3e7, 9e7)) };
+    return { date, open: o, high: round(Math.max(o, c) * (1 + rnd() * 0.01)), low: round(Math.min(o, c) * (1 - rnd() * 0.01)), close: c, volume: Math.round(between(3e7, 9e7)),
+      sma20: sma(i, 20), sma50: sma(i, 50), sma200: sma(i, 200) };
   });
+  return all.slice(total - n);
 }
 
 const EXPIRY_DATES = ["2026-11-20", "2026-11-27", "2026-12-04", "2026-12-18", "2027-01-15", "2027-02-19", "2027-03-19", "2027-06-17"];
@@ -136,7 +145,7 @@ export function summary(sym: string): SymbolSummary {
 }
 
 function baseSummary(sym: string): SymbolSummary {
-  const b = bars("1y");
+  const b = bars(sym, "1y");
   reseed(13);
   const name = SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`;
   return {
@@ -157,7 +166,7 @@ function baseSummary(sym: string): SymbolSummary {
 }
 
 export function priceAction(): PriceAction {
-  const b = bars("1y");
+  const b = bars("AAPL", "1y");
   const rows = b.map((x, i) => ({
     ...x, change_pct: i ? round(x.close / b[i - 1].close - 1, 5) : null, gap_pct: i ? round(x.open / b[i - 1].close - 1, 5) : null,
     range_pct: round((x.high - x.low) / x.close, 5), rel_volume: round(x.volume / 6e7, 2),
@@ -177,7 +186,7 @@ export function volatility(sym: string): Volatility {
 }
 
 function baseVolatility(sym: string): Volatility {
-  const b = bars("3y");
+  const b = bars("AAPL", "3y");
   reseed(17);
   const term = (shift: number) => expiries().map((e) => ({ expiry: e.expiry, dte: e.dte, atm_iv: e.atm_iv === null ? null : round(e.atm_iv + shift, 4) }));
   return {
@@ -343,7 +352,7 @@ export function insiders(sym: string): Insiders {
   return {
     symbol: sym,
     summary: [{ label: "Buys", m3: "2", m12: "5" }, { label: "Sells", m3: "11", m12: "38" }, { label: "Net shares", m3: "-1,204,000", m12: null }],
-    trades: Array.from({ length: 12 }, (_, i) => ({ insider: pick(["Doe Jane", "Smith John", "Lee Ann", "Park Min"]), relation: pick(["CEO", "CFO", "Director", null]), date: addDays(TODAY, -i * 9), transaction: pick(["Sell", "Buy", "Option exercise"]), shares: Math.round(between(1e3, 1e5)), price: round(between(200, 240)), value: round(between(2e5, 2e7), 0), shares_held: Math.round(between(1e5, 4e6)) })),
+    trades: Array.from({ length: 12 }, (_, i) => ({ insider: pick(["Doe Jane", "Smith John", "Lee Ann", "Park Min"]), relation: pick(["CEO", "CFO", "Director", null]), date: addDays(TODAY, -i * 9), transaction: pick(["Sell", "Automatic Sell", "Automatic Sell", "Buy", "Option Execute"]), shares: Math.round(between(1e3, 1e5)), price: round(between(200, 240)), value: round(between(2e5, 2e7), 0), shares_held: Math.round(between(1e5, 4e6)) })),
   };
 }
 

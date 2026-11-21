@@ -49,12 +49,12 @@ const PAGES: [string, string | RegExp][] = [
   ["/reports/unusual-option-volume", "Data notes:"],
   ["/reports/covered-calls", "Covered calls"],
   ["/reports/stock-screener", "Stock screener"],
-  ["/reports/options-broad-view", "Pc history"],
+  ["/reports/options-broad-view", "P/C history"],
   ["/reports?category=Strategies&symbols=SPX,NDX,RUT,XSP", "Symbol scope:"],
   ["/s/AAPL/contract/AAPL261120C00230000", "Daily history"],
   ["/backtest/stock", "Stock rule backtest"],
   ["/backtest/options", "Options strategy backtest"],
-  ["/backtest/straddle-wing", "Straddle / wing backtest"],
+  ["/backtest/straddle-wing", "Straddle / wing (iron fly) backtest"],
   ["/compare/volatility?symbols=SPY,QQQ,IWM", "IV30 overlay"],
   ["/compare/straddle?symbols=SPY,QQQ&dte=30", "Compare straddles"],
   ["/watchlists", "Earnings plays"],
@@ -181,6 +181,8 @@ test("search, theme, bell", async ({ page }) => {
   await page.getByLabel("Search symbols").fill("ms");
   await expect(page.locator(".search-list li").first()).toContainText("MSFT");
   await page.getByLabel("Search symbols").press("ArrowDown");
+  await expect(page.locator(".search-list li").first()).toHaveAttribute("aria-selected", "true");   // visible keyboard highlight
+  await expect(page.locator(".search-list li.active")).toHaveCount(1);
   await page.getByLabel("Search symbols").press("Enter");
   await expect(page).toHaveURL(/\/s\/MSFT\/summary/);
   await page.getByRole("button", { name: /Notifications \(2 unread\)/ }).click();
@@ -238,5 +240,140 @@ test("a symbol without a stored chain (no bridge): options tabs show a neutral n
   await page.goto("/s/XNOP/straddle");
   await expect(page.locator(".chain-notice")).toHaveText("No listed options for XNOP.");
   await expect(page.locator(".qh-name .badge.warn")).toHaveText("no options");
+  clean(p);
+});
+
+test("empty report: the engine's reason, when chains are collected, and the method on request", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/reports/oi-changes");
+  const empty = page.locator(".dt-empty");
+  await expect(empty).toContainText("No stored option chain matches these settings.");
+  await expect(empty).toContainText("Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET) and on demand when you open a symbol.");
+  await expect(empty).toContainText("Last bridge push 2026-11-19 15:45 ET · next collection 2026-11-19 16:00 ET.");
+  await expect(page.getByText("No data.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Contracts not present in the prior end-of-day snapshot are skipped.")).toBeHidden();
+  await page.getByText("Method", { exact: true }).click();
+  await expect(page.getByText("Contracts not present in the prior end-of-day snapshot are skipped.")).toBeVisible();
+  clean(p);
+});
+
+test("columns without any value are hidden by default, with a toggle", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/reports/market-movers");
+  await expect(page.locator("th", { hasText: "Volume" })).toBeVisible();          // columns with data always show
+  await expect(page.locator("th", { hasText: "IV30" })).toHaveCount(0);
+  const toggle = page.getByLabel("Show empty columns (1)");
+  await expect(toggle.locator("..")).toHaveAttribute("title", "No row has a value in: IV30");
+  await toggle.check();
+  await expect(page.locator("th", { hasText: "IV30" })).toBeVisible();
+  clean(p);
+});
+
+test("dashboard: an empty unusual-volume panel is one line with the reason and the next collection", async ({ page }) => {
+  const p = await setup(page);
+  await page.route("**/api/market/overview", async (route) => {
+    const m = handle("GET", new URL(route.request().url()), null)!.body as Record<string, unknown>;
+    await route.fulfill({ json: { ...m, unusual_options: [], empty_notes: { unusual_options: "No option volume collected yet: the IBKR bridge collects it for every symbol during market hours." } } });
+  });
+  await page.goto("/");
+  const notice = page.locator(".panel-notice");
+  await expect(notice).toContainText("Unusual option volume: No option volume collected yet");
+  await expect(notice).toContainText("next collection 2026-11-19 16:00 ET");
+  await expect(page.locator(".card-head h3", { hasText: "Unusual option volume" })).toHaveCount(0);
+  await expect(page.locator(".heat-tile", { hasText: "XLY" })).toContainText("Cons. Disc.");   // deliberate abbreviation
+  clean(p);
+});
+
+test("report breadcrumb names the menu the user came from", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Market", exact: true }).click();
+  await page.locator(".menu-panel").getByRole("link", { name: "Market movers" }).click();
+  await expect(page.locator(".breadcrumb")).toHaveText("Market");
+  await page.getByRole("button", { name: "Run" }).click();
+  await expect(page.locator(".breadcrumb")).toHaveText("Market");
+  await page.getByRole("button", { name: "Stocks", exact: true }).click();
+  await page.locator(".menu-panel").getByRole("link", { name: "Market movers" }).click();
+  await expect(page.locator(".breadcrumb")).toHaveText("Stocks");
+  clean(p);
+});
+
+test("alert delete asks for confirmation", async ({ page }) => {
+  const p = await setup(page);
+  const deletes: string[] = [];
+  page.on("request", (r) => { if (r.method() === "DELETE") deletes.push(new URL(r.url()).pathname); });
+  await page.goto("/alerts");
+  const row = page.locator("tr", { hasText: "AAPL: Price above $240" });
+  page.once("dialog", (d) => { expect(d.message()).toContain("AAPL: Price above $240"); void d.dismiss(); });
+  await row.getByRole("button", { name: "Delete" }).click();
+  await page.waitForTimeout(200);
+  expect(deletes).toEqual([]);
+  page.once("dialog", (d) => void d.accept());
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect.poll(() => deletes).toEqual(["/api/alerts/1"]);
+  clean(p);
+});
+
+test("options backtest: wing width only for strategies with wings; one-row period", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/backtest/options");
+  await expect(page.getByLabel("Strategy")).toHaveValue("long-call");
+  await expect(page.getByLabel("Wing width (%)")).toHaveCount(0);
+  await page.getByLabel("Strategy").selectOption("bull-call-spread");
+  await expect(page.getByLabel("Wing width (%)")).toBeVisible();
+  const [start, end] = [await page.getByLabel("Start date").boundingBox(), await page.getByLabel("End date").boundingBox()];
+  expect(Math.abs((start?.y ?? 0) - (end?.y ?? 1))).toBeLessThan(2);
+  await page.goto("/backtest/straddle-wing");
+  await expect(page.getByLabel("Wing width (%)")).toBeVisible();
+  clean(p);
+});
+
+test("stock backtest: the entry rule select works with the keyboard", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/backtest/stock");
+  const sel = page.getByLabel("Entry rule");
+  await sel.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(sel).toHaveValue("day_of_month");
+  await expect(page.getByText("Day", { exact: true })).toBeVisible();
+  clean(p);
+});
+
+test("chart: SMAs from the full stored history; a too-short history is said, not drawn", async ({ page }) => {
+  const p = await setup(page, [/404/]);
+  await page.goto("/s/AAPL/chart?range=1m");
+  await expect(page.locator(".legend-note")).toContainText("SMAs use the full stored price history");
+  await expect(page.locator(".legend-note")).not.toContainText("not enough stored history");
+  await page.goto("/s/DELL/chart");
+  await expect(page.locator(".legend-note")).toContainText("SMA 200: not enough stored history yet");
+  await expect(page.locator(".legend-note")).not.toContainText("SMA 50:");
+  clean(p);
+});
+
+test("data status: zero-archive EOD is a warning, details readable, chain coverage explained", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/status");
+  const row = page.locator("tr", { hasText: "nothing archived" });
+  await expect(row.locator(".badge")).toHaveText("warning");
+  await expect(row.locator(".badge")).toHaveClass(/warn/);
+  await expect(page.getByText("With a recent chain")).toBeVisible();
+  await expect(page.getByText("14 confirmed none")).toBeVisible();
+  clean(p);
+});
+
+test("symbol page: fundamentals as numbers, insider sells split, IV30 legend only with data", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/s/AAPL/insiders");
+  await expect(page.getByText(/Of the \d+ sells listed below: \d+ automatic \(10b5-1 plan\), \d+ open market/)).toBeVisible();
+  await page.goto("/s/AAPL/dividends");
+  await expect(page.getByText("Ex-dates measured")).toBeVisible();
+  clean(p);
+});
+
+test("compare straddles: a symbol without a stored chain is named, with when chains are collected", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/compare/straddle?symbols=SPY,DELL&dte=30");
+  await expect(page.locator(".info-box", { hasText: "No stored option chain for DELL yet" })).toContainText("Option chains are collected by the IBKR bridge");
+  await expect(page.locator("td", { hasText: "DELL" })).toBeVisible();
   clean(p);
 });

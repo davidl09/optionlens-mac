@@ -101,6 +101,20 @@ test("waits for the engine, then talks to it with the per-launch token", async (
   expect(seen.auth.every((a) => a === `Bearer ${TOKEN}`)).toBe(true);
   expect(seen.unmocked).toEqual([]);
   await expect(page.getByRole("link", { name: /IBKR bridge: IB Gateway \(live\) connected/ })).toBeVisible();
+  await expect(page.locator(".bridge-pill")).toContainText("IBKR connected · delayed data");   // plain words
+});
+
+test("IBKR refresh failed: the header says why and offers a retry", async ({ page }) => {
+  await fakeDesktop(page, { refresh: { status: "failed", message: "TWS error 200: No security definition has been found for the request." } });
+  await mockEngine(page);
+  await page.goto("/s/AAPL/summary");
+  const chip = page.getByRole("button", { name: /IBKR refresh failed/ });
+  await expect(chip).toBeVisible();
+  await chip.click();
+  const pop = page.getByRole("dialog", { name: "IBKR refresh failed" });
+  await expect(pop).toContainText("TWS error 200: No security definition has been found for the request.");
+  await pop.getByRole("button", { name: "Retry now" }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: string[] }).__refreshCalls)).toEqual(["AAPL", "AAPL"]);
 });
 
 test("opening a symbol asks the bridge for an IBKR refresh", async ({ page }) => {
@@ -168,8 +182,9 @@ test("settings page shows engine, bridge status and saves bridge settings", asyn
   await page.goto("/settings");
   await expect(page.getByText("/Users/me/Library/Application Support/OptionLens/data")).toBeVisible();
   await expect(page.getByText("IB Gateway (live) · port 4001")).toBeVisible();
-  await expect(page.locator(".warn-box", { hasText: "IBKR delayed (no OPRA subscription)" })).toBeVisible();
-  await expect(page.getByText("13/40 (1 failed)")).toBeVisible();
+  await expect(page.locator(".info-box", { hasText: "IBKR delayed (no OPRA subscription)" })).toBeVisible();   // normal delay: neutral, not a warning
+  await expect(page.getByText("13 / 40 (1 failed)")).toBeVisible();
+  await expect(page.locator("code.path wbr")).toHaveCount(6);                     // the data folder wraps only after a "/"
   await expect(page.getByText("macOS needs your approval")).toBeVisible();   // login item waiting for approval
   await page.getByLabel("API port").selectOption("4002");
   await page.getByRole("button", { name: "Save", exact: true }).click();

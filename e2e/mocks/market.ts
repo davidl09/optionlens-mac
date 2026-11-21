@@ -4,16 +4,19 @@ import type {
 } from "../../src/api/types";
 import { between, NOW, reseed, rnd, round, rowsFor, SYMBOLS, tradingDays, walk } from "./gen";
 import { REPORT_DEFS } from "./reports";
-import { SPOT } from "./symbol";
+import { NO_CHAIN, SPOT } from "./symbol";
 
 export function status(): Status {
   return {
     now: NOW, market_open: true, next_sweep_at: "2026-11-19T16:00:00-05:00", universe_size: 1124, optionable_count: 1098,
+    options_listed_count: 1110, no_options_count: 14,
     last_sweep_at: NOW, last_eod_date: "2026-11-18", iv_history_days: 12, option_eod_days: 11, earnings_backfill_progress: 0.64,
     row_counts: { symbols: 1124, daily_bars: 2_712_000, option_eod: 9_870_000, metrics_daily: 13_400, earnings: 41_200 },
     jobs: [
       { job: "sweep", started_at: "2026-11-19T15:30:00-05:00", finished_at: "2026-11-19T15:41:12-05:00", ok: true, detail: "1098 symbols" },
       { job: "eod", started_at: "2026-11-18T16:20:00-05:00", finished_at: "2026-11-18T16:48:03-05:00", ok: true, detail: null },
+      { job: "eod", started_at: "2026-11-17T16:20:00-05:00", finished_at: "2026-11-17T16:21:00-05:00", ok: false,
+        detail: "2026-11-17: nothing archived — no closing chain was stored after the close (is IB Gateway connected with the bridge on between the close and 20:00 ET?)" },
       { job: "earnings", started_at: "2026-11-19T05:30:00-05:00", finished_at: null, ok: null, detail: "backfill 64%" },
       { job: "prices_refresh", started_at: "2026-11-15T07:00:00-05:00", finished_at: "2026-11-15T07:22:00-05:00", ok: false, detail: "Nasdaq 429 for 3 symbols" },
     ],
@@ -46,7 +49,7 @@ export function overview(): MarketOverview {
     indices: idx.map(([symbol, name, price]) => ({ symbol, name, price, change_pct: round((rnd() - 0.4) * 0.02, 4), iv30: symbol === "RUT" ? null : round(0.14 + rnd() * 0.08, 4), spark: walk(30, price, 0.008) })),
     vix_term: [{ tenor: "VIX9D", value: 15.2, change: -0.4 }, { tenor: "VIX", value: 16.8, change: -0.3 }, { tenor: "VIX3M", value: 18.9, change: 0.1 }, { tenor: "VIX6M", value: null, change: null }],
     vix_history: days.map((d, i) => ({ date: d, vix9d: round(vix[i] * 0.92), vix: vix[i], vix3m: round(vix[i] * 1.1), vix6m: i > 240 ? null : round(vix[i] * 1.16) })),
-    sectors: ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"].map((s, i) => ({ symbol: s, name: ["Technology", "Financials", "Energy", "Health Care", "Cons. Discretionary", "Cons. Staples", "Industrials", "Materials", "Utilities", "Real Estate", "Communication"][i], change_pct: round((rnd() - 0.5) * 0.03, 4), change_5d: round((rnd() - 0.5) * 0.06, 4), change_1m: i === 9 ? null : round((rnd() - 0.5) * 0.1, 4) })),
+    sectors: ["XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC"].map((s, i) => ({ symbol: s, name: ["Technology", "Financials", "Energy", "Health Care", "Consumer Discretionary", "Consumer Staples", "Industrials", "Materials", "Utilities", "Real Estate", "Communication Services"][i], change_pct: round((rnd() - 0.5) * 0.03, 4), change_5d: round((rnd() - 0.5) * 0.06, 4), change_1m: i === 9 ? null : round((rnd() - 0.5) * 0.1, 4) })),
     gainers: rowsFor(def("market-movers").columns, 8, 1), losers: rowsFor(def("market-movers").columns, 8, 2),
     unusual_options: rowsFor(def("unusual-option-volume").columns, 10, 3), iv_movers: rowsFor(def("iv-movers").columns, 8, 4),
     earnings_today: rowsFor(def("earnings-calendar").columns, 5, 5), earnings_tomorrow: [],
@@ -134,5 +137,8 @@ export function compareStraddle(symbols: string[], dte: number): ReportResult {
     { key: "straddle", label: "Straddle", fmt: "money" as const }, { key: "straddle_pct", label: "Straddle %", fmt: "pct" as const }, { key: "atm_iv", label: "ATM IV", fmt: "vol" as const },
   ];
   reseed(dte);
-  return { id: "compare-straddle", title: "Straddle comparison", asof: NOW, params: { symbols, dte }, columns, rows: symbols.map((s) => ({ symbol: s, expiry: "2026-12-18", dte: 29, straddle: round(between(3, 30)), straddle_pct: round(between(0.03, 0.09), 4), atm_iv: round(between(0.15, 0.5), 4) })), truncated: false, notes: [] };
+  return { id: "compare-straddle", title: "Compare straddles", asof: NOW, params: { symbols, dte }, columns,
+    // like the engine: a symbol without a stored chain comes back as its symbol only
+    rows: symbols.map((s) => (NO_CHAIN[s] ? { symbol: s } : { symbol: s, expiry: "2026-12-18", dte: 29, straddle: round(between(3, 30)), straddle_pct: round(between(0.03, 0.09), 4), atm_iv: round(between(0.15, 0.5), 4) })),
+    truncated: false, notes: [] };
 }

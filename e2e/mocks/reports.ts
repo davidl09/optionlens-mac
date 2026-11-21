@@ -90,7 +90,7 @@ export const REPORT_DEFS: ReportDef[] = [
   {
     id: "market-movers", title: "Market movers", category: "Stocks", description: "Top gainers, losers and most active.",
     params: [{ key: "side", label: "Side", type: "select", default: "gainers", options: [{ value: "gainers", label: "Gainers" }, { value: "losers", label: "Losers" }, { value: "active", label: "Most active" }] }],
-    columns: [...BASE, C("volume", "Volume", "int"), C("rel_volume", "Rel vol", "ratio")],
+    columns: [...BASE, C("volume", "Volume", "int"), C("rel_volume", "Rel vol", "ratio"), C("iv30", "IV30", "vol", { description: "Implied volatility for 30 days" })],
   },
   {
     id: "performance-by-sector", title: "Performance by sector", category: "Stocks", description: "Sector returns over several windows.", params: [],
@@ -103,6 +103,8 @@ export const REPORT_DEFS: ReportDef[] = [
   },
 ];
 
+const COVERAGE = "Covers the chain universe only (watchlists, the most liquid symbols and recently opened symbols): 152 symbols.";
+
 export function reportResult(id: string, params: Record<string, string>): ReportResult | null {
   const def = REPORT_DEFS.find((d) => d.id === id);
   if (!def) return null;
@@ -112,12 +114,21 @@ export function reportResult(id: string, params: Record<string, string>): Report
     reseed(3);
     return { pc_history: tradingDays(30).map((d) => ({ date: d, pc_volume: round(between(0.6, 1.2)), pc_premium: round(between(0.5, 1.4)) })) };
   })() : undefined;
+  if (id === "oi-changes") {   // a chain-based report without a stored chain: no rows, and the engine says why
+    return { id, title: def.title, asof: null, params: effective, columns: def.columns, rows: [], truncated: false,
+      notes: [COVERAGE, "OCC open interest updates once per day."], method: ["Contracts not present in the prior end-of-day snapshot are skipped."],
+      empty_reason: "No stored option chain matches these settings." };
+  }
+  let rows = rowsFor(def.columns, n, id.length);
+  if (id === "covered-calls") rows = rows.map((r, i) => ({ ...r, source: i % 3 === 0 ? "reconstructed" : "ibkr" }));
+  if (id === "market-movers") rows = rows.map((r) => ({ ...r, iv30: null }));   // a column no row has a value for
   return {
     id, title: def.title, asof: NOW, params: effective, columns: def.columns,
-    rows: id === "covered-calls" ? rowsFor(def.columns, n, id.length).map((r, i) => ({ ...r, source: i % 3 === 0 ? "reconstructed" : "ibkr" })) : rowsFor(def.columns, n, id.length),
+    rows,
     truncated: false,
     notes: id === "unusual-option-volume" ? ["Volume is per-contract daily totals; it does not identify individual trades.", "Net delta is volume × delta, unsigned by trade side."]
-      : id === "covered-calls" ? ["Covers the chain universe only (watchlists, the most liquid symbols and recently opened symbols): 152 symbols.", "Mid prices."] : [],
+      : id === "covered-calls" ? [COVERAGE, "Mid prices."] : [],
+    ...(id === "covered-calls" ? { method: ["PoP and EV use a lognormal model with the expiry's ATM IV and drift r − q."] } : {}),
     ...(extra ? { extra } : {}),
   };
 }
