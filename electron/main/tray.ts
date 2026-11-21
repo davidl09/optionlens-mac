@@ -1,7 +1,9 @@
-// Menu-bar (Tray) icon: engine + IBKR status and the app's background controls.
+// Tray icon (macOS menu bar, Windows notification area, Linux AppIndicator): engine + IBKR status and the
+// app's background controls. Which icon files, and whether there is a tray at all, is per OS (platform/).
 import { Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
 import type { BridgeStatus, EngineStatus, LoginItemStatus, UpdateStatus } from "../shared/api";
+import type { TrayIcons } from "./platform";
 import { bridgeLines, engineLine, trayTooltip, updateMenuItem } from "./status-text";
 
 export interface TrayActions {
@@ -21,13 +23,13 @@ export class AppTray {
   private readonly icons: { idle: Electron.NativeImage; connected: Electron.NativeImage };
   private pending: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(resourcesDir: string, private readonly actions: TrayActions, private readonly state: () => TrayState) {
+  constructor(resourcesDir: string, files: TrayIcons, private readonly actions: TrayActions, private readonly state: () => TrayState) {
     const load = (name: string) => {
-      const img = nativeImage.createFromPath(join(resourcesDir, `${name}.png`));
-      img.setTemplateImage(true);
+      const img = nativeImage.createFromPath(join(resourcesDir, name));
+      if (files.template) img.setTemplateImage(true);
       return img;
     };
-    this.icons = { idle: load("trayTemplate"), connected: load("trayConnectedTemplate") };
+    this.icons = { idle: load(files.idle), connected: load(files.connected) };
     this.tray = new Tray(this.icons.idle);
     this.render();
   }
@@ -54,8 +56,9 @@ export class AppTray {
       { label: s.bridge.enabled ? "Pause IBKR bridge" : "Resume IBKR bridge", click: () => this.actions.setBridgeEnabled(!s.bridge.enabled) },
       { label: "Cancel bridge work", enabled: busy, click: () => this.actions.cancelBridgeWork() },
       { type: "separator" },
-      { label: s.loginItem === "requires-approval" ? "Launch at login (allow in System Settings → Login Items)" : "Launch at login",
-        type: "checkbox", checked: s.loginItem !== "disabled", click: (item) => this.actions.setLaunchAtLogin(item.checked) },
+      ...(s.loginItem === "unsupported" ? [] : [{
+        label: s.loginItem === "requires-approval" ? "Launch at login (allow in System Settings → Login Items)" : "Launch at login",
+        type: "checkbox", checked: s.loginItem !== "disabled", click: (item) => this.actions.setLaunchAtLogin(item.checked) } satisfies MenuItemConstructorOptions]),
       { label: "Quit OptionLens", accelerator: "CommandOrControl+Q", click: () => this.actions.quit() },
     ];
     this.tray.setContextMenu(Menu.buildFromTemplate(template));

@@ -1,6 +1,7 @@
-// Renders the app icon (build/icon.png, 1024²) and the menu-bar template icons
-// (resources/trayTemplate*.png, black + alpha as macOS expects) without any image dependencies.
-// Run with `npm run icons`; the outputs are committed.
+// Renders the app icon (build/icon.png, 1024²), the macOS menu-bar template icons
+// (resources/trayTemplate*.png, black + alpha as macOS expects) and the coloured tray icons for Windows
+// (resources/tray*.ico: 16–48 px PNG entries) and Linux (resources/tray*.png, 32 px), readable on light and
+// dark panels, without any image dependencies. Run with `npm run icons`; the outputs are committed.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 
@@ -69,11 +70,37 @@ const tray = (connected) => (x, y) => {
   return [0, 0, 0, 0];
 };
 
+// Coloured tray glyph: the accent lens, with a green centre while IBKR is connected.
+const colourTray = (connected) => (x, y) => {
+  if (lens(x, y, 0.3, 0.13)) return [77, 163, 255, 1];
+  if (connected && Math.hypot(x - 0.43, y - 0.43) < 0.13) return [94, 214, 160, 1];
+  return [0, 0, 0, 0];
+};
+
+/** .ico with PNG-compressed entries (Windows Vista and later). */
+function ico(images) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); header.writeUInt16LE(1, 2); header.writeUInt16LE(images.length, 4);
+  let offset = 6 + 16 * images.length;
+  const entries = images.map(({ size, data }) => {
+    const e = Buffer.alloc(16);
+    e[0] = size >= 256 ? 0 : size; e[1] = size >= 256 ? 0 : size;
+    e.writeUInt16LE(1, 4); e.writeUInt16LE(32, 6); e.writeUInt32LE(data.length, 8); e.writeUInt32LE(offset, 12);
+    offset += data.length;
+    return e;
+  });
+  return Buffer.concat([header, ...entries, ...images.map((i) => i.data)]);
+}
+
 mkdirSync("build", { recursive: true });
 mkdirSync("resources", { recursive: true });
 writeFileSync("build/icon.png", png(1024, appIcon));
 for (const [name, connected] of [["trayTemplate", false], ["trayConnectedTemplate", true]]) {
   writeFileSync(`resources/${name}.png`, png(16, tray(connected)));
   writeFileSync(`resources/${name}@2x.png`, png(32, tray(connected)));
+}
+for (const [name, connected] of [["tray", false], ["trayConnected", true]]) {
+  writeFileSync(`resources/${name}.png`, png(32, colourTray(connected)));
+  writeFileSync(`resources/${name}.ico`, ico([16, 24, 32, 48].map((size) => ({ size, data: png(size, colourTray(connected)) }))));
 }
 console.log("icons written");

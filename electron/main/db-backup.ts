@@ -3,8 +3,9 @@
 // are kept: an update whose engine migrates the database, or a rollback to the previous app, never loses
 // data. The copy is an APFS clone where possible (instant). The version that last ran is remembered.
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rename, rm } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { removeRetrying as rm, renameRetrying as rename } from "./fs-retry";
 import { copyWithProgress, DB_FILE } from "./import-data";
 
 export const KEEP_DB_BACKUPS = 2;
@@ -31,7 +32,7 @@ export async function pruneDbBackups(dir: string, keep: number): Promise<string[
   const backups = (await readdir(dir)).map((n) => ({ n, m: BACKUP_RE.exec(n) })).filter((x) => x.m)
     .sort((a, b) => (a.m![1] < b.m![1] ? 1 : a.m![1] > b.m![1] ? -1 : 0)).map((x) => x.n);
   const drop = backups.slice(keep);
-  for (const n of drop) { await rm(join(dir, n), { force: true }); await rm(join(dir, `${n}.wal`), { force: true }); }
+  for (const n of drop) { await rm(join(dir, n)); await rm(join(dir, `${n}.wal`)); }
   return drop;
 }
 
@@ -51,8 +52,8 @@ export async function backupDatabaseOnVersionChange(o: DbBackupOptions): Promise
       if (existsSync(`${tmp}.wal`)) await rename(`${tmp}.wal`, `${target}.wal`);
       await rename(tmp, target);
     } catch (e) {
-      await rm(tmp, { force: true });
-      await rm(`${tmp}.wal`, { force: true });
+      await rm(tmp);
+      await rm(`${tmp}.wal`);
       throw e;
     }
     await pruneDbBackups(o.backupsDir, o.keep ?? KEEP_DB_BACKUPS);

@@ -5,26 +5,35 @@ import type { EngineStatus } from "../shared/api";
 import { EngineSupervisor, parseListening, restartDelayMs, type ChildLike, type SpawnFn } from "./engine";
 import { resolveEngineCommand } from "./engine-paths";
 import { silentLogger } from "./log";
+import { posixPython, windowsPython } from "./platform/python-layout";
+import { join } from "node:path";
 
 class FakeChild extends EventEmitter implements ChildLike {
+  readonly stdin = new PassThrough();
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly signals: string[] = [];
-  constructor(readonly pid: number) { super(); }
+  stdinClosed = false;
+  /** Like the engine: exits (code 0) when its stdin is closed, unless it hangs. */
+  constructor(readonly pid: number, hangs = false) {
+    super();
+    this.stdin.on("finish", () => { this.stdinClosed = true; if (!hangs) setTimeout(() => this.emit("exit", 0, null), 1); });
+  }
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean { this.signals.push(signal); setTimeout(() => this.emit("exit", null, signal), 1); return true; }
   listen(port: number) { this.stdout.write(`INFO starting\nLISTENING ${port}\n`); }
   crash(code = 1) { this.stderr.write("Traceback: boom\n"); this.emit("exit", code, null); }
 }
 
-function harness(beforeFirstStart?: () => Promise<void>) {
+function harness(beforeFirstStart?: () => Promise<void>, o: { hangs?: boolean } = {}) {
   const children: FakeChild[] = [];
   const envs: NodeJS.ProcessEnv[] = [];
-  const spawn: SpawnFn = (_cmd, _args, opts) => { const c = new FakeChild(100 + children.length); children.push(c); envs.push(opts.env); return c; };
+  const args: string[][] = [];
+  const spawn: SpawnFn = (_cmd, a, opts) => { const c = new FakeChild(100 + children.length, o.hangs); children.push(c); envs.push(opts.env); args.push(a); return c; };
   const statuses: EngineStatus[] = [];
   const fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, version: "1.2.3" }) }));
   const sup = new EngineSupervisor({ command: { python: "python3", env: { PYTHONPATH: "/engine" } }, dataDir: "/data", spawn, fetch, parentPid: 4242,
     log: silentLogger, onStatus: (s) => statuses.push(s), stopTimeoutMs: 50, beforeFirstStart });
-  return { sup, children, envs, statuses, fetch };
+  return { sup, children, envs, args, statuses, fetch };
 }
 
 describe("engine supervisor", () => {
@@ -85,18 +94,34 @@ describe("engine supervisor", () => {
     expect(h.children.length).toBe(6);
   });
 
-  it("stops with SIGTERM and does not restart", async () => {
+  it("stops gracefully by closing the engine's stdin (every OS: no SIGTERM) and does not restart", async () => {
     const h = harness();
     h.sup.start();
+    expect(h.args[0]).toEqual(["-m", "optionlens.cli", "serve", "--port", "0", "--exit-on-stdin-eof"]);
     h.children[0].listen(5000);
     await vi.advanceTimersByTimeAsync(10);
     const stopped = h.sup.stop();
     await vi.advanceTimersByTimeAsync(10);
     await stopped;
-    expect(h.children[0].signals).toEqual(["SIGTERM"]);
+    expect(h.children[0].stdinClosed).toBe(true);
+    expect(h.children[0].signals).toEqual([]);
     expect(h.sup.status().state).toBe("stopped");
     await vi.advanceTimersByTimeAsync(120_000);
     expect(h.children).toHaveLength(1);
+  });
+
+  it("kills an engine that does not exit after its stdin was closed", async () => {
+    const h = harness(undefined, { hangs: true });
+    h.sup.start();
+    h.children[0].listen(5000);
+    await vi.advanceTimersByTimeAsync(10);
+    const stopped = h.sup.stop();
+    await vi.advanceTimersByTimeAsync(40);
+    expect(h.children[0].signals).toEqual([]);
+    await vi.advanceTimersByTimeAsync(20);   // stopTimeoutMs: 50
+    await stopped;
+    expect(h.children[0].signals).toEqual(["SIGKILL"]);
+    expect(h.sup.status().state).toBe("stopped");
   });
 
   it("runs work while stopped (data import) and starts again", async () => {
@@ -155,14 +180,19 @@ describe("engine supervisor", () => {
 });
 
 describe("engine paths", () => {
+  const layout = posixPython;
   it("uses the bundled Python and engine in the packaged app", () => {
-    const c = resolveEngineCommand({ packaged: true, resourcesPath: "/App/Contents/Resources", appPath: "/x", env: {} });
+    const c = resolveEngineCommand({ packaged: true, resourcesPath: "/App/Contents/Resources", appPath: "/x", env: {}, layout });
     expect(c.python).toBe("/App/Contents/Resources/python/bin/python3");
     expect(c.env.PYTHONPATH).toBeUndefined();
     expect(c.cwd).toBe("/App/Contents/Resources");
   });
+  it("finds python.exe in the bundle and Scripts\\python.exe in a virtualenv on Windows", () => {
+    expect(windowsPython.bundledPython("/r")).toBe(join("/r", "python", "python.exe"));
+    expect(windowsPython.venvPython("/e/.venv")).toBe(join("/e/.venv", "Scripts", "python.exe"));
+  });
   it("honours OPTIONLENS_PYTHON / OPTIONLENS_ENGINE_DIR in development", () => {
-    const c = resolveEngineCommand({ packaged: false, resourcesPath: "", appPath: "/repo", env: { OPTIONLENS_PYTHON: "/venv/bin/python", OPTIONLENS_ENGINE_DIR: "/srv/engine" } });
+    const c = resolveEngineCommand({ packaged: false, resourcesPath: "", appPath: "/repo", layout, env: { OPTIONLENS_PYTHON: "/venv/bin/python", OPTIONLENS_ENGINE_DIR: "/srv/engine" } });
     expect(c).toMatchObject({ python: "/venv/bin/python", cwd: "/srv/engine", env: { PYTHONPATH: "/srv/engine" } });
   });
 });

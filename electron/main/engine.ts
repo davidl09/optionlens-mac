@@ -1,6 +1,8 @@
-// Engine sidecar supervisor: spawns `<python> -m optionlens.cli serve --port 0` bound to loopback with a
-// random per-launch token, reads `LISTENING <port>` from stdout, health-checks it, restarts it with
-// backoff when it dies and stops it (SIGTERM, then SIGKILL) on quit.
+// Engine sidecar supervisor: spawns `<python> -m optionlens.cli serve --port 0 --exit-on-stdin-eof` bound to
+// loopback with a random per-launch token, reads `LISTENING <port>` from stdout, health-checks it, restarts
+// it with backoff when it dies and stops it on quit. Stopping is the same on every OS: close the engine's
+// stdin (it shuts down gracefully, see engine/optionlens/sidecar.py), kill it if it has not exited after 8 s.
+// Windows has no SIGTERM (kill() is TerminateProcess there), so a signal is never the graceful path.
 import { randomBytes } from "node:crypto";
 import type { EngineConnection, EngineState, EngineStatus } from "../shared/api";
 import type { Logger } from "./log";
@@ -8,6 +10,8 @@ import type { Logger } from "./log";
 /** The parts of a child process the supervisor uses (node:child_process satisfies it). */
 export interface ChildLike {
   readonly pid?: number;
+  /** The engine's stdin pipe: closing it stops the engine gracefully. */
+  readonly stdin: NodeJS.WritableStream | null;
   readonly stdout: NodeJS.ReadableStream | null;
   readonly stderr: NodeJS.ReadableStream | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -51,7 +55,7 @@ export function restartDelayMs(n: number): number {
 }
 
 export function engineArgs(): string[] {
-  return ["-m", "optionlens.cli", "serve", "--port", "0"];
+  return ["-m", "optionlens.cli", "serve", "--port", "0", "--exit-on-stdin-eof"];
 }
 
 /** Splits a stream into lines. */
@@ -121,7 +125,7 @@ export class EngineSupervisor {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     const child = this.child;
     if (child) {
-      child.kill("SIGTERM");
+      child.stdin?.end();
       const killer = setTimeout(() => child.kill("SIGKILL"), this.o.stopTimeoutMs ?? 8000);
       await this.exited;
       clearTimeout(killer);
@@ -173,6 +177,7 @@ export class EngineSupervisor {
       return;
     }
     this.child = child;
+    child.stdin?.on("error", () => undefined);   // EPIPE when the engine is already gone: nothing to do
     let resolveExit!: () => void;
     this.exited = new Promise((r) => { resolveExit = r; });
     const startedAt = Date.now();

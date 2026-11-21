@@ -1,12 +1,14 @@
 // One-time data import: copy an existing optionlens.duckdb (and its WAL, if any) into the engine's data
 // dir. The copy is asynchronous (the main process stays responsive for a multi-GB file): an APFS clone
 // where possible (instant), else a streamed copy that reports progress. The new file is complete before
-// the current database, if present, is moved aside as a timestamped backup. Call with the engine stopped.
+// the current database, if present, is moved aside as a timestamped backup. Call with the engine stopped:
+// DuckDB holds the file open (on Windows an open file cannot be renamed); renames retry while it is busy.
 import { closeSync, constants, createReadStream, createWriteStream, existsSync, openSync, readSync, statSync } from "node:fs";
-import { copyFile, mkdir, rename, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { removeRetrying as rm, renameRetrying as rename } from "./fs-retry";
 
 export const DB_FILE = "optionlens.duckdb";
 
@@ -55,8 +57,8 @@ export async function importDatabase(source: string, dataDir: string, o: { now?:
     await copyWithProgress(source, tmp, o.onProgress);
     if (existsSync(`${source}.wal`)) await copyFile(`${source}.wal`, `${tmp}.wal`);
   } catch (e) {
-    await rm(tmp, { force: true });
-    await rm(`${tmp}.wal`, { force: true });
+    await rm(tmp);
+    await rm(`${tmp}.wal`);
     throw e;
   }
   let backup: string | null = null;
@@ -66,7 +68,7 @@ export async function importDatabase(source: string, dataDir: string, o: { now?:
     if (existsSync(`${target}.wal`)) await rename(`${target}.wal`, `${backup}.wal`);
   }
   await rename(tmp, target);
-  await rm(`${target}.wal`, { force: true });
+  await rm(`${target}.wal`);
   if (existsSync(`${tmp}.wal`)) await rename(`${tmp}.wal`, `${target}.wal`);
   return { target, backup };
 }

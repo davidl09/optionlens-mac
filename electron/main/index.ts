@@ -1,8 +1,11 @@
 // Main process composition root: wires the engine sidecar, the IBKR bridge, notifications, the window,
-// the menu-bar icon and IPC. Behaviour lives in the modules imported here; this file only connects them.
+// the tray icon and IPC. Behaviour lives in the modules imported here; this file only connects them. What
+// differs per OS comes from platform/ (desktop integration) and updater/installers (updates).
 import { app, BrowserWindow, dialog, Menu, Notification, powerMonitor, protocol, session } from "electron";
-import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { execFile, spawn } from "node:child_process";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { Bridge } from "../bridge/bridge";
 import { ibConnector } from "../bridge/ib-adapter";
 import { ingestApi } from "../bridge/ingest";
@@ -19,7 +22,8 @@ import { createLogger } from "./log";
 import { isNotificationList, NotificationPoller, notificationRoute, showRetained, type EngineNotification } from "./notifier";
 import { allowPermission } from "./permissions";
 import { APP_SCHEME, serveAsset } from "./protocol";
-import { launchAtLoginFromOs, loginItemStatus } from "./login-item";
+import { launchAtLoginFromOs } from "./login-item";
+import { desktopPlatform, type PlatformDeps } from "./platform";
 import { parseStoredSettings, validateSettings } from "./settings";
 import { AppTray } from "./tray";
 import { createAppUpdater } from "./updater";
@@ -30,11 +34,26 @@ protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { standa
 if (!app.requestSingleInstanceLock()) app.quit();
 else void app.whenReady().then(main);
 
+const textFiles: PlatformDeps["files"] = {
+  read: (path) => { try { return readFileSync(path, "utf8"); } catch { return null; } },
+  write: (path, content) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content, { mode: 0o644 }); },
+  remove: (path) => rmSync(path, { force: true }),
+};
+const execFileAsync = promisify(execFile);
+const run: PlatformDeps["run"] = async (file, args, timeout) => (await execFileAsync(file, args, { timeout, maxBuffer: 1024 * 1024 })).stdout;
+
 async function main(): Promise<void> {
   const userData = app.getPath("userData");
   const log = createLogger(join(app.getPath("logs"), "main.log"));
   process.on("uncaughtException", (e) => log.error(`uncaught: ${e.stack ?? e.message}`));
   process.on("unhandledRejection", (e) => log.error(`unhandled rejection: ${e instanceof Error ? e.stack : String(e)}`));
+
+  const platform = desktopPlatform(process.platform, {
+    app, argv: process.argv, env: process.env, execPath: process.execPath, packaged: app.isPackaged, home: app.getPath("home"), files: textFiles, run,
+  });
+  platform.initNotifications();
+  // Linux asks the session bus whether a tray can show; the answer is needed before the window decision.
+  const trayIcons = platform.trayIcons().catch(() => null);
 
   const settingsFile = jsonFile(join(userData, "settings.json"));
   const stateFile = jsonFile(join(userData, "state.json"));
@@ -53,7 +72,8 @@ async function main(): Promise<void> {
   let quitting = false;
   const send = (channel: string, payload: unknown) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
   const showWindow = (): BrowserWindow => {
-    if (!win || win.isDestroyed()) win = createMainWindow(join(appRoot, "dist-electron", "preload.cjs"), () => quitting);
+    // Without a tray, closing the window quits (there would be no way back to a hidden window).
+    if (!win || win.isDestroyed()) win = createMainWindow(join(appRoot, "dist-electron", "preload.cjs"), () => quitting || tray === null);
     else { win.show(); win.focus(); }
     return win;
   };
@@ -89,9 +109,10 @@ async function main(): Promise<void> {
 
   // ---- engine ----
   const engine = new EngineSupervisor({
-    command: resolveEngineCommand({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: appRoot, env: process.env }),
+    command: resolveEngineCommand({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: appRoot, env: process.env, layout: platform }),
     dataDir,
-    spawn: (cmd, args, opts) => spawn(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] }),
+    // stdin is the engine's stop pipe (engine.ts); windowsHide: no console window for python.exe.
+    spawn: (cmd, args, opts) => spawn(cmd, args, { ...opts, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }),
     fetch: (url, init) => fetch(url, init),
     parentPid: process.pid,
     log,
@@ -145,8 +166,8 @@ async function main(): Promise<void> {
   });
 
   // ---- settings ----
-  const loginItem = () => loginItemStatus(process.platform, app.getLoginItemSettings());
-  // The OS is the truth for launch at login (the user may have removed the item in System Settings).
+  const loginItem = () => platform.loginItem.status();
+  // The OS is the truth for launch at login (the user may have removed the item outside OptionLens).
   const fromOs = launchAtLoginFromOs(loginItem());
   if (fromOs !== null && fromOs !== settings.launchAtLogin) { settings = { ...settings, launchAtLogin: fromOs }; settingsFile.write(settings); }
   const saveSettings = (next: unknown) => {
@@ -157,7 +178,7 @@ async function main(): Promise<void> {
     const updatesChanged = JSON.stringify(v.value.updates) !== JSON.stringify(settings.updates);
     settings = v.value;
     settingsFile.write(settings);
-    if (loginChanged && process.platform === "darwin") app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
+    if (loginChanged) platform.loginItem.set(settings.launchAtLogin);
     if (bridgeChanged) bridge.reconfigure();
     if (updatesChanged) void updater.settingsChanged();
     tray?.update();
@@ -195,15 +216,10 @@ async function main(): Promise<void> {
   });
 
   // ---- menus, tray, window ----
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { role: "appMenu", submenu: [
-      { role: "about" }, { type: "separator" },
-      { label: "Settings…", accelerator: "CommandOrControl+,", click: () => navigate("/settings") },
-      { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" },
-    ] },
-    { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
-  ]));
-  tray = new AppTray(join(appRoot, "resources"), {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(platform.appMenu({ openSettings: () => navigate("/settings") })));
+  const icons = await trayIcons;
+  if (!icons) log.info("no tray on this desktop: closing the window quits OptionLens");
+  tray = icons && new AppTray(join(appRoot, "resources"), icons, {
     open: () => { showWindow(); },
     openSettings: () => navigate("/settings"),
     setBridgeEnabled: (on) => saveSettings({ ...settings, bridge: { ...settings.bridge, enabled: on } }),
@@ -215,7 +231,8 @@ async function main(): Promise<void> {
 
   app.on("second-instance", () => { showWindow(); });
   app.on("activate", () => { showWindow(); });
-  app.on("window-all-closed", () => { /* keep running in the menu bar: collection and the bridge continue */ });
+  // With a tray, keep running when the window is closed: collection and the bridge continue.
+  app.on("window-all-closed", () => { if (!tray) app.quit(); });
   let shutDown = false;
   app.on("before-quit", (e) => {
     quitting = true;
@@ -236,7 +253,7 @@ async function main(): Promise<void> {
   stopUpdates = appUpdater.start();
   const notice = updater.status().notice;
   if (notice) notify("OptionLens update", notice, () => navigate("/settings"), "update notice");
-  const openedAtLogin = process.platform === "darwin" && app.getLoginItemSettings().wasOpenedAtLogin;
-  if (!openedAtLogin) showWindow();
+  // Started at login: stay in the tray (when there is one).
+  if (!(tray && platform.loginItem.openedAtLogin())) showWindow();
   log.info(`OptionLens ${app.getVersion()} started (data: ${dataDir})`);
 }

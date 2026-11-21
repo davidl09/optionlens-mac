@@ -1,5 +1,6 @@
 // The main window: locked-down renderer (context isolation, no Node, sandbox), app:// only navigation,
-// external links in the default browser, and hide-on-close so the app keeps running in the menu bar.
+// external links in the default browser, and hide-on-close (while `shouldReallyClose` is false) so the app
+// keeps running in the tray.
 import { BrowserWindow, shell } from "electron";
 import { APP_ORIGIN } from "./protocol";
 
