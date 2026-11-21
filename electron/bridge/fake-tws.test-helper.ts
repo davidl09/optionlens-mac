@@ -14,6 +14,13 @@ export interface FakeMarket {
 export const contractId = (c: TwsContract) =>
   c.secType === "OPT" ? `${c.symbol}:${c.lastTradeDateOrContractMonth}:${c.strike}:${c.right}` : `${c.symbol}:${c.secType}`;
 
+/** Real TWS rejects a request whose expiry is not YYYYMMDD / YYYYMM (error 321); so does the fake. */
+export function twsValidationError(c: TwsContract): TwsRequestError | null {
+  const d = c.lastTradeDateOrContractMonth;
+  if (d === undefined || /^\d{6}(\d{2})?$/.test(d)) return null;
+  return new TwsRequestError(321, "Error validating request.-'bW' : cause - lastTradeDateOrContractMonth: The date entered is invalid. Please use the format YYYYMMDD or YYYYMM");
+}
+
 export class FakeSession implements TwsSession {
   readonly streams: { contract: TwsContract; generic: string; cancelled: boolean }[] = [];
   readonly historicalCalls: { contract: TwsContract; req: HistoricalRequest }[] = [];
@@ -31,11 +38,17 @@ export class FakeSession implements TwsSession {
 
   async historical(contract: TwsContract, req: HistoricalRequest): Promise<HistBar[]> {
     this.historicalCalls.push({ contract, req });
+    const invalid = twsValidationError(contract);
+    if (invalid) throw invalid;
     const r = this.market.historical(contract, req);
     if (r instanceof Error) throw r;
     return r;
   }
-  async contractDetails(c: TwsContract): Promise<TwsContract[]> { return this.market.details(c); }
+  async contractDetails(c: TwsContract): Promise<TwsContract[]> {
+    const invalid = twsValidationError(c);
+    if (invalid) throw invalid;
+    return this.market.details(c);
+  }
   async optionParams(): Promise<OptionParams[]> { return this.market.optionParams; }
 
   /** Runs `fn` when the message would reach TWS (immediately without msgRate). */
@@ -60,7 +73,7 @@ export class FakeSession implements TwsSession {
       this.open += 1;
       this.maxConcurrentStreams = Math.max(this.maxConcurrentStreams, this.open);
       const id = contractId(contract);
-      const err = this.market.streamErrors(id);
+      const err = twsValidationError(contract) ?? this.market.streamErrors(id);
       if (err) h.onError(err);
       else for (const t of this.market.ticks(id) ?? []) h.onTick(t);
     });

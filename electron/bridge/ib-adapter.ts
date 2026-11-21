@@ -13,12 +13,36 @@ const OPTION_DETAILS_TIMEOUT_MS = 180_000;
 /** After nextValidId, how long to wait for managedAccounts (TWS may send it just after). */
 const ACCOUNTS_GRACE_MS = 1500;
 
-function toIb(c: TwsContract): Contract {
+/** The only expiry / contract-month formats TWS accepts in a request (it rejects anything else with error 321). */
+const TWS_DATE = /^\d{6}(\d{2})?$/;
+
+/**
+ * Request contract. A contract IBKR already resolved (it has a conId) is addressed by conId + exchange only:
+ * echoing contract-details fields back (expiry with a time suffix, multiplier, trading class) only gives TWS
+ * something to reject. Throws for an expiry TWS would reject (a bridge bug, never sent).
+ */
+export function toIb(c: TwsContract): Contract {
+  if (c.conId) return { conId: c.conId, exchange: c.exchange };
+  const date = c.lastTradeDateOrContractMonth;
+  if (date !== undefined && !TWS_DATE.test(date)) throw new Error(`${c.symbol}: invalid TWS expiry "${date}" (YYYYMMDD expected)`);
   return {
-    symbol: c.symbol, secType: c.secType as IbSecType, exchange: c.exchange, currency: c.currency, conId: c.conId,
-    primaryExch: c.primaryExchange, lastTradeDateOrContractMonth: c.lastTradeDateOrContractMonth, strike: c.strike,
+    symbol: c.symbol, secType: c.secType as IbSecType, exchange: c.exchange, currency: c.currency,
+    primaryExch: c.primaryExchange, lastTradeDateOrContractMonth: date, strike: c.strike,
     right: c.right as Contract["right"], tradingClass: c.tradingClass, multiplier: c.multiplier === undefined ? undefined : Number(c.multiplier),
   };
+}
+
+/**
+ * Expiry YYYYMMDD of a contract-details answer. TWS may send it with a time and zone ("20261218 16:00:00
+ * US/Eastern"), which @stoqey/ib 1.6.13 does not split off (its decoder splits on the literal string "\\s+");
+ * newer servers also send `lastTradeDate`. Only the leading date is kept.
+ */
+export function detailsExpiry(raw: { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }): string | undefined {
+  for (const v of [raw.lastTradeDateOrContractMonth, raw.lastTradeDate]) {
+    const m = /^\s*(\d{8}|\d{6})(?!\d)/.exec(String(v ?? ""));
+    if (m) return m[1];
+  }
+  return undefined;
 }
 
 function fromIb(d: ContractDetails): TwsContract | null {
@@ -29,7 +53,7 @@ function fromIb(d: ContractDetails): TwsContract | null {
   const right = String(c.right ?? "").toUpperCase().startsWith("C") ? "C" : String(c.right ?? "").toUpperCase().startsWith("P") ? "P" : undefined;
   return {
     symbol: c.symbol, secType, exchange: c.exchange ?? "SMART", currency: "USD", conId: c.conId, primaryExchange: c.primaryExch,
-    lastTradeDateOrContractMonth: c.lastTradeDateOrContractMonth, strike: c.strike, right, tradingClass: c.tradingClass,
+    lastTradeDateOrContractMonth: detailsExpiry(c as { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }), strike: c.strike, right, tradingClass: c.tradingClass,
     multiplier: c.multiplier === undefined ? undefined : String(c.multiplier),
   };
 }
@@ -121,7 +145,8 @@ class IbSession implements TwsSession {
     });
   }
 
-  historical(contract: TwsContract, req: { duration: string; whatToShow: string; useRth: boolean }, signal: AbortSignal): Promise<HistBar[]> {
+  async historical(contract: TwsContract, req: { duration: string; whatToShow: string; useRth: boolean }, signal: AbortSignal): Promise<HistBar[]> {
+    const ibc = toIb(contract);
     const bars: HistBar[] = [];
     let listener: ((...a: unknown[]) => void) | null = null;
     const p = this.request<HistBar[]>(`${contract.symbol} historical ${req.whatToShow}`, signal, HIST_TIMEOUT_MS, (reqId, done) => {
@@ -131,12 +156,13 @@ class IbSession implements TwsSession {
         bars.push({ time: String(time), open: Number(open), high: Number(high), low: Number(low), close: Number(close), volume: Number.isFinite(Number(volume)) && Number(volume) >= 0 ? Number(volume) : null });
       };
       this.ib.on(EventName.historicalData, listener);
-      this.ib.reqHistoricalData(reqId, toIb(contract), "", req.duration, BarSizeSetting.DAYS_ONE, req.whatToShow as never, req.useRth ? 1 : 0, 1, false);
+      this.ib.reqHistoricalData(reqId, ibc, "", req.duration, BarSizeSetting.DAYS_ONE, req.whatToShow as never, req.useRth ? 1 : 0, 1, false);
     }, (reqId) => this.ib.cancelHistoricalData(reqId));
     return p.finally(() => { if (listener) this.ib.off(EventName.historicalData, listener); });
   }
 
-  contractDetails(contract: TwsContract, signal: AbortSignal): Promise<TwsContract[]> {
+  async contractDetails(contract: TwsContract, signal: AbortSignal): Promise<TwsContract[]> {
+    const ibc = toIb(contract);
     const out: TwsContract[] = [];
     let onDetail: ((id: number, d: ContractDetails) => void) | null = null;
     let onEnd: ((id: number) => void) | null = null;
@@ -147,7 +173,7 @@ class IbSession implements TwsSession {
       onEnd = (id) => { if (id === reqId) done(out); };
       this.ib.on(EventName.contractDetails, onDetail);
       this.ib.on(EventName.contractDetailsEnd, onEnd);
-      this.ib.reqContractDetails(reqId, toIb(contract));
+      this.ib.reqContractDetails(reqId, ibc);
     });
     return p.finally(() => {
       if (onDetail) this.ib.off(EventName.contractDetails, onDetail);
@@ -178,9 +204,10 @@ class IbSession implements TwsSession {
 
   stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers): () => void {
     if (this.closed) { handlers.onError(new TwsRequestError(CODE.NOT_CONNECTED, "not connected")); return () => undefined; }
+    const ibc = toIb(contract);
     const reqId = this.nextId++;
     this.ticks.set(reqId, handlers);
-    this.send(() => this.ib.reqMktData(reqId, toIb(contract), genericTicks, false, false));
+    this.send(() => this.ib.reqMktData(reqId, ibc, genericTicks, false, false));
     return () => {
       if (!this.ticks.delete(reqId) || this.closed) return;
       try { this.send(() => this.ib.cancelMktData(reqId)); } catch { /* ignore */ }
