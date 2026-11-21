@@ -78,6 +78,11 @@ export interface BridgeStatus {
   queued: Record<JobKind, number>;
   /** Progress of the current round of historical work (option bars + IV history). */
   backfill: { total: number; done: number; failed: number };
+  /**
+   * An after-hours fill in progress: the last completed session had no data (e.g. a first launch on a weekend), so
+   * the bridge collects its frozen closing values — underlying stats, then chains; null when none runs.
+   */
+  populate: { sessionDate: string; done: number; total: number } | null;
 }
 
 export type RefreshResult =

@@ -90,6 +90,10 @@ export class Bridge {
   private readonly noOptions = new Set<string>();
   /** Last chain posted with gaps (status note): under FINAL_MIN_COVERAGE quoted, expiries without quotes or contracts. */
   private chainGaps: ChainGaps | null = null;
+  /** The after-hours fill in progress (status), counted as its stats batches and chains are queued and finish. */
+  private populate: { sessionDate: string; done: number; total: number } | null = null;
+  /** A chain fill wanted while the stats fill still ran: the wants are polled again once the stats are done. */
+  private chainFillDeferred = false;
 
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
@@ -121,6 +125,7 @@ export class Bridge {
 
   /** Apply changed settings (reconnects). */
   reconfigure(): void {
+    this.resetFill();
     this.scheduler.cancel();
     this.lines.reset();
     this.supervisor.restart();
@@ -129,6 +134,7 @@ export class Bridge {
   /** User cancel: also forgets accepted option-bar plans, so they are not resumed. */
   cancel(kind?: JobKind): void {
     if (kind === undefined || kind === "option-bars") this.obarsPlans.clear();
+    if (kind === undefined || kind === "underlying-stats" || kind === "chain-universe") this.resetFill();
     this.scheduler.cancel({ kind });
   }
 
@@ -141,6 +147,7 @@ export class Bridge {
       enabled: this.d.settings().enabled, tws: c.tws, port: c.port, endpoint: c.endpoint, accountType: c.accountType, paused: c.paused,
       lastError: c.lastError ?? this.lastError, notes: this.notes(), lastPushAt: this.lastPushAt,
       current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: this.backfill(),
+      populate: this.populate ? { ...this.populate } : null,
     };
   }
 
@@ -190,7 +197,7 @@ export class Bridge {
   private onSession(s: TwsSession | null): void {
     this.session = s;
     this.lines.reset();
-    if (!s) { this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
+    if (!s) { this.resetFill(); this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
     this.onConnectionChange();
     void this.heartbeat();
     void this.pollWants();
@@ -244,12 +251,20 @@ export class Bridge {
       const day = plan.eod.sessionDate;
       for (const s of plan.eod.symbols) this.enqueue(this.chainTask("eod-chains", `eod:${day}:${s}`, s, FULL_CHAIN, day));
     }
-    for (const s of plan.universe.symbols) this.enqueue(this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null));
-    if (plan.stats.length && this.idle("underlying-stats")) {
-      const day = w.eodChains?.sessionDate ?? nyDate(new Date(now));
-      const n = this.lines.size;
-      for (let i = 0; i < plan.stats.length; i += n) this.enqueue(this.statsTask(plan.stats.slice(i, i + n), day));
+    const queueStats = plan.stats.length > 0 && this.idle("underlying-stats");
+    // An after-hours fill collects the stats first (fast, and they rank the chain universe by liquidity): its chains
+    // are asked for again once no stats work is left.
+    this.chainFillDeferred = plan.universe.asOfSession !== null && plan.universe.symbols.length > 0 && (queueStats || !this.idle("underlying-stats"));
+    if (!this.chainFillDeferred) {
+      for (const s of plan.universe.symbols) this.fillTask(plan.universe.asOfSession, this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null), 1);
     }
+    if (queueStats) {
+      const fill = plan.statsAsOfSession;
+      const day = fill ?? w.eodChains?.sessionDate ?? nyDate(new Date(now));
+      const n = this.lines.size;
+      for (let i = 0; i < plan.stats.length; i += n) this.fillTask(fill, this.statsTask(plan.stats.slice(i, i + n), day), Math.min(n, plan.stats.length - i));
+    }
+    if (this.populate && this.populate.done >= this.populate.total && !this.chainFillDeferred) this.populate = null;
     if (plan.indexQuotes.length) {
       this.enqueue(this.task("index", "index-quotes", "VIX family quotes", async (ctx) => { await pushIndexQuotes(ctx, plan.indexQuotes); this.pushed(); }));
     }
@@ -273,6 +288,30 @@ export class Bridge {
         async (ctx) => { if (await pushVolHistory(ctx, v.symbol, v.from, v.kind)) this.pushed(); },
         { gate: this.pacer, ledgerKey: ledgerKey.vol(v.kind, v.symbol), maxAttempts: 6, group: group.volHistory(v.symbol) }));
     }
+  }
+
+  /**
+   * Queues a task; with `fillSession` it is part of that session's after-hours fill: `items` (symbols) count towards
+   * the populate progress, and the last stats batch re-polls the wants for a deferred chain fill.
+   */
+  private fillTask(fillSession: string | null, t: Task, items: number): void {
+    if (fillSession === null) { void this.enqueue(t); return; }
+    if (this.scheduler.has(t.key)) return;
+    if (this.populate?.sessionDate !== fillSession) this.populate = { sessionDate: fillSession, done: 0, total: 0 };
+    const p = this.populate;
+    p.total += items;
+    void this.enqueue(t).then(() => {
+      p.done += items;
+      if (this.populate === p && p.done >= p.total && !this.chainFillDeferred) this.populate = null;
+      if (t.kind === "underlying-stats" && this.chainFillDeferred && this.idle("underlying-stats")) void this.pollWants();
+      this.emit();
+    });
+  }
+
+  /** Its queued work is dropped (disconnect, cancel, new settings): the next wants poll counts a fill afresh. */
+  private resetFill(): void {
+    this.populate = null;
+    this.chainFillDeferred = false;
   }
 
   private idle(kind: JobKind): boolean {

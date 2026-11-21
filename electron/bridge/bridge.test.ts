@@ -4,7 +4,7 @@ import { DEFAULT_BRIDGE } from "../main/settings";
 import type { BridgeStatus } from "../shared/api";
 import { Bridge } from "./bridge";
 import { emptyMarket, FakeConnector, FakeSession } from "./fake-tws.test-helper";
-import type { IngestApi } from "./ingest";
+import type { IngestApi, UnderlyingStats } from "./ingest";
 import { Ledger } from "./ledger";
 import { HistoricalPacer } from "./pacer";
 import { TICK } from "./ticks";
@@ -23,19 +23,20 @@ function market() {
   return m;
 }
 
-function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer } = {}) {
+function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer; batchTimeoutMs?: number } = {}) {
   const calls: string[] = [];
+  const statsBodies: UnderlyingStats[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
   const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: rec("chain"), noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
-    underlyingStats: async () => { calls.push("stats"); return {}; }, optionBars: rec("obars"), heartbeat: async () => { calls.push("heartbeat"); return {}; } };
+    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async () => { calls.push("heartbeat"); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
   const bridge = new Bridge({
     connector: new FakeConnector(new Map([[4001, session]])), ingest, ledger: new Ledger(null, () => NOW), settings: () => DEFAULT_BRIDGE,
     clientName: "optionlens-mac test", log: silentLogger, onStatus: (s) => statuses.push(s), now: () => Date.now(),
-    pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: 50,
+    pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
   });
-  return { bridge, calls, session, statuses };
+  return { bridge, calls, session, statuses, statsBodies };
 }
 
 const WANTS = {
@@ -194,6 +195,69 @@ describe("Bridge", () => {
     expect(new Set(all).size).toBe(4);
     expect(h.calls.filter((c) => c.startsWith("ack:"))).toEqual([`ack:${JSON.stringify({ kind: "option_bars", items: [{ symbol: "AAPL", sessions: ["2026-11-18"] }] })}`]);
     h.bridge.stop();
+  });
+
+  describe("after-hours fill of the last session (first launch on a weekend)", () => {
+    const SAT = Date.parse("2026-11-21T17:00:00Z");
+    const fill = (stats: string[], chains: string[]) => ({
+      underlying_stats: { symbols: stats, max_age_s: 21_600, as_of_session: "2026-11-20" },
+      chain_universe: { symbols: chains, max_age_s: 21_600, expiries: 1, moneyness: 0.2, as_of_session: "2026-11-20" },
+    });
+    beforeEach(() => { vi.setSystemTime(SAT); });
+
+    it("launch runs the stats pass at once (as that session's, nulls kept), then its chains, with progress", async () => {
+      let polls = 0;
+      const h = harness(() => (polls++ === 0 ? fill(["AAPL", "KO", "F"], ["MSFT"]) : fill([], ["MSFT"])));
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.calls.filter((c) => c !== "heartbeat")).toEqual(["stats", "quotes", "chain:MSFT"]);   // stats first
+      expect(polls).toBe(2);                                    // the chain fill was asked for again after the stats
+      expect(h.statsBodies).toHaveLength(1);
+      const body = h.statsBodies[0];
+      expect(body.session_date).toBe("2026-11-20");            // the filled session, not today's New York date
+      // frozen data without generic ticks 100/101/104/106: unknown stays null (never 0) for the engine to fill
+      expect(body.stats[0]).toEqual({ symbol: "AAPL", price: 100, change_pct: expect.closeTo(100 / 99 - 1, 9), volume: null,
+        call_volume: null, put_volume: null, call_oi: null, put_oi: null, iv30: null, hv30: null });
+      expect(h.session.streams.filter((x) => x.contract.secType === "STK").map((x) => `${x.contract.symbol}:${x.generic}`))
+        .toEqual(["AAPL:100,101,104,106", "KO:100,101,104,106", "F:100,101,104,106", "MSFT:"]);   // MSFT: the chain's underlying
+      const progress = h.statuses.map((st) => st.populate).filter((p) => p !== null).map((p) => `${p!.done}/${p!.total}`);
+      expect(progress).toContain("0/3");
+      expect(progress).toContain("3/4");                       // stats done, the chain queued
+      expect(h.bridge.status().populate).toBeNull();           // finished
+      h.bridge.stop();
+    });
+
+    it("a disconnect drops the fill's progress; the reconnect counts the remaining work afresh", async () => {
+      const h = harness(fill(["AAPL", "KO"], []), market(), { batchTimeoutMs: 60_000 });   // a batch that waits
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.bridge.status().populate).toEqual({ sessionDate: "2026-11-20", done: 0, total: 2 });
+      h.session.emitClose("nightly reset");
+      await vi.advanceTimersByTimeAsync(100);
+      expect(h.bridge.status().populate).toBeNull();
+      await vi.advanceTimersByTimeAsync(20_000);                // reconnected and polled: the same two symbols again
+      expect(h.bridge.status().populate).toMatchObject({ total: 2 });
+      h.bridge.stop();
+    });
+
+    it("a full universe stats pass completes in minutes within the line limit", async () => {
+      const universe = Array.from({ length: 1145 }, (_, i) => `S${i}`);
+      const h = harness(fill(universe, []), market(), { batchTimeoutMs: undefined });   // the real 4 s wait per batch
+      h.session.msgRate = 40;                                   // like the API client's outgoing queue
+      const pushedAt: number[] = [];
+      h.bridge.start();
+      let seen = 0;
+      for (let t = 0; t < 240 && seen < universe.length; t += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        while (seen < h.statsBodies.length) { pushedAt.push(Date.now()); seen += 1; }
+        if (t === 30) expect(h.bridge.status().populate).toMatchObject({ sessionDate: "2026-11-20", total: 1145 });
+      }
+      expect(h.statsBodies.flatMap((b) => b.stats.map((x) => x.symbol))).toHaveLength(1145);
+      expect(pushedAt[pushedAt.length - 1] - SAT).toBeLessThan(150_000);                   // ~2 minutes
+      expect(h.session.maxConcurrentStreams).toBeLessThanOrEqual(90);                      // 100 lines − 10% reserve
+      expect(h.bridge.status().populate).toBeNull();
+      h.bridge.stop();
+    });
   });
 
   it("pauses work on a competing session instead of retrying", async () => {

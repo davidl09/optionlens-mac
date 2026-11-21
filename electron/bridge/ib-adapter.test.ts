@@ -24,7 +24,7 @@ vi.mock("@stoqey/ib", async (importOriginal) => {
     cancelHistoricalData() { this.calls.push("cancelHistoricalData"); }
     connect() { this.calls.push("connect"); }
     disconnect() { this.calls.push("disconnect"); }
-    reqMarketDataType() { this.calls.push("reqMarketDataType"); }
+    reqMarketDataType(type: number) { this.calls.push(`reqMarketDataType:${type}`); }
     reqContractDetails() { this.calls.push("reqContractDetails"); }
     reqMktData(reqId: number, contract: Record<string, unknown>) { this.calls.push("reqMktData"); if (this.validate(reqId, contract)) this.emit("tickPrice", reqId, 1, 2.5); }
     cancelMktData() { this.calls.push("cancelMktData"); }
@@ -52,7 +52,9 @@ describe("ibConnector", () => {
     ib.emit(EventName.managedAccounts, "DU111,DU222");
     const s = await p;
     expect(s.accounts).toEqual(["DU111", "DU222"]);
-    expect(ib.calls).toContain("reqMarketDataType");
+    // Delayed-frozen (4) for the whole session: outside market hours every request (the after-hours stats pass, chains)
+    // gets the last session's frozen values; without a subscription, 15-minute delayed data.
+    expect(ib.calls).toContain("reqMarketDataType:4");
   });
 
   it("accepts managedAccounts before nextValidId, and connects without accounts after a short grace", async () => {

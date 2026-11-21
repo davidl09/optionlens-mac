@@ -79,6 +79,7 @@ describe("bridgePillLabel", () => {
   const base: BridgeStatus = {
     enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
     notes: [], lastPushAt: null, current: null, queued: {} as BridgeStatus["queued"], backfill: { total: 0, done: 0, failed: 0 },
+    populate: null,
   };
   it("reads in plain words", () => {
     expect(bridgePillLabel(base)).toBe("IBKR connected");

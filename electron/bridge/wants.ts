@@ -11,8 +11,13 @@ export interface Wants {
   hvHistory: { symbol: string; from: string }[];
   /** How many symbols the engine keeps IV/HV history for (wanted or already current); null = not said. */
   historySymbols: number | null;
-  underlyingStats: { symbols: string[]; maxAgeS: number } | null;
-  chainUniverse: { symbols: string[]; maxAgeS: number; shape: ChainShape } | null;
+  /**
+   * `asOfSession` (YYYY-MM-DD): an after-hours fill — outside market hours the session (the last completed one)
+   * lacks this data, and these symbols' frozen values are stored as that session's (INTEGRATION.md §6); null =
+   * the live session.
+   */
+  underlyingStats: { symbols: string[]; maxAgeS: number; asOfSession: string | null } | null;
+  chainUniverse: { symbols: string[]; maxAgeS: number; shape: ChainShape; asOfSession: string | null } | null;
   eodChains: { sessionDate: string; symbols: string[]; notBefore: number; deadline: number } | null;
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
   indexSymbols: string[];
@@ -87,8 +92,14 @@ export function parseWants(raw: unknown): Wants {
     ivHistory,
     hvHistory: symbolsFrom(w.hv_history, "hv_history"),
     historySymbols: present(w.history_symbols) ? Math.round(num(w.history_symbols, "history_symbols", 0, 1e6)) : null,
-    underlyingStats: us ? { symbols: symbols(us.symbols, "underlying_stats.symbols"), maxAgeS: num(us.max_age_s, "underlying_stats.max_age_s", 1, 86_400 * 7) } : null,
-    chainUniverse: cu ? { symbols: symbols(cu.symbols, "chain_universe.symbols"), maxAgeS: num(cu.max_age_s, "chain_universe.max_age_s", 1, 86_400 * 7), shape: shape(cu, "chain_universe") } : null,
+    underlyingStats: us ? {
+      symbols: symbols(us.symbols, "underlying_stats.symbols"), maxAgeS: num(us.max_age_s, "underlying_stats.max_age_s", 1, 86_400 * 7),
+      asOfSession: present(us.as_of_session) ? date(us.as_of_session, "underlying_stats.as_of_session") : null,
+    } : null,
+    chainUniverse: cu ? {
+      symbols: symbols(cu.symbols, "chain_universe.symbols"), maxAgeS: num(cu.max_age_s, "chain_universe.max_age_s", 1, 86_400 * 7), shape: shape(cu, "chain_universe"),
+      asOfSession: present(cu.as_of_session) ? date(cu.as_of_session, "chain_universe.as_of_session") : null,
+    } : null,
     eodChains: eod ? {
       sessionDate: date(eod.session_date, "eod_chains.session_date"), symbols: symbols(eod.symbols, "eod_chains.symbols"),
       notBefore: time(eod.not_before, "eod_chains.not_before"), deadline: time(eod.deadline, "eod_chains.deadline"),
@@ -118,8 +129,10 @@ export interface PlanContext {
 
 export interface Plan {
   eod: { sessionDate: string; symbols: string[] } | null;
-  universe: { symbols: string[]; shape: ChainShape };
+  /** `asOfSession`: an after-hours fill of that session (see Wants), else null. */
+  universe: { symbols: string[]; shape: ChainShape; asOfSession: string | null };
   stats: string[];
+  statsAsOfSession: string | null;
   indexQuotes: string[];
   indexBars: { symbol: string; from: string }[];
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
@@ -150,8 +163,10 @@ export function planWants(w: Wants, c: PlanContext): Plan {
     universe: {
       symbols: cu ? cu.symbols.filter((s) => !eodSet.has(s) && stale(c.lastChainPush(s), c.now, cu.maxAgeS)) : [],
       shape: cu ? cu.shape : { expiries: 6, moneyness: 0.2 },
+      asOfSession: cu?.asOfSession ?? null,
     },
     stats: w.underlyingStats ? w.underlyingStats.symbols.filter((s) => stale(c.lastStatsPush(s), c.now, w.underlyingStats!.maxAgeS)) : [],
+    statsAsOfSession: w.underlyingStats?.asOfSession ?? null,
     indexQuotes: w.indexSymbols,
     indexBars: w.indexBars.filter((x) => !c.attemptedWithin(ledgerKey.indexBars(x.symbol), HIST_RETRY_MS)),
     optionBars: w.optionBars.filter((o) => o.sessions.length > 0 && !c.attemptedWithin(ledgerKey.optionBars(o.symbol, o.sessions), HIST_RETRY_MS)),

@@ -22,7 +22,8 @@ describe("parseWants", () => {
   it("parses the full §6 shape", () => {
     const w = parseWants(RAW);
     expect(w.ivHistory[1]).toEqual({ symbol: "MSFT", from: "2026-11-01" });
-    expect(w.chainUniverse).toEqual({ symbols: ["AAPL", "MSFT", "TSLA"], maxAgeS: 3600, shape: { expiries: 6, moneyness: 0.2 } });
+    expect(w.chainUniverse).toEqual({ symbols: ["AAPL", "MSFT", "TSLA"], maxAgeS: 3600, shape: { expiries: 6, moneyness: 0.2 }, asOfSession: null });
+    expect(w.underlyingStats?.asOfSession).toBeNull();
     expect(w.eodChains?.notBefore).toBe(Date.parse("2026-11-20T21:20:00Z"));
     expect(w.optionBars[0]).toEqual({ symbol: "AAPL", sessions: ["2026-11-18"], shape: { expiries: 6, moneyness: 0.15 } });
     expect(w.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }, { symbol: "VIX", from: "2026-11-19" }]);
@@ -43,6 +44,20 @@ describe("parseWants", () => {
     expect(w.onDemandMaxAgeS).toBe(120);
     expect(w.hvHistory).toEqual([]);
     expect(w.historySymbols).toBeNull();
+  });
+
+  it("reads an after-hours fill (as_of_session) and plans it as one", () => {
+    const fill = parseWants({
+      underlying_stats: { symbols: ["AAPL", "KO"], max_age_s: 21_600, as_of_session: "2026-11-20" },
+      chain_universe: { symbols: ["AAPL"], max_age_s: 21_600, expiries: 6, moneyness: 0.2, as_of_session: "2026-11-20" },
+    });
+    expect(fill.underlyingStats).toEqual({ symbols: ["AAPL", "KO"], maxAgeS: 21_600, asOfSession: "2026-11-20" });
+    const sat = Date.parse("2026-11-21T17:00:00Z");
+    const p = planWants(fill, ctx(sat, { lastStatsPush: (s) => (s === "KO" ? sat - 3600_000 : undefined) }));
+    expect(p.stats).toEqual(["AAPL"]);                       // KO was pushed an hour ago: a fill is pushed once
+    expect(p.statsAsOfSession).toBe("2026-11-20");
+    expect(p.universe).toMatchObject({ symbols: ["AAPL"], asOfSession: "2026-11-20" });
+    expect(() => parseWants({ underlying_stats: { symbols: [], max_age_s: 60, as_of_session: "Friday" } })).toThrow(/as_of_session/);
   });
 
   it("fails fast on malformed sections", () => {
