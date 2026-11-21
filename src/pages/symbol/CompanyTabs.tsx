@@ -2,12 +2,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
-import type { ColumnDef, FinTable, ReportRow } from "../../api/types";
+import type { ColumnDef, FinTable, Insiders, ReportRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
 import { AsOf, Async, Card, Empty, NullValue, Segmented } from "../../components/ui";
-import { fmtDateTime } from "../../lib/format";
+import { fmtDateTime, fundamentalText } from "../../lib/format";
+import { sellSplit } from "../../lib/insiders";
 import { useSym } from "./shared";
 
 function FinTableView({ t }: { t: FinTable | null }) {
@@ -18,7 +19,7 @@ function FinTableView({ t }: { t: FinTable | null }) {
         <thead><tr><th>{t.title}</th>{t.periods.map((p) => <th key={p} className="num">{p}</th>)}</tr></thead>
         <tbody>
           {t.rows.map((r) => (
-            <tr key={r.label}><td>{r.label}</td>{r.values.map((v, i) => <td key={i} className="num">{v ?? <NullValue />}</td>)}</tr>
+            <tr key={r.label}><td>{r.label}</td>{r.values.map((v, i) => <td key={i} className="num">{v !== null ? fundamentalText(r.label, v) : <NullValue hint="Not reported for this period." />}</td>)}</tr>
           ))}
         </tbody>
       </table>
@@ -36,9 +37,10 @@ export function FundamentalsTab() {
     <div className="stack">
       <Async state={st}>{(f) => (
         <>
-          <Card title="Key statistics" subtitle={<AsOf ts={f.fetched_at} label="fetched" />}>
+          <Card title="Key statistics" subtitle={<>Nasdaq company data · <AsOf ts={f.fetched_at} label="fetched" /></>}>
+            <p className="muted small">Figures as Nasdaq reports them; the Summary tab's market cap, yield and other values are OptionLens's own, from its latest prices.</p>
             <StatGrid items={[
-              ...f.key_stats.map((k) => ({ label: k.label, value: k.value, fmt: "text" as const })),
+              ...f.key_stats.map((k) => ({ label: k.label, value: k.value !== null ? fundamentalText(k.label, k.value) : null, fmt: "text" as const, hint: "Not provided by Nasdaq for this symbol." })),
               { label: "Payback period", node: <StatValue value={f.payback_years} kind="num" hint="Needs positive trailing free cash flow." />, sub: "market cap ÷ trailing FCF (years)" },
             ]} />
           </Card>
@@ -52,7 +54,7 @@ export function FundamentalsTab() {
           </Card>
         </>
       )}</Async>
-      <Card title="Peer comparison" subtitle="same industry, top 10 by market cap">
+      <Card title="Peer comparison" subtitle="same industry, top 10 by market cap · OptionLens figures">
         <Async state={peers}>{(r) => <DataTable columns={r.columns} rows={r.rows} csvName={`${sym}-peers`} minimal />}</Async>
       </Card>
     </div>
@@ -76,14 +78,29 @@ export function InsidersTab() {
   return (
     <Async state={st}>{(d) => (
       <div className="stack">
-        <Card title="Insider activity summary">
-          <DataTable minimal rowLink={false} rows={d.summary as unknown as ReportRow[]} columns={[{ key: "label", label: "", fmt: "text" }, { key: "m3", label: "3 months", fmt: "text" }, { key: "m12", label: "12 months", fmt: "text" }]} />
+        <Card title="Insider activity summary" subtitle="Nasdaq counts every kind of sale together">
+          <DataTable minimal rowLink={false} rows={d.summary.map((r) => ({ ...r, label: /^number of sells$/i.test(r.label) ? "Number of sells (all kinds)" : r.label })) as unknown as ReportRow[]}
+            columns={[{ key: "label", label: "", fmt: "text" }, { key: "m3", label: "3 months", fmt: "text" }, { key: "m12", label: "12 months", fmt: "text" }]}
+            emptyState="Nasdaq has no insider summary for this symbol." />
+          <SellSplitLine trades={d.trades} />
         </Card>
         <Card title="Transactions">
-          <DataTable columns={INSIDER_COLUMNS} rows={d.trades as unknown as ReportRow[]} rowLink={false} csvName={`${sym}-insiders`} />
+          <DataTable columns={INSIDER_COLUMNS} rows={d.trades as unknown as ReportRow[]} rowLink={false} csvName={`${sym}-insiders`}
+            emptyState="No insider transactions reported to Nasdaq for this symbol." />
         </Card>
       </div>
     )}</Async>
+  );
+}
+
+/** Automatic (10b5-1 plan) vs open-market sells among the listed transactions. */
+function SellSplitLine({ trades }: { trades: Insiders["trades"] }) {
+  const s = sellSplit(trades);
+  if (!s.total) return null;
+  return (
+    <p className="small top-gap" title="Automatic Sell = sold under a pre-arranged Rule 10b5-1 trading plan; Sell = an open-market sale the insider chose to make.">
+      Of the {s.total} sells listed below: <b>{s.automatic}</b> automatic (10b5-1 plan), <b>{s.openMarket}</b> open market{s.total - s.automatic - s.openMarket > 0 ? `, ${s.total - s.automatic - s.openMarket} other` : ""}.
+    </p>
   );
 }
 

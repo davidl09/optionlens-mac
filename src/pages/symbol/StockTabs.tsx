@@ -3,22 +3,21 @@ import { useMemo, useState } from "react";
 import { api } from "../../api/client";
 import type { ColumnDef, PriceAction, ReportRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
-import { CandlesVolume, ChartMarker } from "../../components/charts/Candles";
+import { CandlesVolume, ChartMarker, SMA_LENGTHS, type SmaLength, smasWithData } from "../../components/charts/Candles";
 import { LineChart, LineSeries } from "../../components/charts/Charts";
 import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
-import { Async, Card, InfoBox, Segmented } from "../../components/ui";
+import { Async, Card, EmptyNotice, InfoBox, Segmented } from "../../components/ui";
 import { fmt } from "../../lib/format";
 import { useQueryValue, useSym } from "./shared";
 
 const RANGES = ["1m", "3m", "6m", "1y", "3y", "5y", "10y"] as const;
-const SMAS = [20, 50, 200];
 
 export function ChartTab() {
   const sym = useSym();
   const [range, setRange] = useQueryValue("range", "1y");
-  const [smas, setSmas] = useState<number[]>([50, 200]);
+  const [smas, setSmas] = useState<SmaLength[]>([50, 200]);
   const bars = useApi(() => api.bars(sym, range ?? "1y"), [sym, range]);
   const events = useApi(() => api.events(sym), [sym]);
   const markers = useMemo<ChartMarker[]>(() => (events.data?.items ?? [])
@@ -30,7 +29,7 @@ export function ChartTab() {
       <div className="toolbar">
         <Segmented label="Range" value={range ?? "1y"} onChange={setRange} options={RANGES.map((r) => ({ value: r, label: r.toUpperCase() }))} />
         <div className="toggle-chips">
-          {SMAS.map((n) => (
+          {SMA_LENGTHS.map((n) => (
             <label key={n} className={`chip ${smas.includes(n) ? "on" : ""}`}>
               <input type="checkbox" checked={smas.includes(n)} onChange={() => setSmas((s) => (s.includes(n) ? s.filter((x) => x !== n) : [...s, n].sort((a, b) => a - b)))} />
               SMA {n}
@@ -39,12 +38,19 @@ export function ChartTab() {
         </div>
       </div>
     }>
-      <Async state={bars}>{(b) => b.length ? (
-        <>
-          <CandlesVolume bars={b} smas={smas} markers={markers} />
-          <div className="legend-note small muted"><span className="dot e" /> E = earnings · <span className="dot d" /> D = ex-dividend · SMAs use bars in the selected range only</div>
-        </>
-      ) : <div className="empty">No price history yet.</div>}</Async>
+      <Async state={bars}>{(b) => {
+        if (!b.length) return <EmptyNotice>No daily price history stored for {sym} yet (it is collected from Nasdaq every evening).</EmptyNotice>;
+        const missing = smas.filter((n) => !smasWithData(b, [n]).length);
+        return (
+          <>
+            <CandlesVolume bars={b} smas={smas} markers={markers} />
+            <div className="legend-note small muted">
+              <span className="dot e" /> E = earnings · <span className="dot d" /> D = ex-dividend · SMAs use the full stored price history
+              {missing.length > 0 && <> · {missing.map((n) => `SMA ${n}`).join(", ")}: not enough stored history yet</>}
+            </div>
+          </>
+        );
+      }}</Async>
     </Card>
   );
 }
@@ -152,7 +158,7 @@ export function DividendsTab() {
         </Card>
         <Card title="Dividend capture" subtitle="Buy at close before ex-date, sell at close on ex-date">
           <StatGrid cols={4} items={[
-            { label: "Events", value: d.capture_stats.count, fmt: "int" },
+            { label: "Ex-dates measured", value: d.capture_stats.count, fmt: "int", title: "Ex-dates in the capture table: those with a close on the day before and on the ex-date (the history below lists every payment)" },
             { label: "Avg total return", value: d.capture_stats.avg_total_return, fmt: "pct_signed" },
             { label: "Win rate", value: d.capture_stats.win_rate, fmt: "pct" },
             { label: "Avg recovery (days)", value: d.capture_stats.avg_recovery_days, fmt: "num" },

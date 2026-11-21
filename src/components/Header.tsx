@@ -18,14 +18,19 @@ interface Menu { label: string; sections: MenuSection[] }
 
 const reportItem = (d: ReportDef): MenuItem => ({ to: `/reports/${d.id}`, label: d.title, title: d.description });
 
+/** Report links that also appear in the Market menu (one name per report: always its engine title). */
+const MARKET_SNAPSHOT = ["market-movers", "performance-by-sector", "options-broad-view", "earnings-upcoming-summary"];
+
+/** Where a menu link came from, so a report page's breadcrumb names the menu the user used (Market vs Stocks). */
+export interface NavFrom { from?: string }
+
 export function buildMenus(defs: ReportDef[]): Menu[] {
   const byCat = (c: ReportDef["category"]) => defs.filter((d) => d.category === c).map(reportItem);
-  const known = new Set(defs.map((d) => d.id));
-  const fixedReports = (ids: [string, string][]) => ids.filter(([id]) => known.has(id)).map(([id, label]) => ({ to: `/reports/${id}`, label }));
+  const byId = new Map(defs.map((d) => [d.id, d]));
   return [
     { label: "Market", sections: [
       { items: [{ to: "/", label: "Dashboard" }, { to: "/reports", label: "All reports" }] },
-      { title: "Snapshot", items: fixedReports([["market-movers", "Market movers"], ["performance-by-sector", "Sector performance"], ["options-broad-view", "Options broad view"], ["earnings-upcoming-summary", "Earnings week ahead"]]) },
+      { title: "Snapshot", items: MARKET_SNAPSHOT.flatMap((id) => { const d = byId.get(id); return d ? [reportItem(d)] : []; }) },
     ] },
     { label: "Options", sections: [{ items: byCat("Options") }] },
     { label: "Strategies", sections: [
@@ -58,7 +63,7 @@ function MenuPanel({ menu, onPick }: { menu: Menu; onPick: () => void }) {
       {menu.sections.map((s, i) => (
         <div className="menu-section" key={i}>
           {s.title && <div className="menu-section-title">{s.title}</div>}
-          <ul>{s.items.map((it) => <li key={it.to}><Link to={it.to} title={it.title} onClick={onPick}>{it.label}</Link></li>)}</ul>
+          <ul>{s.items.map((it) => <li key={it.to}><Link to={it.to} state={{ from: menu.label } satisfies NavFrom} title={it.title} onClick={onPick}>{it.label}</Link></li>)}</ul>
         </div>
       ))}
       {!count && <div className="muted small pad">No reports available.</div>}
@@ -116,7 +121,7 @@ export function Header() {
 export function Footer() {
   return (
     <footer className="app-footer">
-      <span>OptionLens · data from IBKR (real-time or <span className="badge warn">delayed</span> per your subscriptions) · model-priced rows are labelled <span className="badge warn">model</span></span>
+      <span>OptionLens · data from IBKR (real-time or <span className="badge info">delayed</span> per your subscriptions) · model-priced rows are labelled <span className="badge warn">model</span></span>
       <span><NavLink to="/status">Data status</NavLink> · <NavLink to="/about">About & limitations</NavLink></span>
     </footer>
   );

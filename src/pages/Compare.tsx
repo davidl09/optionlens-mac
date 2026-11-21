@@ -7,7 +7,9 @@ import { useApi } from "../api/useApi";
 import { LineChart, LineSeries } from "../components/charts/Charts";
 import { usePalette } from "../components/charts/EChart";
 import { DataTable, inferColumns } from "../components/DataTable";
-import { Async, Card, InfoBox } from "../components/ui";
+import { ChainCollectionNote } from "../components/Collection";
+import { Async, Card, InfoBox, NotesBox } from "../components/ui";
+import { isCoverageNote, ReportEmpty } from "./ReportPage";
 import { parseSymbols } from "../lib/params";
 
 const MAX_SERIES = 8;  // categorical palette size; more symbols would recycle colours
@@ -76,8 +78,11 @@ export function CompareStraddlePage() {
       </Card>
       <Async state={st}>{(r) => (
         <>
-          {r.notes.length > 0 && <InfoBox>{r.notes.join(" ")}</InfoBox>}
-          <Card className="flush"><DataTable columns={r.columns} rows={r.rows} csvName="compare-straddle" /></Card>
+          <NotesBox notes={r.notes.filter((n) => !isCoverageNote(n))} method={r.method} />
+          {r.rows.some((row) => row.straddle == null) && (
+            <InfoBox>No stored option chain for {r.rows.filter((row) => row.straddle == null).map((row) => row.symbol).join(", ")} yet: their columns stay empty. <ChainCollectionNote /></InfoBox>
+          )}
+          <Card className="flush"><DataTable columns={r.columns} rows={r.rows} csvName="compare-straddle" emptyState={<ReportEmpty result={r} chainBased />} /></Card>
         </>
       )}</Async>
     </div>

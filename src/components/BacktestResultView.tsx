@@ -6,7 +6,7 @@ import { BarChart, LineChart, LineSeries } from "./charts/Charts";
 import { usePalette } from "./charts/EChart";
 import { DataTable } from "./DataTable";
 import { StatGrid } from "./StatGrid";
-import { Card, InfoBox } from "./ui";
+import { Card, EmptyNotice, NotesBox } from "./ui";
 
 export const TRADE_COLUMNS: ColumnDef[] = [
   { key: "symbol", label: "Symbol", fmt: "symbol" },
@@ -40,7 +40,7 @@ export function BacktestResultView({ result, csvName = "backtest-trades" }: { re
 
   return (
     <div className="stack">
-      {result.notes.length > 0 && <InfoBox title="Notes:">{result.notes.join(" ")}</InfoBox>}
+      <NotesBox title="Notes:" notes={result.notes} />
       <Card title="Summary" subtitle={`${s.real_count} real-priced · ${s.model_count} model-priced`}>
         <StatGrid items={[
           { label: "Trades", value: s.count, fmt: "int" },
@@ -52,19 +52,19 @@ export function BacktestResultView({ result, csvName = "backtest-trades" }: { re
           { label: "Sharpe", value: s.sharpe, fmt: "num2" },
           { label: "Max drawdown", value: s.max_drawdown, fmt: "pct_signed" },
           { label: "Avg hold (days)", value: s.avg_hold_days, fmt: "num" },
-          { label: "Total P/L", value: s.total_pnl, fmt: "money", signed: true },
+          { label: "Total P/L", value: s.total_pnl, fmt: "money", signed: true, sub: s.starting_capital != null ? `on ${fmt(s.starting_capital, "money")} starting capital` : undefined },
         ]} />
       </Card>
       <div className="grid-2">
         <Card title="Equity curve">
-          {result.equity.length ? <LineChart series={equity} yFmt="money" height={260} /> : <div className="empty">No trades.</div>}
+          {result.equity.length ? <LineChart series={equity} yFmt="money" height={260} /> : <EmptyNotice>No trades: the entry rule never triggered in this period.</EmptyNotice>}
         </Card>
         <Card title="Return distribution">
-          {hist.data.length ? <BarChart categories={hist.cats} series={[{ name: "Trades", data: hist.data }]} yFmt="int" height={260} /> : <div className="empty">No trades.</div>}
+          {hist.data.length ? <BarChart categories={hist.cats} series={[{ name: "Trades", data: hist.data }]} yFmt="int" height={260} /> : <EmptyNotice>No trades: the entry rule never triggered in this period.</EmptyNotice>}
         </Card>
       </div>
       <Card title="Trades">
-        <DataTable columns={TRADE_COLUMNS} rows={tradesAsRows(result.trades)} csvName={csvName} rowLink={false} maxHeight={480} />
+        <DataTable columns={TRADE_COLUMNS} rows={tradesAsRows(result.trades)} csvName={csvName} rowLink={false} maxHeight={480} emptyState="No trades: the entry rule never triggered in this period." />
       </Card>
     </div>
   );

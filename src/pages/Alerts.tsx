@@ -144,14 +144,14 @@ export default function Alerts() {
                       <td>{a.last_fired_at ? fmtDateTime(a.last_fired_at) : <span className="muted">never</span>}</td>
                       <td className="row-actions">
                         <button className="btn btn-sm btn-ghost" onClick={() => setEditing(a)}>Edit</button>
-                        <button className="btn btn-sm btn-ghost" onClick={() => void act(api.deleteAlert(a.id))}>Delete</button>
+                        <button className="btn btn-sm btn-ghost" onClick={() => { if (window.confirm(`Delete alert “${describe(a, wls)}”?`)) void act(api.deleteAlert(a.id)); }}>Delete</button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : <Empty>No alerts yet.</Empty>}</Async>
+          ) : <Empty>No alerts yet. Create one with the form above.</Empty>}</Async>
         </Card>
         <Feed />
       </div>

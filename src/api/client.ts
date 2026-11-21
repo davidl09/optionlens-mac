@@ -91,18 +91,27 @@ function setConnectivity(next: Connectivity): void {
   emit();
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+/** A GET the engine has not answered by then fails with a retryable error instead of loading forever. */
+export const GET_TIMEOUT_MS = 45_000;
+
+async function request<T>(method: string, url: string, body?: unknown, timeoutMs: number | null = null): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (conn?.token) headers.Authorization = `Bearer ${conn.token}`;
+  const ctl = timeoutMs !== null ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs!) : null;
   let res: Response;
+  let text: string;
   try {
-    res = await fetch(`${conn?.baseUrl ?? ""}${url}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    res = await fetch(`${conn?.baseUrl ?? ""}${url}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctl?.signal });
+    text = await res.text();
   } catch {
+    if (ctl?.signal.aborted) throw new ApiError(0, `No answer from the engine after ${Math.round(timeoutMs! / 1000)} s (it may be waiting on a slow data source).`, "timeout");
     setConnectivity("unreachable");
     throw new ApiError(0, "Network error — the OptionLens engine is not reachable.");
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
-  const text = await res.text();
   let parsed: unknown = null;
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = null; }
@@ -120,7 +129,7 @@ const cache = new Map<string, { at: number; promise: Promise<unknown> }>();
 function get<T>(url: string, ttl = DEFAULT_TTL_MS): Promise<T> {
   const hit = cache.get(url);
   if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.promise as Promise<T>;
-  const promise = request<T>("GET", url);
+  const promise = request<T>("GET", url, undefined, GET_TIMEOUT_MS);
   if (ttl > 0) {
     cache.set(url, { at: Date.now(), promise });
     promise.catch(() => cache.delete(url));

@@ -119,3 +119,30 @@ export const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 export function plural(n: number, word: string): string {
   return n === 1 ? word : `${word}s`;
 }
+
+/**
+ * A value from the fundamentals source (Nasdaq strings) as shown: liquidity ratios that the source writes as
+ * percentages ("Current Ratio" "102.31998%") become plain ratios ("1.02"), market caps in full dollars
+ * ("4,978,144,265,920") the compact form used everywhere else ("4.98T"). Anything else is shown as given.
+ */
+export function fundamentalText(label: string, value: string): string {
+  const v = value.trim();
+  const pct = /^(-?[\d,]*\.?\d+)%$/.exec(v);
+  if (pct && /\bratio\b/i.test(label) && !/payout/i.test(label)) {
+    const n = Number(pct[1].replace(/,/g, "")) / 100;
+    if (Number.isFinite(n)) return NF2.format(n);
+  }
+  const dollars = /^\$?(\d{1,3}(,\d{3}){2,})$/.exec(v);
+  if (dollars && /market cap/i.test(label)) return bigText(Number(dollars[1].replace(/,/g, "")));
+  return value;
+}
+
+const SECTOR_SHORT: Record<string, string> = {
+  "consumer discretionary": "Cons. Disc.", "consumer staples": "Cons. Staples", "communication services": "Comm. Svcs",
+  "communications": "Comm. Svcs", "information technology": "Technology", "health care": "Health Care",
+};
+
+/** A sector name short enough for a tile (deliberate abbreviations, never cut mid-word). */
+export function shortSector(name: string): string {
+  return SECTOR_SHORT[name.trim().toLowerCase()] ?? name;
+}

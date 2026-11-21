@@ -1,8 +1,8 @@
 // Small presentational primitives.
-import { createContext, ReactNode, RefObject, useContext, useEffect } from "react";
+import { createContext, ReactNode, RefObject, useContext, useEffect, useRef } from "react";
 import type { DataSource } from "../api/types";
 import type { ApiState } from "../api/useApi";
-import { fmtDateTime, NULL_TEXT } from "../lib/format";
+import { fmt, fmtDateTime, NULL_TEXT } from "../lib/format";
 
 export function Spinner({ label = "Loading…" }: { label?: string }) {
   return <div className="spinner" role="status"><span className="spinner-dot" />{label}</div>;
@@ -20,6 +20,55 @@ export function ErrorBox({ error, onRetry }: { error: Error | string; onRetry?: 
 
 export function InfoBox({ children, title }: { children: ReactNode; title?: string }) {
   return <div className="info-box">{title && <strong>{title} </strong>}{children}</div>;
+}
+
+/** Collapsed detail (e.g. the precise method behind plain-language notes). */
+export function Disclosure({ summary, children }: { summary: ReactNode; children: ReactNode }) {
+  return <details className="disclosure"><summary>{summary}</summary><div className="disclosure-body">{children}</div></details>;
+}
+
+/** Notes in plain words as a list; the precise method (when there is one) collapsed underneath. */
+export function NotesBox({ notes, method, title = "Data notes:" }: { notes: string[]; method?: string[]; title?: string }) {
+  if (!notes.length && !method?.length) return null;
+  return (
+    <InfoBox title={title}>
+      {notes.length > 0 && <ul className="notes">{notes.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+      {method && method.length > 0 && (
+        <Disclosure summary="Method">
+          <ul className="notes">{method.map((n, i) => <li key={i}>{n}</li>)}</ul>
+        </Disclosure>
+      )}
+    </InfoBox>
+  );
+}
+
+/** Why a list or table is empty, in place of a bare "No data." */
+export function EmptyNotice({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`empty-notice ${className}`} role="status">{children}</div>;
+}
+
+/** A file path that wraps only after a separator, never inside a folder name. */
+export function PathText({ path }: { path: string }) {
+  const parts = path.split(/(?<=[/\\])/);
+  return <code className="path">{parts.map((p, i) => <span key={i}>{p}{i < parts.length - 1 && <wbr />}</span>)}</code>;
+}
+
+/** A progress bar with its label beside it (never on top of the fill). */
+export function Progress({ value, label, title }: { value: number; label?: ReactNode; title?: string }) {
+  const v = Math.max(0, Math.min(1, value));
+  return (
+    <div className="progress-row" title={title}>
+      <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)}><div style={{ width: `${Math.round(v * 100)}%` }} /></div>
+      <span className="progress-label">{label ?? fmt(v, "pct")}</span>
+    </div>
+  );
+}
+
+export function Popover({ open, onClose, children, align = "left" }: { open: boolean; onClose: () => void; children: ReactNode; align?: "left" | "right" }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useClickOutside(ref, onClose, open);
+  if (!open) return null;
+  return <div ref={ref} className={`popover ${align}`} onClick={(e) => e.stopPropagation()}>{children}</div>;
 }
 
 export const DEFAULT_NULL_HINT = "Not available yet — needs more collected history, or the source does not provide it.";
@@ -56,7 +105,7 @@ export function SourceBadge({ source, delayed = false }: { source: DataSource | 
   return (
     <>
       {s && <span className={`badge ${s.tone} source-badge`} title={s.title}>{s.label}</span>}
-      {delayed && <span className="badge warn source-badge" title="15-minute delayed data (no real-time subscription for this contract class)">delayed</span>}
+      {delayed && <span className="badge info source-badge" title="15-minute delayed data (no real-time subscription for this contract class)">delayed</span>}
     </>
   );
 }

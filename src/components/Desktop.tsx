@@ -7,6 +7,7 @@ import type { BridgeStatus } from "../../electron/shared/api";
 import { api, configureClient } from "../api/client";
 import { useConnectivity } from "../api/useApi";
 import { desktop } from "../desktop";
+import { bridgePillLabel } from "../lib/status";
 import { useBridgeStatus, useEngineStatus } from "../state/desktop";
 import { Spinner } from "./ui";
 
@@ -72,9 +73,10 @@ export function NavigationListener() {
   return null;
 }
 
+/** Connected is good news even with delayed data (a normal state, said in words); only a pause warns. */
 export function bridgeTone(b: BridgeStatus): "pos" | "warn" | "neutral" {
   if (!b.enabled || b.tws !== "connected") return "neutral";
-  return b.paused || b.notes.length ? "warn" : "pos";
+  return b.paused ? "warn" : "pos";
 }
 
 export function bridgeSummary(b: BridgeStatus): string {
@@ -89,7 +91,7 @@ export function BridgeIndicator() {
   if (!b) return null;
   return (
     <Link to="/settings" className={`bridge-pill ${bridgeTone(b)}`} title={bridgeSummary(b)} aria-label={`IBKR bridge: ${bridgeSummary(b)}`}>
-      <span className="dot" aria-hidden="true" />IBKR{b.current ? <span className="bridge-busy" aria-hidden="true">…</span> : null}
+      <span className="dot" aria-hidden="true" />{bridgePillLabel(b)}{b.current ? <span className="bridge-busy" aria-hidden="true" title={b.current.label}>…</span> : null}
     </Link>
   );
 }

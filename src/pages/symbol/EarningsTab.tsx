@@ -13,7 +13,7 @@ import { useSym } from "./shared";
 
 const EVENT_COLUMNS: ColumnDef[] = [
   { key: "date", label: "Date", fmt: "date" },
-  { key: "timing", label: "Time", fmt: "badge" },
+  { key: "timing_label", label: "Time", fmt: "badge", description: "BMO = before the open, AMC = after the close; “(inferred)” = read off which day gapped more; n/a = unknown" },
   { key: "timing_inferred", label: "Timing inferred", fmt: "bool", default_hidden: true, description: "Timing unknown; inferred from which day gapped more" },
   { key: "reaction_date", label: "Reaction day", fmt: "date", default_hidden: true },
   { key: "fiscal_quarter", label: "Fiscal qtr", fmt: "text" },
@@ -134,7 +134,8 @@ function StrategyPanel({ sym }: { sym: string }) {
       {strategy && (
         <div className="top-gap">
           <h4 className="sub-title">Trades · {label} <button className="link-btn" onClick={() => setStrategy(null)}>close</button></h4>
-          <Async state={trades}>{(t) => <DataTable columns={TRADE_COLUMNS} rows={tradesAsRows(t)} rowLink={false} csvName={`${sym}-${strategy}-trades`} />}</Async>
+          <Async state={trades}>{(t) => <DataTable columns={TRADE_COLUMNS} rows={tradesAsRows(t)} rowLink={false} csvName={`${sym}-${strategy}-trades`}
+            emptyState="No trades for this strategy: none of the past events had the prices it needs." />}</Async>
         </div>
       )}
     </Card>
@@ -153,14 +154,15 @@ function EarningsBody({ e, sym }: { e: Earnings; sym: string }) {
           { label: "Excess implied", value: n.excess_implied_move_pct, fmt: "pct", title: "Event-day move implied beyond the normal daily volatility (term-structure method)" },
           { label: "Avg |move| (hist)", value: n.avg_abs_move_pct, fmt: "pct" },
           { label: "Implied / hist", value: n.implied_vs_hist_ratio, fmt: "ratio" },
-        ]} /> : <div className="muted small">No upcoming earnings date known for {sym}.</div>}
+        ]} /> : <div className="muted small">No upcoming earnings date for {sym} in the Nasdaq calendar (collected daily, 90 days ahead).</div>}
       </Card>
       <Card title="Reaction statistics" actions={<Segmented label="Scope" value={scope} onChange={setScope} options={[{ value: "recent", label: "Last 12" }, { value: "all", label: "All" }]} />}>
         <StatGrid items={statItems(scope === "recent" ? e.stats : e.stats_all)} />
       </Card>
       {e.events.length ? <Charts events={e.events} /> : <InfoBox>No past earnings events found.</InfoBox>}
       <Card title="Earnings history">
-        <DataTable columns={EVENT_COLUMNS} rows={e.events as unknown as ReportRow[]} rowLink={false} csvName={`${sym}-earnings`} maxHeight={480} />
+        <DataTable columns={EVENT_COLUMNS} rows={e.events.map((x) => ({ ...x, timing_label: x.timing_label ?? (x.timing === "unknown" ? "n/a" : x.timing.toUpperCase()) })) as unknown as ReportRow[]}
+          rowLink={false} csvName={`${sym}-earnings`} maxHeight={480} emptyState="No past earnings events with price history are stored." />
       </Card>
       <StrategyPanel sym={sym} />
     </div>

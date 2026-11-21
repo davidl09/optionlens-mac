@@ -12,6 +12,7 @@ import { fmt, plural } from "../../lib/format";
 import { IDEA_COLUMNS, ideasAsRows, ivAsOf, useSym } from "./shared";
 
 export const MIN_IV_HISTORY = 20;
+const OPT_HINT = "Collected by the IBKR bridge during market hours; none stored for the latest session yet.";
 
 export function ivHistoryHint(days: number): string {
   const need = Math.max(0, MIN_IV_HISTORY - days);
@@ -71,11 +72,11 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
             { label: "IV rank", value: s.iv_rank, fmt: "pct", hint: ivHint, sub: `${s.iv_history_days}d history` },
             { label: "IV percentile", value: s.iv_percentile, fmt: "pct", hint: ivHint },
             { label: "HV20", value: s.hv20, fmt: "vol" },
-            { label: "IV / HV", value: s.iv_hv_ratio, fmt: "ratio" },
-            { label: "Call / put vol", node: <span><StatValue value={s.call_volume} kind="int" /> / <StatValue value={s.put_volume} kind="int" /></span> },
+            { label: "IV / HV", value: s.iv_hv_ratio, fmt: "ratio", hint: "Needs both IV30 (latest session) and HV20." },
+            { label: "Call / put vol", node: <span><StatValue value={s.call_volume} kind="int" hint={OPT_HINT} /> / <StatValue value={s.put_volume} kind="int" hint={OPT_HINT} /></span> },
             { label: "Opt vol vs 20d", value: s.rel_option_volume, fmt: "ratio", sub: s.avg_option_volume_20d !== null ? `avg ${fmt(s.avg_option_volume_20d, "int")} · ${s.avg_option_volume_days}d` : undefined, hint: "Needs at least one prior day of collected option volume.", title: s.avg_option_volume_days < 20 ? `Average over ${s.avg_option_volume_days} prior collected day(s) (target 20)` : undefined },
-            { label: "P/C volume", value: s.pc_volume_ratio, fmt: "ratio" },
-            { label: "Total OI", value: s.total_oi, fmt: "int" },
+            { label: "P/C volume", value: s.pc_volume_ratio, fmt: "ratio", hint: OPT_HINT, title: "Put/call ratio: put volume ÷ call volume" },
+            { label: "Total OI", value: s.total_oi, fmt: "int", hint: OPT_HINT, title: "Open interest: contracts open across all expiries" },
             { label: "RSI 14", value: s.rsi14, fmt: "num" },
             { label: "ATR 14", value: s.atr14_pct, fmt: "pct" },
             { label: "SMA 20 / 50 / 200", node: <span><StatValue value={s.sma20} kind="num2" /> · <StatValue value={s.sma50} kind="num2" /> · <StatValue value={s.sma200} kind="num2" /></span> },
@@ -88,14 +89,14 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
               { label: "Implied move", value: ne.implied_move_pct, fmt: "pct", hint: "No straddle available covering the event." },
               { label: "Avg |move|", value: ne.avg_abs_move_pct, fmt: "pct", hint: "No past earnings reactions in price history." },
               { label: "Implied / hist", value: ne.implied_move_pct !== null && ne.avg_abs_move_pct ? ne.implied_move_pct / ne.avg_abs_move_pct : null, fmt: "ratio" },
-            ]} /> : <div className="muted small">No upcoming earnings date known.</div>}
+            ]} /> : <div className="muted small">No upcoming earnings date in the Nasdaq calendar (collected daily, 90 days ahead).</div>}
           </Card>
           <Card title="Next ex-dividend">
             {nd ? <StatGrid cols={2} items={[
               { label: "Ex-date", value: nd.ex_date, fmt: "date", sub: `in ${nd.days}d` },
               { label: "Amount", value: nd.amount, fmt: "money" },
               { label: "Yield", value: nd.yield, fmt: "pct" },
-            ]} /> : <div className="muted small">No upcoming ex-dividend date.</div>}
+            ]} /> : <div className="muted small">No announced ex-dividend date{s.kind === "index" ? " (indices pay none)" : ""}.</div>}
           </Card>
           <Card title="Support / resistance" subtitle="6-month pivot clusters">
             <div className="grid-2 tight">
@@ -118,7 +119,8 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
         <Card title="IV30 vs HV20, 1 year" subtitle={`IV history: ${s.iv_history_days} ${plural(s.iv_history_days, "day")}`}><LineChart series={vol} yFmt="vol" height={220} /></Card>
       </div>
       <Card title="Top trade ideas" actions={<Link to={`/s/${s.symbol}/ideas`} className="small">All ideas →</Link>}>
-        <DataTable columns={IDEA_COLUMNS} rows={ideasAsRows(s.ideas)} minimal rowLink={false} renderCell={unlimitedCell} emptyText="No ideas" />
+        <DataTable columns={IDEA_COLUMNS} rows={ideasAsRows(s.ideas)} minimal rowLink={false} renderCell={unlimitedCell}
+          emptyState={s.optionable === false ? "No trade ideas: no listed options." : "No trade ideas yet: they are built from a stored option chain."} />
       </Card>
     </div>
   );

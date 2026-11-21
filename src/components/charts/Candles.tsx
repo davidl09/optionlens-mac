@@ -2,17 +2,30 @@
 import { useMemo } from "react";
 import type { Bar } from "../../api/types";
 import { fmt } from "../../lib/format";
-import { sma } from "../../lib/indicators";
 import { EChart, usePalette } from "./EChart";
 import { axisStyle, legendStyle, tooltipStyle } from "./common";
 
 export interface ChartMarker { date: string; kind: "E" | "D"; label: string }
 
-export function CandlesVolume({ bars, smas, markers, height = 460 }: { bars: Bar[]; smas: number[]; markers: ChartMarker[]; height?: number }) {
+export const SMA_LENGTHS = [20, 50, 200] as const;
+export type SmaLength = (typeof SMA_LENGTHS)[number];
+const SMA_KEY = { 20: "sma20", 50: "sma50", 200: "sma200" } as const;
+
+/** The engine's full-history SMA of each bar (null before enough history). */
+export function smaSeries(bars: Bar[], n: SmaLength): (number | null)[] {
+  return bars.map((b) => b[SMA_KEY[n]] ?? null);
+}
+
+/** SMA lengths with at least one value in these bars (only those get a line and a legend entry). */
+export function smasWithData(bars: Bar[], smas: readonly SmaLength[]): SmaLength[] {
+  return smas.filter((n) => bars.some((b) => b[SMA_KEY[n]] != null));
+}
+
+export function CandlesVolume({ bars, smas: wanted, markers, height = 460 }: { bars: Bar[]; smas: readonly SmaLength[]; markers: ChartMarker[]; height?: number }) {
   const p = usePalette();
   const option = useMemo(() => {
     const dates = bars.map((b) => b.date);
-    const closes = bars.map((b) => b.close);
+    const smas = smasWithData(bars, wanted);
     const index = new Map(dates.map((d, i) => [d, i]));
     const smaColors = [p.series[3], p.series[4], p.series[6]];
     const markPoints = markers
@@ -64,9 +77,9 @@ export function CandlesVolume({ bars, smas, markers, height = 460 }: { bars: Bar
           itemStyle: { color: p.up, color0: p.down, borderColor: p.up, borderColor0: p.down },
           markPoint: { data: markPoints, tooltip: { ...tooltipStyle(p), formatter: (it: { name: string }) => it.name } },
         },
-        ...smas.map((n, i) => ({
-          name: `SMA ${n}`, type: "line", data: sma(closes, n), showSymbol: false,
-          lineStyle: { width: 1.5, color: smaColors[i % smaColors.length] }, itemStyle: { color: smaColors[i % smaColors.length] },
+        ...smas.map((n) => ({
+          name: `SMA ${n}`, type: "line", data: smaSeries(bars, n), showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.5, color: smaColors[SMA_LENGTHS.indexOf(n)] }, itemStyle: { color: smaColors[SMA_LENGTHS.indexOf(n)] },
         })),
         {
           name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
@@ -74,6 +87,6 @@ export function CandlesVolume({ bars, smas, markers, height = 460 }: { bars: Bar
         },
       ],
     };
-  }, [p, bars, smas, markers]);
+  }, [p, bars, wanted, markers]);
   return <EChart option={option} height={height} ariaLabel="Price candlestick chart with volume" />;
 }

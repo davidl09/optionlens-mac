@@ -1,11 +1,12 @@
 // Generic table for any ColumnDef[] + rows: sort, per-column filters, column visibility,
 // pagination, CSV export, symbol/contract links, model-price badges.
-import { MouseEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MouseEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { ColumnDef, ColumnFilter, ReportRow } from "../api/types";
 import { toCsv, downloadText } from "../lib/csv";
 import { badgeTone, displayScale, fmt, isMissing, isNumericFmt, signClass } from "../lib/format";
-import { isDataSource, ModelBadge, NullValue, SourceBadge, useClickOutside } from "./ui";
+import { emptyColumnKeys, humanize } from "../lib/table";
+import { isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
 export interface SortState { key: string; dir: "asc" | "desc" }
 export interface TableState { sort: SortState | null; filters: Record<string, ColumnFilter>; hidden: string[] }
@@ -30,11 +31,16 @@ export interface DataTableProps {
   minimal?: boolean;
   pageSize?: number;
   maxHeight?: number | string;
+  /** Shown when the filters hide every row. */
   emptyText?: string;
+  /** Shown when there are no rows at all: say why (a reason, not a bare "No data"). */
+  emptyState?: ReactNode;
   rowClass?: (row: ReportRow) => string | undefined;
 }
 
 const LOW_CARDINALITY = 14;
+/** Text cells longer than this wrap (a sentence, e.g. a job's detail) instead of widening the table. */
+const LONG_TEXT = 60;
 const PAGE_SIZES = [50, 100, 250, 500];
 
 function filterActive(f: ColumnFilter | undefined): boolean {
@@ -173,14 +179,7 @@ function FilterEditor({ col, rows, filter, onChange }: { col: ColumnDef; rows: R
   );
 }
 
-function Popover({ open, onClose, children, align = "left" }: { open: boolean; onClose: () => void; children: ReactNode; align?: "left" | "right" }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useClickOutside(ref, onClose, open);
-  if (!open) return null;
-  return <div ref={ref} className={`popover ${align}`} onClick={(e) => e.stopPropagation()}>{children}</div>;
-}
-
-function ColumnsMenu({ columns, hidden, onChange }: { columns: ColumnDef[]; hidden: string[]; onChange: (h: string[]) => void }) {
+function ColumnsMenu({ columns, hidden, empty, onChange }: { columns: ColumnDef[]; hidden: string[]; empty: Set<string>; onChange: (h: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
   const groups = useMemo(() => {
@@ -218,7 +217,7 @@ function ColumnsMenu({ columns, hidden, onChange }: { columns: ColumnDef[]; hidd
                 {cols.map((c) => (
                   <label key={c.key} title={c.description}>
                     <input type="checkbox" checked={!hiddenSet.has(c.key)} onChange={() => setGroup([c], hiddenSet.has(c.key))} />
-                    {c.label}
+                    {c.label}{empty.has(c.key) && <small className="muted"> (no data)</small>}
                   </label>
                 ))}
               </fieldset>
@@ -232,7 +231,7 @@ function ColumnsMenu({ columns, hidden, onChange }: { columns: ColumnDef[]; hidd
 }
 
 export function DataTable(props: DataTableProps) {
-  const { rows, minimal = false, csvName, toolbar, maxHeight, emptyText = "No rows match.", renderCell, rowClass } = props;
+  const { rows, minimal = false, csvName, toolbar, maxHeight, emptyText = "No rows match the filters.", emptyState, renderCell, rowClass } = props;
   const navigate = useNavigate();
   const columns = useMemo(() => withSourceColumn(props.columns, rows), [props.columns, rows]);
   const [inner, setInner] = useState<TableState>(() => initialTableState(columns, props.defaultSort));
@@ -247,7 +246,12 @@ export function DataTable(props: DataTableProps) {
   useEffect(() => setPage(0), [state.filters, state.sort, rows]);
 
   const hiddenSet = useMemo(() => new Set(state.hidden), [state.hidden]);
-  const visible = useMemo(() => columns.filter((c) => !hiddenSet.has(c.key)), [columns, hiddenSet]);
+  // Columns without a value in any row are hidden by default (a toggle brings them back); never one with data.
+  const empty = useMemo(() => emptyColumnKeys(columns, rows), [columns, rows]);
+  const [showEmpty, setShowEmpty] = useState(false);
+  const emptyShown = columns.filter((c) => empty.has(c.key) && !hiddenSet.has(c.key));
+  const visible = useMemo(() => columns.filter((c) => !hiddenSet.has(c.key) && (showEmpty || !empty.has(c.key))), [columns, hiddenSet, showEmpty, empty]);
+  const emptyLabels = emptyShown.map((c) => c.label).join(", ");
   const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const pageRows = minimal ? view : view.slice(page * pageSize, page * pageSize + pageSize);
   const activeFilters = columns.filter((c) => filterActive(state.filters[c.key]));
@@ -283,7 +287,13 @@ export function DataTable(props: DataTableProps) {
             <span className="dt-count">{view.length === rows.length ? `${rows.length.toLocaleString()} rows` : `${view.length.toLocaleString()} of ${rows.length.toLocaleString()} rows`}</span>
           </div>
           <div className="dt-toolbar-right">
-            <ColumnsMenu columns={columns} hidden={state.hidden} onChange={(hidden) => setState({ ...state, hidden })} />
+            {emptyShown.length > 0 && (
+              <label className="check-inline small" title={`No row has a value in: ${emptyLabels}`}>
+                <input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} />
+                Show empty columns ({emptyShown.length})
+              </label>
+            )}
+            <ColumnsMenu columns={columns} hidden={state.hidden} empty={empty} onChange={(hidden) => setState({ ...state, hidden })} />
             <button className="btn btn-sm" onClick={exportCsv} disabled={!view.length} title="Download the filtered rows as CSV">CSV</button>
           </div>
         </div>
@@ -332,7 +342,7 @@ export function DataTable(props: DataTableProps) {
                 {visible.map((c, ci) => {
                   const custom = renderCell?.(c, r);
                   return (
-                    <td key={c.key} className={isNumericFmt(c.fmt) ? "num" : undefined}>
+                    <td key={c.key} className={isNumericFmt(c.fmt) ? "num" : c.fmt === "text" && String(r[c.key] ?? "").length > LONG_TEXT ? "wrap-cell" : undefined}>
                       {custom !== undefined ? custom : <Cell col={c} row={r} />}
                       {ci === 0 && r.pricing === "model" && <> <ModelBadge /></>}
                     </td>
@@ -341,11 +351,12 @@ export function DataTable(props: DataTableProps) {
               </tr>
             ))}
             {!pageRows.length && (
-              <tr><td colSpan={Math.max(1, visible.length)} className="dt-empty">{rows.length ? emptyText : "No data."}</td></tr>
+              <tr><td colSpan={Math.max(1, visible.length)} className="dt-empty">{rows.length ? emptyText : emptyState ?? "No rows returned."}</td></tr>
             )}
           </tbody>
         </table>
       </div>
+      {minimal && emptyShown.length > 0 && <div className="dt-foot muted small">No data yet: {emptyLabels}.</div>}
       {!minimal && view.length > pageSize && (
         <div className="dt-pager">
           <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(0)} aria-label="First page">«</button>
@@ -371,12 +382,6 @@ export function inferColumns(rows: ReportRow[], preferred?: ColumnDef[]): Column
   return keys.map((k) => byKey.get(k) ?? { key: k, label: humanize(k), fmt: guessFmt(k, sample(k)) });
 }
 
-const ACRONYMS = new Set(["iv", "hv", "oi", "dte", "eps", "pc", "pe", "atm", "otm", "itm", "sma", "rsi", "atr", "ytd", "ev", "pop"]);
-function humanize(key: string): string {
-  const words = key.split("_").map((w) => (ACRONYMS.has(w) || /^(iv|hv)\d+$/.test(w) ? w.toUpperCase() : w));
-  const s = words.join(" ");
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
 
 function guessFmt(key: string, v: unknown): ColumnDef["fmt"] {
   const k = key.toLowerCase();

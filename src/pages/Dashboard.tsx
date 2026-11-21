@@ -8,8 +8,9 @@ import { LineChart, LineSeries } from "../components/charts/Charts";
 import { usePalette } from "../components/charts/EChart";
 import { DataTable, inferColumns } from "../components/DataTable";
 import { StatValue } from "../components/StatGrid";
-import { AsOf, Async, Card, Empty, Segmented } from "../components/ui";
-import { fmt, plural, signClass } from "../lib/format";
+import { CollectionTimes } from "../components/Collection";
+import { AsOf, Async, Card, EmptyNotice, Segmented } from "../components/ui";
+import { fmt, plural, shortSector, signClass } from "../lib/format";
 
 function Sparkline({ values, width = 96, height = 30 }: { values: number[]; width?: number; height?: number }) {
   if (values.length < 2) return <svg width={width} height={height} aria-hidden="true" />;
@@ -39,7 +40,7 @@ function MiniTable({ title, rows, def, preferred, link, max, empty }: { title: s
   const cols = useMemo(() => compactColumns(rows, def, preferred, max), [rows, def, preferred, max]);
   return (
     <Card title={title} actions={link ? <Link to={link} className="small">Full report →</Link> : undefined} className="mini-table">
-      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <Empty>{empty ?? "Nothing to show right now."}</Empty>}
+      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <EmptyNotice>{empty ?? "No rows match this panel's criteria right now."}</EmptyNotice>}
     </Card>
   );
 }
@@ -52,7 +53,7 @@ function IndexCards({ m }: { m: MarketOverview }) {
           <div className="ic-top"><b>{c.symbol}</b><span className="muted ic-name">{c.name}</span></div>
           <div className="ic-mid">
             <span className="ic-price"><StatValue value={c.price} kind="num2" /></span>
-            <span className={signClass(c.change_pct)}><StatValue value={c.change_pct} kind="pct_signed" /></span>
+            <span className={signClass(c.change_pct)} title="One-day change"><StatValue value={c.change_pct} kind="pct_signed" hint="No price for this index yet." /><small className="muted"> 1D</small></span>
           </div>
           <div className="ic-bot"><Sparkline values={c.spark} /><span className="muted small nowrap">IV30 {fmt(c.iv30, "vol")}</span></div>
         </Link>
@@ -99,7 +100,7 @@ function SectorStrip({ m }: { m: MarketOverview }) {
           const bg = v === null ? "var(--panel-2)" : `color-mix(in srgb, var(${v >= 0 ? "--up" : "--down"}) ${strength}%, var(--panel-2))`;
           return (
             <Link key={s.symbol} to={`/s/${s.symbol}`} className="heat-tile" style={{ background: bg }} title={s.name}>
-              <b>{s.symbol}</b><span>{fmt(v, "pct_signed")}</span><small>{s.name}</small>
+              <b>{s.symbol}</b><span>{fmt(v, "pct_signed")}</span><small>{shortSector(s.name)}</small>
             </Link>
           );
         })}
@@ -115,7 +116,7 @@ function Freshness({ m, status }: { m: MarketOverview; status: Status | null }) 
         <div><span className="muted">Overview</span> <AsOf ts={m.asof} /></div>
         {status && <>
           <div><span className="muted">Market</span> <span className={`badge ${status.market_open ? "pos" : "neutral"}`}>{status.market_open ? "open" : "closed"}</span></div>
-          <div><span className="muted">Last sweep</span> <AsOf ts={status.last_sweep_at} label="" /></div>
+          <div><span className="muted">Collection</span> <CollectionTimes /></div>
           <div><span className="muted">IV history</span> <b>{status.iv_history_days}</b> {plural(status.iv_history_days, "day")} · <span className="muted">EOD chains</span> <b>{status.option_eod_days}</b> {plural(status.option_eod_days, "day")}</div>
         </>}
       </div>
@@ -129,11 +130,22 @@ function DashboardBody({ m, defs, status }: { m: MarketOverview; defs: ReportDef
     <div className="stack">
       <IndexCards m={m} />
       <SectorStrip m={m} />
-      <div className="grid-main-side">
-        <MiniTable title="Unusual option volume" rows={m.unusual_options} empty={m.empty_notes.unusual_options} def={d("unusual-option-volume")} max={7}
-          preferred={["symbol", "option_volume", "rel_volume", "vol_oi", "pct_call", "sentiment", "iv30"]} link="/reports/unusual-option-volume" />
-        <VixCard m={m} />
-      </div>
+      {m.unusual_options.length ? (
+        <div className="grid-main-side">
+          <MiniTable title="Unusual option volume" rows={m.unusual_options} def={d("unusual-option-volume")} max={7}
+            preferred={["symbol", "option_volume", "rel_volume", "vol_oi", "pct_call", "sentiment", "iv30"]} link="/reports/unusual-option-volume" />
+          <VixCard m={m} />
+        </div>
+      ) : (
+        <>
+          {/* Empty: one line with the reason, not a large empty panel. */}
+          <div className="panel-notice" role="status">
+            <b>Unusual option volume:</b> <span>{m.empty_notes.unusual_options ?? "No symbol qualifies right now."}</span> <CollectionTimes />
+            <Link to="/reports/unusual-option-volume" className="small">Report →</Link>
+          </div>
+          <VixCard m={m} />
+        </>
+      )}
       <div className="grid-3">
         <MiniTable title="Top gainers" rows={m.gainers} empty={m.empty_notes.gainers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=gainers" />
         <MiniTable title="Top losers" rows={m.losers} empty={m.empty_notes.losers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=losers" />

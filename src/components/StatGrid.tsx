@@ -20,7 +20,7 @@ export interface StatItem {
 export function StatValue({ value, kind = "num", hint, signed }: { value: unknown; kind?: ColumnFmt; hint?: string; signed?: boolean }) {
   if (isMissing(value)) return <NullValue hint={hint} />;
   const cls = signed || kind === "pct_signed" ? signClass(value) : "";
-  return <span className={`${cls} ${kind === "date" || kind === "datetime" ? "nowrap" : ""}`}>{fmt(value, kind)}</span>;
+  return <span className={`${cls} ${kind === "date" ? "nowrap" : ""}`}>{fmt(value, kind)}</span>;
 }
 
 export function StatGrid({ items, cols }: { items: StatItem[]; cols?: number }) {

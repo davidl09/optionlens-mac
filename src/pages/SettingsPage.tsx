@@ -5,7 +5,7 @@ import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, ty
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
-import { Card, ErrorBox, InfoBox, Spinner } from "../components/ui";
+import { Card, ErrorBox, InfoBox, PathText, Progress, Spinner } from "../components/ui";
 import { UpdatesCard } from "../components/UpdatesCard";
 import { desktop } from "../desktop";
 import { useBridgeStatus, useEngineStatus, useUpdateStatus } from "../state/desktop";
@@ -38,9 +38,9 @@ function EngineCard({ engine }: { engine: EngineStatus }) {
     <Card title="Engine" subtitle="The local analytics engine and its database">
       <StatGrid items={[
         { label: "State", node: <span className={`badge ${tone}`}>{engine.state}</span> },
-        { label: "Version", node: <span>{engine.version ?? "—"}</span> },
+        { label: "Version", value: engine.version, fmt: "text", hint: "The engine has not reported its version yet." },
         { label: "Restarts", value: engine.restarts, fmt: "int" },
-        { label: "Data folder", node: <code className="wrap">{engine.dataDir}</code> },
+        { label: "Data folder", node: <PathText path={engine.dataDir} /> },
       ]} />
       {engine.lastError && <p className="muted small">Last error: {engine.lastError}</p>}
       <div className="toolbar">
@@ -59,17 +59,17 @@ function BridgeStatusCard({ b }: { b: BridgeStatus }) {
     <Card title="IBKR bridge" subtitle={<span className={`badge ${bridgeTone(b)}`}>{b.tws}</span>}>
       <p className="bridge-summary">{bridgeSummary(b)}</p>
       <StatGrid items={[
-        { label: "Endpoint", node: <span>{b.endpoint ? `${b.endpoint} · port ${b.port}` : "—"}</span> },
-        { label: "Account", node: <span>{b.accountType ?? "—"}</span> },
+        { label: "Endpoint", value: b.endpoint ? `${b.endpoint} · port ${b.port}` : null, fmt: "text", hint: "Not connected to IB Gateway / TWS." },
+        { label: "Account", value: b.accountType, fmt: "text", hint: "Known once connected." },
         { label: "Last push", value: b.lastPushAt, fmt: "datetime", hint: "Nothing pushed yet." },
         { label: "Working on", node: <span>{b.current ? b.current.label : "idle"}</span> },
         { label: "Queued", node: <span>{queued || "nothing"}</span> },
         { label: "Backfill", node: b.backfill.total
-          ? <div className="progress" title={`${done}/${b.backfill.total}`}><div style={{ width: `${Math.round((done / b.backfill.total) * 100)}%` }} /><span>{done}/{b.backfill.total}{b.backfill.failed ? ` (${b.backfill.failed} failed)` : ""}</span></div>
-          : <span>—</span> },
+          ? <Progress value={done / b.backfill.total} label={`${done.toLocaleString()} / ${b.backfill.total.toLocaleString()}${b.backfill.failed ? ` (${b.backfill.failed.toLocaleString()} failed)` : ""}`} title="Historical option bars and IV history: done / total in this round" />
+          : <span className="muted">nothing to catch up</span> },
       ]} />
       {b.paused && <div className="warn-box">{b.paused}</div>}
-      {b.notes.map((n) => <div className="warn-box" key={n}>{n}</div>)}
+      {b.notes.map((n) => <div className={/delayed/i.test(n) ? "info-box" : "warn-box"} key={n}>{n}</div>)}
       {b.lastError && b.tws === "connected" && <p className="muted small">Last error: {b.lastError}</p>}
       <div className="toolbar">
         <button className="btn" onClick={() => void desktop?.cancelJobs("iv-history")}>Cancel IV backfill</button>

@@ -48,12 +48,13 @@ function ListDetail({ w, onChanged, onDeleted }: { w: Watchlist; onChanged: () =
           {w.symbols.map((s) => (
             <span key={s} className="chip"><Link to={`/s/${s}`}>{s}</Link><button className="link-btn" aria-label={`Remove ${s}`} onClick={() => void run(api.removeFromWatchlist(w.id, s))}>×</button></span>
           ))}
-          {!w.symbols.length && <span className="muted small">Empty list.</span>}
+
         </div>
         {err && <ErrorBox error={err} />}
       </Card>
       <Card className="flush">
-        <Async state={table}>{(r) => <DataTable columns={r.columns} rows={r.rows} csvName={`watchlist-${w.name}`} />}</Async>
+        <Async state={table}>{(r) => <DataTable columns={r.columns} rows={r.rows} csvName={`watchlist-${w.name}`}
+          emptyState={w.symbols.length ? "No data stored for these symbols yet." : "This list is empty. Add symbols above to see their prices here."} />}</Async>
       </Card>
     </div>
   );
@@ -93,7 +94,7 @@ export default function Watchlists() {
               </form>
               {err && <ErrorBox error={err} />}
             </Card>
-            {sel ? <ListDetail key={sel.id} w={sel} onChanged={lists.refetch} onDeleted={() => { setSp({}); lists.refetch(); }} /> : <Card><Empty>Create a watchlist to get started.</Empty></Card>}
+            {sel ? <ListDetail key={sel.id} w={sel} onChanged={lists.refetch} onDeleted={() => { setSp({}); lists.refetch(); }} /> : <Card><Empty>Watchlists collect symbols to follow: their prices, IV and earnings in one table, the dashboard panel and alerts.</Empty></Card>}
           </div>
         );
       }}</Async>

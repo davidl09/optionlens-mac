@@ -49,8 +49,13 @@ export interface LineChartProps {
   yZero?: boolean;
 }
 
-export function LineChart({ series, xType = "time", yFmt = "num", xFmt, height = 260, refLines, zoom = false, ariaLabel, yZero = false }: LineChartProps) {
+const hasPoint = (s: LineSeries) => s.data.some((d) => d[1] !== null && d[1] !== undefined);
+
+export function LineChart({ series: all, xType = "time", yFmt = "num", xFmt, height = 260, refLines, zoom = false, ariaLabel, yZero = false }: LineChartProps) {
   const p = usePalette();
+  // Only series with data are drawn and get a legend entry; the others are named under the chart.
+  const series = useMemo(() => all.filter(hasPoint), [all]);
+  const missing = all.filter((s) => !hasPoint(s)).map((s) => s.name);
   const option = useMemo(() => ({
     animation: false,
     color: p.series,
@@ -70,7 +75,12 @@ export function LineChart({ series, xType = "time", yFmt = "num", xFmt, height =
   }), [p, series, xType, yFmt, xFmt, refLines, zoom, yZero]);
   const points = Math.max(0, ...series.map((s) => s.data.filter((d) => d[1] !== null && d[1] !== undefined).length));
   if (points < 2) return <Empty>Not enough collected history to chart yet ({points} {points === 1 ? "point" : "points"}).</Empty>;
-  return <EChart option={option} height={height} ariaLabel={ariaLabel} />;
+  return (
+    <>
+      <EChart option={option} height={height} ariaLabel={ariaLabel} />
+      {missing.length > 0 && <div className="chart-note muted small">No data yet: {missing.join(", ")}.</div>}
+    </>
+  );
 }
 
 export interface BarSeries { name: string; data: (number | null)[]; color?: string; stack?: string }

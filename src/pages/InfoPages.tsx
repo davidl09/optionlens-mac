@@ -6,9 +6,11 @@ import { useApi } from "../api/useApi";
 import { DataTable } from "../components/DataTable";
 import { StatGrid } from "../components/StatGrid";
 import { bridgeSummary } from "../components/Desktop";
-import { AsOf, Async, Card } from "../components/ui";
+import { CHAIN_COLLECTION_TEXT, nextCollection } from "../components/Collection";
+import { AsOf, Async, Card, Progress } from "../components/ui";
 import { useBridgeStatus } from "../state/desktop";
 import { fmt } from "../lib/format";
+import { jobState, readableDetail } from "../lib/status";
 
 const JOB_COLUMNS: ColumnDef[] = [
   { key: "job", label: "Job", fmt: "text" },
@@ -37,7 +39,7 @@ function BridgeCard({ s }: { s: Status }) {
       <StatGrid items={[
         { label: "Engine sees bridge", node: <span className={`badge ${s.bridge.connected ? "pos" : "neutral"}`}>{s.bridge.connected ? "connected" : "not connected"}</span> },
         { label: "Last push", value: s.bridge.last_push_at, fmt: "datetime", hint: "The bridge has not pushed data yet." },
-        { label: "Client", node: <span>{s.bridge.client ?? "—"}</span> },
+        { label: "Client", value: s.bridge.client, fmt: "text", hint: "No bridge has connected to this engine yet." },
       ]} />
       {local && <p className="small bridge-summary">This Mac: {bridgeSummary(local)}</p>}
     </Card>
@@ -50,22 +52,23 @@ export function StatusPage() {
     <div className="stack">
       <div className="page-head"><h1 className="page-title">Data status</h1>{st.data && <AsOf ts={st.data.now} label="server time" />}</div>
       <Async state={st}>{(s) => {
-        const jobs = s.jobs.map((j) => ({ ...j, state: j.ok === null ? (j.finished_at ? "unknown" : "running") : j.ok ? "ok" : "failed" })) as unknown as ReportRow[];
+        const jobs = s.jobs.map((j) => ({ ...j, state: jobState(j), detail: readableDetail(j.detail) })) as unknown as ReportRow[];
         const counts = Object.entries(s.row_counts).map(([table, rows]) => ({ table, rows })) as unknown as ReportRow[];
         return (
           <>
             <Card title="Collection">
               <StatGrid items={[
                 { label: "Market", node: <span className={`badge ${s.market_open ? "pos" : "neutral"}`}>{s.market_open ? "open" : "closed"}</span> },
-                { label: "Last sweep", value: s.last_sweep_at, fmt: "datetime", hint: "No sweep has run yet." },
-                { label: "Next sweep", value: s.next_sweep_at, fmt: "datetime", hint: "None scheduled (market closed)." },
+                { label: "Last bridge push", value: s.bridge.last_push_at, fmt: "datetime", hint: "The IBKR bridge has not pushed data yet." },
+                { label: "Next collection", node: <span>{nextCollection(s)}</span>, title: CHAIN_COLLECTION_TEXT },
                 { label: "Last EOD", value: s.last_eod_date, fmt: "date", hint: "End-of-day job has not run yet." },
                 { label: "Universe", value: s.universe_size, fmt: "int" },
-                { label: "Optionable", value: s.optionable_count, fmt: "int" },
+                { label: "With a recent chain", value: s.optionable_count, fmt: "int", sub: `of ${fmt(s.universe_size, "int")} · last 5 sessions`, title: "Universe symbols with an option chain stored in the last 5 sessions" },
+                ...(s.options_listed_count !== undefined ? [{ label: "Options listed", value: s.options_listed_count, fmt: "int" as const, sub: s.no_options_count ? `${fmt(s.no_options_count, "int")} confirmed none` : undefined, title: "Universe symbols the IBKR bridge has shown to list options (ever stored a chain)" }] : []),
                 { label: "IV history", value: s.iv_history_days, fmt: "int", sub: "days in metrics" },
                 { label: "EOD chains", value: s.option_eod_days, fmt: "int", sub: "days stored" },
                 { label: "DB size", node: <span>{fmt(s.db_size_bytes / 1e6, "num")} MB</span> },
-                { label: "Earnings backfill", node: <div className="progress" title={fmt(s.earnings_backfill_progress, "pct")}><div style={{ width: `${Math.round(s.earnings_backfill_progress * 100)}%` }} /><span>{fmt(s.earnings_backfill_progress, "pct")}</span></div> },
+                { label: "Earnings backfill", node: <Progress value={s.earnings_backfill_progress} /> },
               ]} />
             </Card>
             <div className="grid-2">

@@ -1,13 +1,16 @@
 // Generic page for ANY report id: server params form, client-side table state, presets.
 // Params and table state live in the URL so links are shareable.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, NavigateOptions, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ColumnDef, ColumnFilter, Preset, ReportDef, ReportRow } from "../api/types";
+import type { ColumnDef, ColumnFilter, Preset, ReportDef, ReportResult, ReportRow } from "../api/types";
 import { useApi } from "../api/useApi";
 import { DataTable, inferColumns, SortState, TableState } from "../components/DataTable";
+import { ChainCollectionNote } from "../components/Collection";
+import type { NavFrom } from "../components/Header";
 import { ParamForm } from "../components/ParamForm";
-import { AsOf, Async, Card, ErrorBox, InfoBox, Spinner } from "../components/ui";
+import { AsOf, Async, Card, EmptyNotice, ErrorBox, NotesBox, Spinner } from "../components/ui";
+import { humanize } from "../lib/table";
 import { todayNY } from "../lib/dates";
 import { ParamStrings, resolveParams, stringToValue, valueToString } from "../lib/params";
 
@@ -51,6 +54,8 @@ function PresetBar({ def, params, table, onApply }: { def: ReportDef; params: Pa
   };
   const del = async () => {
     if (!sel) return;
+    const name = list.find((x) => String(x.id) === sel)?.name ?? "this preset";
+    if (!window.confirm(`Delete preset “${name}”?`)) return;
     try { await api.deletePreset(Number(sel)); setSel(""); presets.refetch(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
   const list = presets.data ?? [];
@@ -88,7 +93,7 @@ function ExtraData({ extra }: { extra: Record<string, unknown> | undefined }) {
   return (
     <>
       {tables.map(([k, rows]) => (
-        <Card key={k} title={k.replace(/_/g, " ").replace(/^\w/, (m) => m.toUpperCase())}>
+        <Card key={k} title={humanize(k)}>
           <DataTable columns={inferColumns(rows)} rows={rows} csvName={k} maxHeight={360} />
         </Card>
       ))}
@@ -96,8 +101,22 @@ function ExtraData({ extra }: { extra: Record<string, unknown> | undefined }) {
   );
 }
 
+/** Why a report returned no rows: the engine's reason, and for chain-based reports when chains are collected. */
+export function ReportEmpty({ result, chainBased }: { result: ReportResult; chainBased: boolean }) {
+  return (
+    <EmptyNotice>
+      <span>{result.empty_reason ?? "No rows match these settings."}</span>
+      {chainBased && <> <ChainCollectionNote /></>}
+    </EmptyNotice>
+  );
+}
+
 function ReportView({ def }: { def: ReportDef }) {
-  const [sp, setSp] = useSearchParams();
+  const [sp, setSpRaw] = useSearchParams();
+  // Keep the menu the user came from (breadcrumb) across parameter changes.
+  const loc = useLocation();
+  const from = (loc.state as NavFrom | null)?.from;
+  const setSp = useCallback((next: URLSearchParams, opts?: NavigateOptions) => setSpRaw(next, { ...opts, state: loc.state }), [setSpRaw, loc.state]);
   const applied = useMemo(() => resolveParams(def.params, sp), [def.params, sp]);
   const appliedKey = JSON.stringify(applied);
   const [form, setForm] = useState<ParamStrings>(applied);
@@ -120,7 +139,10 @@ function ReportView({ def }: { def: ReportDef }) {
   // Chain-based screeners only cover the chain universe; the engine says so in a note (INTEGRATION.md §6).
   const notes = result.data?.notes ?? [];
   const coverage = notes.filter(isCoverageNote);
-  const otherNotes = notes.filter((n) => !isCoverageNote(n));
+  const reason = result.data?.rows.length === 0 ? result.data.empty_reason : undefined;
+  const otherNotes = notes.filter((n) => !isCoverageNote(n) && !(reason && reason.includes(n)));
+  const section = from && from !== def.category ? from : def.category;
+  const crumbTo = section === def.category ? `/reports?category=${def.category}` : "/";
 
   const run = () => {
     const next = new URLSearchParams(sp);
@@ -140,7 +162,7 @@ function ReportView({ def }: { def: ReportDef }) {
     <div className="stack">
       <div className="page-head">
         <div>
-          <div className="breadcrumb"><Link to={`/reports?category=${def.category}`}>{def.category}</Link></div>
+          <div className="breadcrumb"><Link to={crumbTo}>{section}</Link></div>
           <h1 className="page-title">{def.title}</h1>
           <p className="page-desc">{def.description}</p>
         </div>
@@ -152,19 +174,16 @@ function ReportView({ def }: { def: ReportDef }) {
         </Card>
       )}
       {coverage.length > 0 && (
-        <div className="warn-box coverage-note"><strong>Coverage:</strong> <span>{coverage.join(" ")}</span></div>
+        <div className="warn-box coverage-note">{coverage.join(" ")}</div>
       )}
-      {otherNotes.length > 0 && (
-        <InfoBox title="Data notes:">
-          <ul className="notes">{otherNotes.map((n, i) => <li key={i}>{n}</li>)}</ul>
-        </InfoBox>
-      )}
+      <NotesBox notes={otherNotes} method={result.data?.method} />
       {result.data?.truncated && <div className="warn-box">Showing the first {result.data.rows.length.toLocaleString()} rows — narrow the parameters to see everything.</div>}
       {result.error && <ErrorBox error={result.error} onRetry={result.refetch} />}
       {!result.data && result.loading && <Spinner label="Running report…" />}
       {result.data && (
         <Card className={`flush ${result.loading ? "refetching" : ""}`}>
           <DataTable columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${todayNY()}`}
+            emptyState={rows.length === 0 && (result.data.rows.length ? <EmptyNotice>None of these rows is in the chosen watchlist.</EmptyNotice> : <ReportEmpty result={result.data} chainBased={coverage.length > 0} />)}
             toolbar={<><WatchlistFilter value={wl} onChange={setWl} /><PresetBar def={def} params={applied} table={table} onApply={applyPreset} /></>} maxHeight="70vh" />
         </Card>
       )}

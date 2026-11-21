@@ -28,10 +28,10 @@ export function IdeasTab() {
         <div className="toolbar"><Segmented label="Strategy family" value={family} onChange={setFamily} options={FAMILIES} /></div>
         <InfoBox>Ideas are drawn from the strategy screeners for {sym}. “Edge” = expected value under 30-day historical volatility ÷ max loss; “win rate” = probability of profit under implied volatility. Edge ideas need a probability of profit of at least 20%; win-rate ideas need a non-negative edge. These are model estimates, not recommendations.</InfoBox>
         <Card title="Ranked by edge (EV under HV ÷ risk)">
-          <DataTable columns={IDEA_COLUMNS} rows={pick(t.by_edge)} rowLink={false} renderCell={unlimitedCell} csvName={`${sym}-ideas-edge`} />
+          <DataTable columns={IDEA_COLUMNS} rows={pick(t.by_edge)} rowLink={false} renderCell={unlimitedCell} csvName={`${sym}-ideas-edge`} emptyState={family === "all" ? "No ideas: none of the strategy screeners found a candidate in the stored chain." : "No ideas in this family."} />
         </Card>
         <Card title="Ranked by win rate (PoP)">
-          <DataTable columns={IDEA_COLUMNS} rows={pick(t.by_win_rate)} rowLink={false} renderCell={unlimitedCell} csvName={`${sym}-ideas-pop`} />
+          <DataTable columns={IDEA_COLUMNS} rows={pick(t.by_win_rate)} rowLink={false} renderCell={unlimitedCell} csvName={`${sym}-ideas-pop`} emptyState={family === "all" ? "No ideas: none of the strategy screeners found a candidate in the stored chain." : "No ideas in this family."} />
         </Card>
       </div>
     )}</Async>

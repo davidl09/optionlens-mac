@@ -8,9 +8,24 @@ import { Card, ErrorBox, InfoBox, Spinner } from "../components/ui";
 import { addDays, todayNY } from "../lib/dates";
 import { MONTHS } from "../lib/format";
 import { parseSymbols } from "../lib/params";
+import { templateUsesWidth } from "../lib/strategy";
 
 function Field({ label, children, help }: { label: string; children: ReactNode; help?: string }) {
   return <div className="param" title={help}><label>{label}</label>{children}</div>;
+}
+
+/** Start and end dates as one field, so the end date never wraps onto its own row. */
+function PeriodField({ start, end, onStart, onEnd }: { start?: string; end?: string; onStart: (v: string) => void; onEnd: (v: string) => void }) {
+  return (
+    <div className="param">
+      <label>Period</label>
+      <div className="period-inputs">
+        <input type="date" aria-label="Start date" value={start} onChange={(e) => onStart(e.target.value)} />
+        <span className="muted">to</span>
+        <input type="date" aria-label="End date" value={end} onChange={(e) => onEnd(e.target.value)} />
+      </div>
+    </div>
+  );
 }
 
 /** Runs a POST backtest and tracks loading / error / result. */
@@ -77,7 +92,7 @@ export function StockBacktest() {
         <form className="param-form" onSubmit={submit}>
           <Field label="Symbols"><input className="w-wide" value={symbols} onChange={(e) => setSymbols(e.target.value.toUpperCase())} placeholder="AAPL, MSFT" /></Field>
           <Field label="Entry rule">
-            <select value={t} onChange={(e) => { const ty = e.target.value as EntryType; setEntry(defaultEntry(ty)); }}>
+            <select aria-label="Entry rule" value={t} onChange={(e) => { const ty = e.target.value as EntryType; setEntry(defaultEntry(ty)); }}>
               {ENTRY_TYPES.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
             </select>
           </Field>
@@ -98,12 +113,11 @@ export function StockBacktest() {
             </Field>
           )}
           <Field label="Hold (days)"><input type="number" className="w-num" value={hold} onChange={(e) => setHold(e.target.value)} /></Field>
-          <div className="param param-bool"><label>Exit at earnings reaction</label><input type="checkbox" checked={atReaction} onChange={(e) => setAtReaction(e.target.checked)} /></div>
+          <div className="param param-bool"><label htmlFor="bt-reaction">Exit at earnings reaction</label><input id="bt-reaction" type="checkbox" checked={atReaction} onChange={(e) => setAtReaction(e.target.checked)} /></div>
           <Field label="Stop loss (%)"><input type="number" className="w-num" value={stop} onChange={(e) => setStop(e.target.value)} placeholder="none" /></Field>
           <Field label="Take profit (%)"><input type="number" className="w-num" value={take} onChange={(e) => setTake(e.target.value)} placeholder="none" /></Field>
           <Field label="Direction"><select value={side} onChange={(e) => setSide(e.target.value as "long" | "short")}><option value="long">Long</option><option value="short">Short</option></select></Field>
-          <Field label="Start"><input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></Field>
-          <Field label="End"><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></Field>
+          <PeriodField start={start} end={end} onStart={setStart} onEnd={setEnd} />
           <div className="param param-submit"><button className="btn btn-primary" type="submit" disabled={r.loading}>Run backtest</button></div>
         </form>
       </Card>
@@ -116,7 +130,7 @@ export interface OptionsPreset { strategyMatch: RegExp; width_pct: number; title
 
 export const STRADDLE_WING_PRESET: OptionsPreset = {
   strategyMatch: /iron[-_ ]?(fly|butterfl)/i, width_pct: 0.05,
-  title: "Straddle / wing backtest", description: "Short ATM straddle with protective wings (iron butterfly), rolled on a schedule.",
+  title: "Straddle / wing (iron fly) backtest", description: "Sell an at-the-money straddle and buy protective wings (a short iron butterfly), rolled on a schedule.",
 };
 
 export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
@@ -134,10 +148,12 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
     const match = preset ? list.find((t) => preset.strategyMatch.test(t.id) || preset.strategyMatch.test(t.label)) : undefined;
     set({ strategy: (match ?? list[0]).id });
   }, [templates.data, preset, req.strategy]);
+  const template = templates.data?.find((t) => t.id === req.strategy);
+  const usesWidth = templateUsesWidth(template);
   const pct = (v: number | undefined) => (v === undefined ? "" : String(+(v * 100).toFixed(4)));
   const fromPct = (s: string) => (s.trim() === "" ? undefined : Number(s) / 100);
 
-  const submit = (e: FormEvent) => { e.preventDefault(); r.run({ ...req, symbol: req.symbol.toUpperCase() }); };
+  const submit = (e: FormEvent) => { e.preventDefault(); r.run({ ...req, symbol: req.symbol.toUpperCase(), width_pct: usesWidth ? req.width_pct : undefined }); };
 
   return (
     <div className="stack">
@@ -149,7 +165,7 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
         <form className="param-form" onSubmit={submit}>
           <Field label="Symbol"><input value={req.symbol} onChange={(e) => set({ symbol: e.target.value.toUpperCase() })} className="w-sym" /></Field>
           <Field label="Strategy">
-            <select value={req.strategy} onChange={(e) => set({ strategy: e.target.value })}>
+            <select aria-label="Strategy" value={req.strategy} onChange={(e) => set({ strategy: e.target.value })}>
               {(templates.data ?? []).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
             </select>
           </Field>
@@ -160,7 +176,7 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
           </Field>
           {req.strike_rule.type === "delta" && <Field label="Delta"><input type="number" step="0.05" className="w-num" value={req.strike_rule.value ?? ""} onChange={(e) => set({ strike_rule: { type: "delta", value: Number(e.target.value) } })} /></Field>}
           {req.strike_rule.type === "pct_otm" && <Field label="% OTM"><input type="number" className="w-num" value={pct(req.strike_rule.value)} onChange={(e) => set({ strike_rule: { type: "pct_otm", value: fromPct(e.target.value) } })} /></Field>}
-          <Field label="Wing width (%)" help="Width between strikes for spreads / wings"><input type="number" className="w-num" value={pct(req.width_pct)} onChange={(e) => set({ width_pct: fromPct(e.target.value) })} /></Field>
+          {usesWidth && <Field label="Wing width (%)" help="Distance between the strikes of a spread or wing, as % of the stock price"><input type="number" aria-label="Wing width (%)" className="w-num" value={pct(req.width_pct)} onChange={(e) => set({ width_pct: fromPct(e.target.value) })} /></Field>}
           <Field label="Entry">
             <select value={req.entry.type} onChange={(e) => set({ entry: { type: e.target.value as OptionsBacktestRequest["entry"]["type"], n: 10, weekday: 0 } })}>
               <option value="monthly">Monthly (first trading day)</option><option value="weekly">Weekly on day</option><option value="every_n_days">Every N trading days</option>
@@ -180,8 +196,7 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
           <Field label="Take profit (% of max)"><input type="number" className="w-num" placeholder="none" value={pct(req.exit.take_profit)} onChange={(e) => set({ exit: { ...req.exit, take_profit: fromPct(e.target.value) } })} /></Field>
           <Field label="Stop loss (%)"><input type="number" className="w-num" placeholder="none" value={pct(req.exit.stop_loss)} onChange={(e) => set({ exit: { ...req.exit, stop_loss: fromPct(e.target.value) } })} /></Field>
           <Field label="Contracts"><input type="number" min={1} className="w-num" value={req.qty ?? 1} onChange={(e) => set({ qty: Number(e.target.value) })} /></Field>
-          <Field label="Start"><input type="date" value={req.start} onChange={(e) => set({ start: e.target.value })} /></Field>
-          <Field label="End"><input type="date" value={req.end} onChange={(e) => set({ end: e.target.value })} /></Field>
+          <PeriodField start={req.start} end={req.end} onStart={(v) => set({ start: v })} onEnd={(v) => set({ end: v })} />
           <div className="param param-submit"><button className="btn btn-primary" type="submit" disabled={r.loading || !req.strategy}>Run backtest</button></div>
         </form>
       </Card>

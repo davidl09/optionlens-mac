@@ -3,7 +3,7 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { RefreshResult } from "../../../electron/shared/api";
 import { ApiError, invalidate, reloadAll } from "../../api/client";
-import { AsyncErrorView, type ErrorView } from "../../components/ui";
+import { AsyncErrorView, type ErrorView, Popover } from "../../components/ui";
 import { desktop } from "../../desktop";
 import { useBridgeStatus } from "../../state/desktop";
 
@@ -67,8 +67,28 @@ export function RefreshChip() {
     case "fresh": return <span className="refresh-chip pos" title="Chain from IBKR is recent">IBKR ✓</span>;
     case "no-options": return <span className="refresh-chip" title="IBKR lists no options for this symbol">IBKR: no options</span>;
     case "unavailable": return <span className="refresh-chip" title={state.message}>IBKR off</span>;
-    case "failed": return <span className="refresh-chip warn" title={state.message}>IBKR refresh failed</span>;
+    case "failed": return <RefreshFailed message={state.message} />;
   }
+}
+
+/** The failed refresh says why (the bridge's message) and offers a retry, instead of a bare warning. */
+function RefreshFailed({ message }: { message: string }) {
+  const { sym, retry } = useSymbolRefresh();
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  return (
+    <span className="pop-anchor">
+      <button className="refresh-chip warn link-btn" aria-expanded={open} onClick={() => setOpen((o) => !o)} title={message}>IBKR refresh failed ▾</button>
+      <Popover open={open} onClose={close} align="right">
+        <div className="refresh-pop" role="dialog" aria-label="IBKR refresh failed">
+          <p><b>IBKR could not refresh {sym}’s option chain.</b></p>
+          <p className="small">{message}</p>
+          <p className="muted small">Stored data is still shown.</p>
+          <button className="btn btn-sm btn-primary" onClick={() => { setOpen(false); retry(); }}>Retry now</button>
+        </div>
+      </Popover>
+    </span>
+  );
 }
 
 /** The engine answers chain endpoints of a known symbol without a stored chain with these codes. */
