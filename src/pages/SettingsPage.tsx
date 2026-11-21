@@ -65,7 +65,7 @@ function BridgeStatusCard({ b }: { b: BridgeStatus }) {
         { label: "Working on", node: <span>{b.current ? b.current.label : "idle"}</span> },
         { label: "Queued", node: <span>{queued || "nothing"}</span> },
         { label: "Backfill", node: b.backfill.total
-          ? <Progress value={done / b.backfill.total} label={`${done.toLocaleString()} / ${b.backfill.total.toLocaleString()}${b.backfill.failed ? ` (${b.backfill.failed.toLocaleString()} failed)` : ""}`} title="Historical option bars and IV history: done / total in this round" />
+          ? <Progress value={done / b.backfill.total} label={`${done.toLocaleString()} / ${b.backfill.total.toLocaleString()}${b.backfill.failed ? ` (${b.backfill.failed.toLocaleString()} failed)` : ""}`} title="IV/HV history and option-bar catch-up: symbols up to date / all symbols the app keeps history for" />
           : <span className="muted">nothing to catch up</span> },
       ]} />
       {b.paused && <div className="warn-box">{b.paused}</div>}
