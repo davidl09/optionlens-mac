@@ -30,11 +30,20 @@ def range_start(rng: str) -> date | None:
 
 
 # ----------------------------------------------------------------------------- bars / price action
+SMA_WINDOWS = (20, 50, 200)
+
+
 def bars(symbol: str, rng: str = "1y") -> list[dict]:
+    """Daily bars of the range, each with sma20/sma50/sma200 computed over the full stored history (so a 1-month
+    range still shows the 200-day average; null where fewer bars precede it)."""
     start = range_start(rng)
     ctx.ensure_known(symbol)
-    return [{"date": b.date, "open": b.open, "high": b.high, "low": b.low, "close": b.close,
-             "volume": b.volume or 0} for b in ctx.load_bars(symbol, start)]
+    all_bars = ctx.load_bars(symbol)
+    closes = np.array([b.close for b in all_bars], dtype=float)
+    smas = {w: stats.sma_series(closes, w) for w in SMA_WINDOWS}
+    return [{"date": b.date, "open": b.open, "high": b.high, "low": b.low, "close": b.close, "volume": b.volume or 0,
+             **{f"sma{w}": ctx.num(smas[w][i]) for w in SMA_WINDOWS}}
+            for i, b in enumerate(all_bars) if start is None or b.date >= start]
 
 
 def price_action(symbol: str, rng: str = "1y") -> dict:

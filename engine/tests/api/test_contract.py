@@ -53,7 +53,7 @@ def test_post_matches_types_ts(client, url, body, iface):
 
 
 def test_extractor_reads_real_interfaces():
-    assert TYPES.interface_fields("Bar") == {"date", "open", "high", "low", "close", "volume"}
+    assert TYPES.interface_fields("Bar") == {"date", "open", "high", "low", "close", "volume", "sma20", "sma50", "sma200"}
     oi = TYPES.parse("OpenInterest")[1]["top_increases"][0]
     assert oi[0] == "arr" and {"oi_prev", "oi_change", "osi", "itm"} <= set(oi[1][1])
     assert mismatches({"date": "x", "open": 1}, TYPES.parse("Bar")) != []

@@ -19,7 +19,11 @@ export interface Quote {
   source?: DataSource; delayed?: boolean;
 }
 
-export interface Bar { date: ISODate; open: number; high: number; low: number; close: number; volume: number }
+export interface Bar {
+  date: ISODate; open: number; high: number; low: number; close: number; volume: number;
+  /** /bars only: simple moving averages over the full stored history (null with fewer bars before this one). */
+  sma20?: number | null; sma50?: number | null; sma200?: number | null;
+}
 
 // ---------------- status ----------------
 export interface JobRun { job: string; started_at: ISODateTime; finished_at: ISODateTime | null; ok: boolean | null; detail: string | null }

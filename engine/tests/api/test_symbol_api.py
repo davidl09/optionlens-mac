@@ -152,3 +152,15 @@ def test_errors(client):
     assert get(client, "/api/symbol/A$B/summary", 422)["detail"].startswith("malformed symbol")
     assert get(client, "/api/symbol/SPY/chain", 404)["detail"] == "no option chain for SPY"
     assert get(client, "/api/symbol/SPY/volatility")["term_today"] == []     # realized vol without options
+
+
+def test_bars_carry_full_history_smas_on_short_ranges(client):
+    """A 1-month range still has the 50- and 200-day averages (computed over all stored bars, not the range)."""
+    import numpy as np
+    rows = client.get("/api/symbol/AAPL/bars?range=1m").json()
+    assert 15 <= len(rows) <= 25
+    closes = np.array([r["close"] for r in client.get("/api/symbol/AAPL/bars?range=max").json()])
+    last = rows[-1]
+    assert last["sma200"] == pytest.approx(float(np.mean(closes[-200:])))
+    assert last["sma50"] == pytest.approx(float(np.mean(closes[-50:])))
+    assert all(r["sma20"] is not None for r in rows)
