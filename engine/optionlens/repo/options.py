@@ -112,15 +112,17 @@ def latest_columns(symbols: Sequence[str] | None = None, right: str | None = Non
                    expiry_min: date | None = None, expiry_max: date | None = None,
                    min_oi: int | None = None, min_volume: int | None = None) -> dict[str, np.ndarray]:
     """Universe-wide option_latest filter -> columns (symbol, osi, expiry, strike, right, bid, ask, last,
-    change, volume, oi, iv, delta, gamma, theta, vega, rho, theo, ts, underlying), ordered by symbol, expiry, strike."""
+    change, volume, oi, iv, delta, gamma, theta, vega, rho, theo, ts, underlying), ordered by symbol, expiry, strike.
+    Without min_oi / min_volume, contracts with unknown (NULL) OI or volume are included; with them, only contracts
+    whose known value reaches the minimum."""
     return columns(f"""
         SELECT {_LATEST_COLS} FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
         WHERE (?::VARCHAR[] IS NULL OR o.symbol IN (SELECT unnest(?::VARCHAR[])))
           AND (?::VARCHAR IS NULL OR o."right" = ?)
           AND o.expiry >= COALESCE(?::DATE, DATE '1900-01-01') AND o.expiry <= COALESCE(?::DATE, DATE '2999-12-31')
-          AND o.oi >= COALESCE(?::BIGINT, 0) AND o.volume >= COALESCE(?::BIGINT, 0)
+          AND (?::BIGINT IS NULL OR o.oi >= ?) AND (?::BIGINT IS NULL OR o.volume >= ?)
         ORDER BY o.symbol, o.expiry, o.strike, o."right" """,
-        [_syms(symbols), _syms(symbols), right, right, expiry_min, expiry_max, min_oi, min_volume])
+        [_syms(symbols), _syms(symbols), right, right, expiry_min, expiry_max, min_oi, min_oi, min_volume, min_volume])
 
 
 def latest_by_symbol(symbols: Sequence[str] | None = None, right: str | None = None,

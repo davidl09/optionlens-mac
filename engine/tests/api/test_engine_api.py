@@ -139,6 +139,26 @@ def test_ingest_delayed_flag_is_required_and_exposed(client):
     client.post("/api/ingest/chain", json=_chain())
 
 
+def test_contracts_with_unknown_oi_or_volume_are_served_in_the_chain(client):
+    """Weekend delayed-frozen data often has no OI / volume for whole expiries: those contracts (and so their
+    expiries) must still be served, with null fields, never dropped by a SQL `oi >= 0` filter."""
+    body = _chain(contracts=[_contract(120.0, "C"), _contract(120.0, "P"),
+                             _contract(120.0, "C", expiry="2026-11-27", oi=None, volume=None),
+                             _contract(120.0, "P", expiry="2026-11-27", oi=None, volume=5),
+                             _contract(125.5, "C", expiry="2026-12-04", bid=None, ask=None, last=None, oi=None,
+                                       volume=None, iv=None, delta=None)])
+    assert client.post("/api/ingest/chain", json=body).status_code == 200
+    from optionlens.services import context
+    context.invalidate()                   # same fetched_at as the chain cached by earlier tests
+    ch = client.get("/api/symbol/DELL/chain?expiry=2026-11-27").json()
+    assert [e["expiry"] for e in ch["expiries"]] == ["2026-11-27", "2026-12-04", "2026-12-18"]
+    assert [(r["oi"], r["volume"]) for r in ch["calls"] + ch["puts"]] == [(None, None), (None, 5)]
+    no_quote = client.get("/api/symbol/DELL/chain?expiry=2026-12-04").json()["calls"]
+    assert [(r["strike"], r["bid"], r["ask"], r["mid"], r["oi"]) for r in no_quote] == [(125.5, None, None, None, None)]
+    client.post("/api/ingest/chain", json=_chain())
+    context.invalidate()
+
+
 def test_ingest_final_chain_archives_the_session(client):
     close = datetime(2026, 11, 18, 21, 25, tzinfo=timezone.utc)   # 16:25 ET
     r = client.post("/api/ingest/chain", json=_chain(final=True, session_date="2026-11-18",
