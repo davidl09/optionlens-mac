@@ -239,9 +239,9 @@ test("Settings → Updates: up to date, available (notes as plain text), downloa
   await expect(card.getByText("42%")).toBeVisible();
   await expect(card.getByRole("button", { name: "Check now" })).toBeDisabled();
 
-  await emit(page, "update", { ...UP_TO_DATE, phase: "ready", latest, blocked: "Waiting until the Mac is idle to restart into the update." });
+  await emit(page, "update", { ...UP_TO_DATE, phase: "ready", latest, blocked: "Waiting until the computer is idle to restart into the update." });
   await expect(card.getByText("Version 0.1.4 is downloaded and verified.")).toBeVisible();
-  await expect(card.locator(".warn-box", { hasText: "Waiting until the Mac is idle" })).toBeVisible();
+  await expect(card.locator(".warn-box", { hasText: "Waiting until the computer is idle" })).toBeVisible();
   await card.getByRole("button", { name: "Restart and install" }).click();
   await expect.poll(() => updateCalls(page)).toEqual(["check", "install", "install"]);
 
@@ -258,7 +258,7 @@ test("Settings → Updates: move-to-Applications, rollback notice, automatic mod
   await page.goto("/settings");
   const card = page.locator(".updates");
   await expect(card.getByText("Move OptionLens to the Applications folder first")).toBeVisible();
-  await expect(card.getByText("This version was rolled back on this Mac")).toBeVisible();
+  await expect(card.getByText("This version was rolled back on this computer")).toBeVisible();
   await card.getByRole("button", { name: "Dismiss" }).click();
   await expect.poll(() => updateCalls(page)).toEqual(["dismiss"]);
 

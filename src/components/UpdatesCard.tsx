@@ -60,7 +60,7 @@ export function UpdatesCard({ u, settings, onSave }: { u: UpdateStatus; settings
           <dt>Latest</dt><dd>{u.latest?.version ?? "—"}{u.checkedAt && <span className="muted small"> · checked {fmtDateTime(u.checkedAt)}</span>}</dd>
         </dl>
         <PhaseLine u={u} />
-        {u.skipped && <InfoBox>This version was rolled back on this Mac, so it is not installed automatically. You can still install it here.</InfoBox>}
+        {u.skipped && <InfoBox>This version was rolled back on this computer, so it is not installed automatically. You can still install it here.</InfoBox>}
         {u.blocked && <div className="warn-box">{u.blocked}</div>}
         {u.latest && u.latest.version !== u.currentVersion && u.latest.notes && (
           <details className="release-notes" open={u.phase === "available"}>
@@ -76,7 +76,7 @@ export function UpdatesCard({ u, settings, onSave }: { u: UpdateStatus; settings
         </div>
         <label className="check-inline">
           <input type="checkbox" checked={settings.updates.auto} onChange={(e) => void save({ ...settings.updates, auto: e.target.checked }, null)} />
-          Install updates automatically (downloaded in the background, installed when the Mac is idle — never 16:15–16:50 ET on weekdays)
+          Install updates automatically (downloaded in the background, installed when the computer is idle — never 16:15–16:50 ET on weekdays)
         </label>
         <form className="settings-form" onSubmit={submitSource}>
           <label>Update source (GitHub owner/repo)

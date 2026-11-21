@@ -96,7 +96,7 @@ function BridgeForm({ settings, onSave }: { settings: AppSettings; onSave: (s: A
     setMsg(err ? { ok: false, text: err } : { ok: true, text: "Saved. The bridge reconnects with the new settings." });
   };
   return (
-    <Card title="Bridge connection" subtitle="IB Gateway or TWS on this Mac">
+    <Card title="Bridge connection" subtitle="IB Gateway or TWS on this computer">
       <form className="settings-form" onSubmit={(e) => void submit(e)}>
         <label className="check-inline"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Use IBKR (connect to IB Gateway / TWS)</label>
         <label>API port
@@ -150,12 +150,12 @@ export default function SettingsPage() {
         <Card title="General">
           <label className="check-inline">
             <input type="checkbox" checked={settings.launchAtLogin} onChange={(e) => void save({ ...settings, launchAtLogin: e.target.checked })} />
-            Launch OptionLens at login (it keeps collecting in the menu bar when the window is closed)
+            Launch OptionLens at login (it keeps collecting in the tray when the window is closed)
           </label>
           {loginItem === "requires-approval" && (
             <InfoBox>macOS needs your approval: open <b>System Settings → General → Login Items</b> and turn on OptionLens.</InfoBox>
           )}
-          <p className="muted small">Notifications from your alerts appear as macOS notifications; clicking one opens it here.</p>
+          <p className="muted small">Notifications from your alerts appear as system notifications; clicking one opens it here.</p>
         </Card>
       )}
       {settings && update && <UpdatesCard u={update} settings={settings} onSave={save} />}
