@@ -31,15 +31,44 @@ def test_build_result_drawdown_cagr_sharpe():
     s = r["summary"]
     assert s["max_drawdown"] == pytest.approx(-0.25)
     assert s["cagr"] == pytest.approx(1.3 ** (365.25 / 366) - 1)
-    ch = np.array([0.2, -0.25, 130 / 90 - 1])
+    ch = np.diff(np.log([100.0, 120.0, 90.0, 130.0]))             # log returns: sign of the total return
     assert s["sharpe"] == pytest.approx(ch.mean() / ch.std(ddof=1) * math.sqrt(252))
     assert s["total_return"] == pytest.approx(0.30)                 # equity end / start − 1
-    assert s["win_rate"] == 0.5 and s["total_pnl"] == 0.0
+    assert s["win_rate"] == 0.5 and s["starting_capital"] == 100.0
+    assert s["total_pnl"] == pytest.approx(30.0)                    # dollars of the stated capital: agrees with +30%
     assert s["real_count"] == 1 and s["model_count"] == 1
     assert s["avg_hold_days"] == pytest.approx((1 + 5) / 2)
     assert r["benchmark"] is None and r["notes"] == ["n"]
     assert r["equity"][1] == {"date": date(2024, 1, 2), "value": 120.0}
     assert sum(h["count"] for h in r["histogram"]) == 2 and len(r["histogram"]) == 5
+
+
+def test_sharpe_sign_follows_the_total_return_and_drawdown_is_bounded():
+    """Volatile equity that ends lower: arithmetic mean daily returns can be positive (volatility drag); the
+    log-return Sharpe is negative like the total return. A wiped-out curve has no Sharpe and DD -100%."""
+    days = cal.trading_days(date(2025, 1, 2), date(2025, 3, 31))
+    eq = [(d, 100 * (1.5 if i % 2 else 1.0) * 0.99 ** i) for i, d in enumerate(days[:41])]
+    trades = [dict(symbol="T", entry_date=days[0], exit_date=days[40], legs="x", entry_value=1, exit_value=1,
+                   pnl=-1.0, ret=-0.1, pricing="model", note=None)]
+    r = np.array([v for _, v in eq])
+    assert np.mean(r[1:] / r[:-1] - 1) > 0                           # the old (arithmetic) Sharpe was positive
+    s = bt.build_result(trades, eq, None, [])["summary"]
+    assert s["total_return"] < 0 and s["sharpe"] < 0
+    wiped = [(days[0], 100.0), (days[1], 50.0), (days[2], -10.0), (days[3], 5.0)]
+    s = bt.build_result(trades, wiped, None, [])["summary"]
+    assert s["sharpe"] is None and s["max_drawdown"] == -1.0
+
+
+def test_stop_loss_changes_the_win_rate_when_it_cuts_a_trade_that_recovers():
+    from optionlens.models import Bar
+    days = cal.trading_days(date(2025, 1, 2), date(2025, 2, 28))
+    closes = [100, 93, 97, 103, 104, 105] * 7                        # each 5-day trade dips 7%, ends +4..5%
+    bars = [Bar("T", d, c, c, c, c, 1000) for d, c in zip(days, closes)]
+    entry = {"type": "every_n_days", "n": 6}
+    plain = bt.backtest_stock({"T": bars}, entry, {"hold_days": 4})["summary"]
+    stopped = bt.backtest_stock({"T": bars}, entry, {"hold_days": 4, "stop_loss": 0.05})["summary"]
+    assert plain["win_rate"] == 1.0 and stopped["win_rate"] == 0.0
+    assert stopped["total_pnl"] < 0 < plain["total_pnl"]
 
 
 def test_build_result_flat_equity_and_empty():

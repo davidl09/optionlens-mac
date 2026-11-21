@@ -98,13 +98,16 @@ def test_long_call_to_expiry_model_pricing_flat_price():
     assert s["total_pnl"] == pytest.approx(sum(t["pnl"] for t in tr))
     eq = res["equity"]
     assert eq[0]["date"] == date(2025, 1, 2)
-    # capital = peak basis in use: monthly entries overlap the previous 30-DTE trade -> 2 bases
+    # capital = the cash that funds every trade: 6 premiums, each lost in full before the next is paid for
     capital = eq[0]["value"]
-    assert capital == pytest.approx(2 * max(t["entry_value"] for t in tr), rel=0.05)
+    assert s["starting_capital"] == capital
+    assert capital == pytest.approx(sum(t["entry_value"] for t in tr), rel=0.05)
     assert eq[-1]["value"] == pytest.approx(capital + s["total_pnl"])
+    assert min(e["value"] for e in eq) >= -1e-9                       # never below zero
     assert s["total_return"] == pytest.approx(s["total_pnl"] / capital)
     assert res["benchmark"][0]["value"] == pytest.approx(capital) and res["benchmark"][-1]["value"] == pytest.approx(capital)
-    assert s["max_drawdown"] < 0
+    assert -1.0 <= s["max_drawdown"] < 0
+    assert s["sharpe"] is None or s["sharpe"] < 0                     # losing every trade: never a positive Sharpe
 
 
 def test_real_vs_model_tagging_and_strike_snapping():
@@ -303,7 +306,7 @@ def test_long_straddle_fair_when_moves_match_history():
     assert long_["trades"] == 8 and long_["model_count"] == 8
     # priced with the event variance the realized moves match: small edge either way, not hundreds of %
     assert abs(long_["avg_return"]) < 0.25 and abs(short["avg_return"]) < 0.25
-    assert any("base_iv²·T + event_var" in n for n in res["notes"]) and "8 symbol" in res["notes"][1]
+    assert any("base_iv²·T + event_var" in n for n in res["notes"]) and "8 symbol" in res["notes"][2]
     # without the event term the same strangle-like long premium looked like a huge winner
     plain = ob._Market("TST", ob.bar_arrays(bars), FakeProvider(iv=0.20), R, 0.0)
     a = plain.bars

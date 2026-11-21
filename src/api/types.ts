@@ -310,7 +310,9 @@ export interface BacktestTrade {
 }
 export interface BacktestResult {
   trades: BacktestTrade[];
-  summary: { count: number; win_rate: number | null; avg_return: number | null; median_return: number | null; total_return: number | null; cagr: number | null; sharpe: number | null; max_drawdown: number | null; avg_hold_days: number | null; total_pnl: number | null; real_count: number; model_count: number };
+  summary: { count: number; win_rate: number | null; avg_return: number | null; median_return: number | null; total_return: number | null; cagr: number | null; sharpe: number | null; max_drawdown: number | null; avg_hold_days: number | null;
+    /** Equity curve's first value (stock: $10,000; options: the cash that funds every trade); total_pnl = its dollar change. */
+    starting_capital?: number | null; total_pnl: number | null; real_count: number; model_count: number };
   equity: { date: ISODate; value: number }[];
   benchmark: { date: ISODate; value: number }[] | null;   // buy & hold, same start value
   histogram: { bin_start: number; bin_end: number; count: number }[];

@@ -276,8 +276,9 @@ STRAT_COLS = (
     *C.DESC_SHORT[:2], Col("strategy", "Strategy", "text", default_hidden=True), Col("label", "Strategy", "text"),
     Col("next_earnings", "Next earnings", "date"), Col("time", "Time", "badge"),
     *group("Backtest", (Col("trades", "# Trades", "int"), Col("win_rate", "Win rate", "pct"),
-                        Col("avg_return", "Avg return", "pct_signed", description="% of debit, or of max risk for credit"),
-                        Col("median_return", "Median", "pct_signed"), Col("best", "Best", "pct_signed"),
+                        Col("median_return", "Median return", "pct_signed",
+                            description="% of max(debit or max risk, 0.5% of spot); typical outcome"),
+                        Col("avg_return", "Avg return", "pct_signed", description="Mean; outliers dominate few trades"), Col("best", "Best", "pct_signed"),
                         Col("worst", "Worst", "pct_signed"),
                         Col("avg_pnl", "Avg $ P/L", "money", description="Per contract unit"),
                         Col("pricing", "Pricing mix", "text", description="real / model priced trades"),
@@ -339,10 +340,11 @@ STRATEGY_SCREENER = ReportDef(
      Param("strategy", "Strategy", "select", "all", options=STRATEGY_OPTIONS),
      p_int("min_trades", "Min trades", 3, 0, 12), p_int("max_symbols", "Max symbols", 40, 1, 300),
      MIN_MCAP, UNIVERSE_ONLY, *SCOPE),
-    STRAT_COLS, run_strategy_screener, ("avg_return", "desc"),
+    STRAT_COLS, run_strategy_screener, ("median_return", "desc"),
     ("Real stored EOD option mids are used when available (spread ≤ 25%); otherwise Black-Scholes with the "
      "SPEC IV proxy — see the pricing mix. Option history starts with the collector, so most trades are model-priced.",
      "Expiry = first listed expiry on/after the exit date (≥ 2 days after for short premium).",
+     optbacktest.EVENT_RETURN_NOTE,
      optbacktest.EVENT_VOL_NOTE))
 
 

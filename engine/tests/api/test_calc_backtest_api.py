@@ -60,7 +60,9 @@ def test_stock_backtest_consistency(client):
                                              "exit": {"hold_days": 5}, "side": "long", "start": "2020-01-01"})
     s, trades = r["summary"], r["trades"]
     assert s["count"] == len(trades) > 50
-    assert s["total_pnl"] == pytest.approx(sum(t["pnl"] for t in trades))
+    assert s["starting_capital"] == 10_000 and any("$10,000" in n for n in r["notes"])
+    assert s["total_pnl"] == pytest.approx(r["equity"][-1]["value"] - r["equity"][0]["value"])
+    assert s["total_pnl"] == pytest.approx(s["starting_capital"] * s["total_return"])    # P/L agrees with the return
     assert s["win_rate"] == pytest.approx(sum(t["pnl"] > 0 for t in trades) / len(trades))
     assert all(t["ret"] == pytest.approx(t["exit_value"] / t["entry_value"] - 1) for t in trades)
     assert r["benchmark"] and r["equity"][0]["date"] >= "2020-01-01"

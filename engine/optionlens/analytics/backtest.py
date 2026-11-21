@@ -45,15 +45,15 @@ def equity_stats(equity: Sequence[tuple[date, float]]) -> dict:
     span = (equity[-1][0] - equity[0][0]).days
     if span >= 1 and v[0] > 0 and v[-1] > 0:
         out["cagr"] = float((v[-1] / v[0]) ** (365.25 / span) - 1.0)
-    if len(v) >= 3 and np.all(v[:-1] != 0):
-        r = v[1:] / v[:-1] - 1.0
+    if len(v) >= 3 and np.all(v > 0):          # a wiped-out account (equity ≤ 0) has no Sharpe ratio
+        r = np.diff(np.log(v))                   # log returns: Σ = log(end/start), so the sign matches the total return
         sd = float(np.std(r, ddof=1))
         if sd > _FLAT_STD * max(1.0, abs(float(np.mean(r)))):
             out["sharpe"] = float(np.mean(r) / sd * math.sqrt(TRADING_DAYS))
     peak = np.maximum.accumulate(v)
     with np.errstate(divide="ignore", invalid="ignore"):
         dd = np.where(peak > 0, v / peak - 1.0, 0.0)
-    out["max_drawdown"] = float(min(0.0, np.min(dd)))
+    out["max_drawdown"] = float(max(-1.0, min(0.0, np.min(dd))))
     return out
 
 
@@ -65,8 +65,9 @@ def build_result(
     total_return = equity end/start − 1 (so it agrees with the equity curve and CAGR also when
     trades of several symbols overlap; for one symbol's sequential trades = Π(1+ret)−1); cagr from the
     equity curve's first/last value and calendar span; sharpe = mean/std(ddof=1)·√252 of daily
-    equity changes (None when < 2 changes or flat); max_drawdown ≤ 0; avg_hold_days in trading
-    days."""
+    log equity changes (its sign is the total return's; None when < 2 changes, flat or equity ≤ 0);
+    max_drawdown in [−1, 0]; starting_capital = the equity curve's first value and total_pnl its dollar
+    change (so P/L and total return agree); avg_hold_days in trading days."""
     rets = [t["ret"] for t in trades if t.get("ret") is not None]
     total = float(equity[-1][1] / equity[0][1] - 1.0) if trades and equity and equity[0][1] else None
     es = equity_stats(equity)
@@ -79,7 +80,8 @@ def build_result(
         "total_return": total,
         "cagr": es["cagr"], "sharpe": es["sharpe"], "max_drawdown": es["max_drawdown"],
         "avg_hold_days": float(np.mean(holds)) if holds else None,
-        "total_pnl": float(sum(t["pnl"] for t in trades)) if trades else None,
+        "starting_capital": float(equity[0][1]) if trades and equity else None,
+        "total_pnl": float(equity[-1][1] - equity[0][1]) if trades and equity else None,
         "real_count": sum(1 for t in trades if t.get("pricing") == "real"),
         "model_count": sum(1 for t in trades if t.get("pricing") == "model"),
     }
@@ -296,6 +298,9 @@ def backtest_stock(
                     last[s] = m[d]
             benchmark.append((d, initial * float(np.mean(list(last.values())))))
     all_trades.sort(key=lambda t: (t["entry_date"], t["symbol"]))
+    notes.append(f"Equity starts at ${initial:,.0f}, fully invested in each open position (equal weights when "
+                 "several symbols are open) and compounded; total P/L is the equity's dollar change. Trade P/L is "
+                 "per share.")
     uses_earnings = entry["type"] in ("days_before_earnings", "days_after_earnings") or exit.get("at_earnings_reaction")
     if uses_earnings and any(e.timing == "unknown" for evs in (earnings_by_symbol or {}).values() for e in evs):
         notes.append(UNKNOWN_TIMING_NOTE)

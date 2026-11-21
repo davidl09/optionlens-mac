@@ -364,14 +364,17 @@ def _run_trade(mk: _Market, legs: list[Leg], i0: int, last_i: int, exit_rule: Ma
 
 
 def _option_equity(a: BarArrays, results, lo: int, hi: int) -> tuple[list, list, float]:
-    """Equity = capital + realized + unrealized P/L, marked daily; capital = peak Σ basis of
-    concurrently open trades. Benchmark = buy & hold of the underlying with the same start value."""
+    """Equity = capital + realized + unrealized P/L, marked daily (trade marks between entry and exit).
+    capital = the cash that funds every trade without new money: the peak over days of (capital at risk of the
+    open trades − P/L realized before), and at least the worst cumulative loss, so equity never falls below 0 and
+    drawdown is ≥ −100%. Benchmark = buy & hold of the underlying with the same start value."""
     if not results:
         return [], [], 0.0
     days = a.dates[lo: hi + 1]
     pos = {d: k for k, d in enumerate(days)}
     pnl = np.zeros(len(days))
     used = np.zeros(len(days))
+    realized = np.zeros(len(days))
     for trade, path in results:
         k0 = pos[trade["entry_date"]]
         k1 = pos[trade["exit_date"]]
@@ -387,7 +390,8 @@ def _option_equity(a: BarArrays, results, lo: int, hi: int) -> tuple[list, list,
             pnl[k] += last if k < k1 else trade["pnl"]
             if k < k1:
                 used[k] += path[0][2]
-    capital = float(max(used.max(), max(p[0][2] for _, p in results)))
+        realized[k1:] += trade["pnl"]     # exit at that close: funds a trade entered at the same close
+    capital = float(max((used - realized).max(), max(p[0][2] for _, p in results), -pnl.min()))
     first = min(pos[t["entry_date"]] for t, _ in results)
     last = max(pos[t["exit_date"]] for t, _ in results)
     eq = [(days[k], capital + float(pnl[k])) for k in range(first, last + 1)]
@@ -413,9 +417,10 @@ def backtest_options(symbol: str, bars: Sequence, template_id: str, *, provider:
     mk = _Market(symbol, a, provider, rate, div_yield, is_index)
     notes = ["Option prices: stored EOD mids when available, else Black-Scholes with an IV proxy "
              "(stored ATM IV → IV30 → HV30·k); model rows are approximations.",
-             "Not compounded: one position size throughout; equity = capital (peak capital at risk of the open "
-             "trades) + cumulative P/L, so total return and drawdown are relative to that capital and fall below "
-             "−100% when cumulative losses exceed it."]
+             "Not compounded: one position size throughout. Starting capital = the cash that funds every trade "
+             "without new money (peak premium / max loss at risk of the open trades, less the P/L realized before "
+             "them); equity = starting capital + cumulative P/L marked daily, so total return, CAGR, Sharpe and "
+             "drawdown (the largest fall from a running equity peak, at most −100%) are relative to it."]
     if len(a) < 2:
         return build_result([], [], None, notes)
     lo = a.index_on_or_after(start) if start else 0
@@ -582,8 +587,15 @@ def _event_markets(mk: _Market, events: Sequence, windows: Sequence[tuple],
 def _event_notes(windows: Sequence[EarningsWindow], markets: Sequence[_Market]) -> list[str]:
     srcs = [m.event.source for m in markets]
     counts = ", ".join(f"{srcs.count(k)} {k}" for k in ("symbol", "universe", "default") if srcs.count(k))
-    return ([EVENT_VOL_NOTE] + ([f"Event variance source per event: {counts}."] if counts else [])
+    return ([EVENT_VOL_NOTE, EVENT_RETURN_NOTE] + ([f"Event variance source per event: {counts}."] if counts else [])
             + ([UNKNOWN_TIMING_NOTE] if any(w.first != w.last for w in windows) else []))
+
+
+MIN_EVENT_DEBIT = 0.05    # $/share: earnings trades entered for less are left out (no meaningful % return)
+MIN_EVENT_BASIS = 0.005   # returns are on max(debit or max risk, 0.5% of spot) per share
+EVENT_RETURN_NOTE = ("Option strategy returns are P/L over max(debit or max risk, 0.5% of spot) per share; trades "
+                     "entered for less than $0.05 per share are left out. Averages of few trades are dominated by "
+                     "outliers: compare the median.")
 
 
 def _earnings_trade(mk: _Market, spec: EarningsStrategy, d0: date, d1: date):
@@ -601,7 +613,15 @@ def _earnings_trade(mk: _Market, spec: EarningsStrategy, d0: date, d1: date):
     if legs is None:
         return None
     r = _run_trade(mk, legs, i0, i1, {"type": "fixed"}, MAX_REAL_SPREAD, fixed_exit=i1)
-    return None if r is None else r[0]
+    if r is None:
+        return None
+    t, path = r
+    units = max((abs(l.qty) for l in legs if l.kind == "option"), default=0.0) * OPTION_MULT
+    if units:
+        if abs(t["entry_value"]) < MIN_EVENT_DEBIT * units:   # a near-zero (model) premium: no meaningful return
+            return None
+        t["ret"] = t["pnl"] / max(path[0][2], MIN_EVENT_BASIS * s0 * units)
+    return t
 
 
 def earnings_strategy_trades(symbol: str, bars: Sequence, events: Sequence, strategy_id: str, *,
