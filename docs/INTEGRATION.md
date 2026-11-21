@@ -183,8 +183,9 @@ aborted and re-queued (no attempt used) so the refresh does not wait behind a lo
 chain_universe 4, underlying_stats 3, index quotes/bars 2, option_bars 1, iv_history 1), so each kind with
 work makes progress in every cycle.
 ```
-{ "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // symbols whose stored IV history is
-                                                                // missing or older than the last session
+{ "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // IV30 series to fetch (see below)
+  "hv_history": [ {"symbol": "AAPL", "from": "2026-11-20"} ],   // HV30 series, same rule per series
+  "history_symbols": 836,                                       // symbols kept (wanted or already current)
   "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, during the session
   "chain_universe": { "symbols": ["AAPL", ...], "max_age_s": 3600,       // watchlists + most liquid N (config,
                       "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols;
@@ -213,6 +214,13 @@ residents). Server-side scheduled chain sweeps therefore run only if a vendor Ch
 (none by default). Reports that need full chains (strategy screeners, option screener, OI changes, large
 volume contracts) cover the chain universe; their `notes` say so. Universe-level reports (unusual volume,
 IV rankings, put/call, broad view) use underlying-stats for every symbol.
+
+History wants: a series (IV30 or HV30, each on its own) is wanted from 10 years back only when the symbol has no
+backfilled history of it — none, or one spanning under 30 days; the IV30 values that underlying-stats pushes add
+to the history are single days (stored with source `<source>:stats`) and never count as one. A backfilled series
+is wanted from the day after its last point when that predates the last completed session, and not at all when
+current. The bridge shows IV/HV backfill progress over all `history_symbols` (two series each): series already
+current, or attempted within the last 20 h, count as done, so a restart or update does not reset the count.
 
 IV history semantics: values ingested via `/api/ingest/iv-history` populate a per-symbol daily IV30
 series used for IV rank/percentile, vol history charts and the model-pricing IV proxy, wherever the

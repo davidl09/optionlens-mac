@@ -6,7 +6,11 @@ import { nyDate } from "./ny";
 import type { TwsContract } from "./tws";
 
 export interface Wants {
+  /** IV30 / HV30 daily history to fetch per symbol, from `from` (YYYY-MM-DD). */
   ivHistory: { symbol: string; from: string }[];
+  hvHistory: { symbol: string; from: string }[];
+  /** How many symbols the engine keeps IV/HV history for (wanted or already current); null = not said. */
+  historySymbols: number | null;
   underlyingStats: { symbols: string[]; maxAgeS: number } | null;
   chainUniverse: { symbols: string[]; maxAgeS: number; shape: ChainShape } | null;
   eodChains: { sessionDate: string; symbols: string[]; notBefore: number; deadline: number } | null;
@@ -81,6 +85,8 @@ export function parseWants(raw: unknown): Wants {
   }) : [];
   return {
     ivHistory,
+    hvHistory: symbolsFrom(w.hv_history, "hv_history"),
+    historySymbols: present(w.history_symbols) ? Math.round(num(w.history_symbols, "history_symbols", 0, 1e6)) : null,
     underlyingStats: us ? { symbols: symbols(us.symbols, "underlying_stats.symbols"), maxAgeS: num(us.max_age_s, "underlying_stats.max_age_s", 1, 86_400 * 7) } : null,
     chainUniverse: cu ? { symbols: symbols(cu.symbols, "chain_universe.symbols"), maxAgeS: num(cu.max_age_s, "chain_universe.max_age_s", 1, 86_400 * 7), shape: shape(cu, "chain_universe") } : null,
     eodChains: eod ? {
@@ -149,9 +155,9 @@ export function planWants(w: Wants, c: PlanContext): Plan {
     indexQuotes: w.indexSymbols,
     indexBars: w.indexBars.filter((x) => !c.attemptedWithin(ledgerKey.indexBars(x.symbol), HIST_RETRY_MS)),
     optionBars: w.optionBars.filter((o) => o.sessions.length > 0 && !c.attemptedWithin(ledgerKey.optionBars(o.symbol, o.sessions), HIST_RETRY_MS)),
-    volHistory: w.ivHistory.flatMap((x) => (["iv30", "hv30"] as const)
-      .filter((kind) => !c.attemptedWithin(ledgerKey.vol(kind, x.symbol), HIST_RETRY_MS))
-      .map((kind) => ({ symbol: x.symbol, from: x.from, kind }))),
+    volHistory: ([["iv30", w.ivHistory], ["hv30", w.hvHistory]] as const).flatMap(([kind, list]) => list
+      .filter((x) => !c.attemptedWithin(ledgerKey.vol(kind, x.symbol), HIST_RETRY_MS))
+      .map((x) => ({ symbol: x.symbol, from: x.from, kind }))),
   };
 }
 

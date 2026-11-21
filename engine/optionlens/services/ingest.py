@@ -209,20 +209,19 @@ def heartbeat(body: dict, now: datetime | None = None) -> dict:
 
 # ----------------------------------------------------------------------------- wants
 def wants(now: datetime | None = None) -> dict:
-    """GET /api/ingest/wants: IV history for watchlist + index + universe symbols whose ingested
-    history is missing or ends before the last completed session (from the day after it, else
-    IV_HISTORY_YEARS back), plus the plans of jobs.bridge_plan (underlying stats, chain universe,
+    """GET /api/ingest/wants: IV and HV history for watchlist + index + universe symbols (history_want;
+    `history_symbols` = how many symbols that is, so the client can show progress over all of them), plus the plans of jobs.bridge_plan (underlying stats, chain universe,
     closing chains, option-bar catch-up), the VIX family (quotes), missing index history (index_bars_want) and the
     on-demand chain freshness bound."""
     now = (now or now_ny()).astimezone(NY)
     last = last_completed_session(now)
     syms = list(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
                                *symbols_repo.universe_symbols()]))
-    have = vol_history_repo.last_dates("iv30", syms)
     start = date(now.year - IV_HISTORY_YEARS, 1, 1)
     return {
-        "iv_history": [{"symbol": s, "from": have[s] + timedelta(days=1) if s in have else start}
-                       for s in syms if s not in have or have[s] < last],
+        "iv_history": history_want("iv30", syms, start, last),
+        "hv_history": history_want("hv30", syms, start, last),
+        "history_symbols": len(syms),
         "underlying_stats": bridge_plan.underlying_stats_want(now),
         "chain_universe": bridge_plan.chain_universe_want(now),
         "eod_chains": bridge_plan.eod_chains_want(now),
@@ -231,6 +230,25 @@ def wants(now: datetime | None = None) -> dict:
         "index_bars": index_bars_want(now.date(), last),
         "chains_on_demand_max_age_s": int(ctx.REFRESH_MIN_INTERVAL_S),
     }
+
+
+HISTORY_MIN_SPAN_DAYS = 30   # a series spanning less was not backfilled (a few single-day values)
+
+
+def history_want(kind: str, symbols: list[str], start: date, last_session: date) -> list[dict]:
+    """[{symbol, from}] of a vol_history kind to fetch: from `start` (IV_HISTORY_YEARS back) for a symbol without a
+    backfilled series — none, or one spanning under HISTORY_MIN_SPAN_DAYS (e.g. only the IV30 values of underlying
+    stats pushes, which are single days and do not count) — else from the day after its last point when that
+    predates the last completed session. A symbol whose history is current is not listed."""
+    cov = vol_history_repo.history_coverage(kind, symbols, chains.STATS_SUFFIX)
+    out = []
+    for s in symbols:
+        c = cov.get(s)
+        if c is None or (c[1] - c[0]).days < HISTORY_MIN_SPAN_DAYS:
+            out.append({"symbol": s, "from": start})
+        elif c[1] < last_session:
+            out.append({"symbol": s, "from": c[1] + timedelta(days=1)})
+    return out
 
 
 INDEX_HISTORY_YEARS = 10

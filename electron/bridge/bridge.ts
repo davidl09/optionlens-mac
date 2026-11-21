@@ -32,7 +32,6 @@ export interface BridgeDeps {
   batchTimeoutMs?: number;
 }
 
-const HISTORICAL_KINDS: JobKind[] = ["option-bars", "iv-history"];
 const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
 
 /** Tasks that need the same market-data permission (one kind of data for one symbol). */
@@ -77,7 +76,8 @@ export class Bridge {
   private lastError: string | null = null;
   private wants: Wants | null = null;
   private polling = false;
-  private backfill = { total: 0, done: 0, failed: 0 };
+  /** Historical tasks of this round (since the queues were last idle), counted as they are queued and finish. */
+  private round = { obars: { total: 0, done: 0, failed: 0 }, vol: { total: 0, done: 0, failed: 0 } };
   /** What the last pushes revealed about the account's market data (null = not seen yet). */
   private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
   /** Accepted option-bar catch-up plans not finished yet, by plan ledger key. */
@@ -140,8 +140,23 @@ export class Bridge {
     return {
       enabled: this.d.settings().enabled, tws: c.tws, port: c.port, endpoint: c.endpoint, accountType: c.accountType, paused: c.paused,
       lastError: c.lastError ?? this.lastError, notes: this.notes(), lastPushAt: this.lastPushAt,
-      current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: { ...this.backfill },
+      current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: this.backfill(),
     };
+  }
+
+  /**
+   * Backfill progress. IV/HV history is counted over every symbol the engine keeps history for (two series each,
+   * wants.history_symbols): a series already current, or attempted recently, is done — so a restart or an app
+   * update does not start the count from zero. Option-bar catch-up is counted per round.
+   */
+  private backfill(): { total: number; done: number; failed: number } {
+    const o = this.round.obars;
+    const v = this.round.vol;
+    const symbols = this.wants?.historySymbols;
+    if (symbols === null || symbols === undefined) return { total: o.total + v.total, done: o.done + v.done, failed: o.failed + v.failed };
+    const volTotal = Math.max(2 * symbols, v.total);
+    const volLeft = this.scheduler.counts()["iv-history"] + (this.scheduler.current()?.kind === "iv-history" ? 1 : 0);
+    return { total: o.total + volTotal, done: o.done + Math.max(0, volTotal - volLeft - v.failed), failed: o.failed + v.failed };
   }
 
   private notes(): string[] {
@@ -242,7 +257,7 @@ export class Bridge {
       this.enqueue(this.task("index", `index-bars:${s}`, `${s} daily bars`, async (ctx) => { if (await pushIndexBars(ctx, s, from)) this.pushed(); },
         { gate: this.pacer, ledgerKey: ledgerKey.indexBars(s), group: group.indexBars(s) }));
     }
-    if (this.idle("option-bars") && this.idle("iv-history")) this.backfill = { total: 0, done: 0, failed: 0 };
+    if (this.idle("option-bars") && this.idle("iv-history")) this.round = { obars: { total: 0, done: 0, failed: 0 }, vol: { total: 0, done: 0, failed: 0 } };
     // Accepted catch-up plans are kept until all their contracts are done, so a reconnect resumes them
     // (the engine does not offer an accepted plan again for hours).
     const accepted = plan.optionBars.filter((o) => !this.obarsPlans.has(ledgerKey.optionBars(o.symbol, o.sessions)) && !this.isDenied(group.optionBars(o.symbol).id));
@@ -268,12 +283,12 @@ export class Bridge {
   private enqueue(t: Task): Promise<Outcome> {
     if (this.isDenied(t.group)) return Promise.resolve({ ok: false, cancelled: false, error: "no market-data permission" });
     if (this.scheduler.has(t.key)) return this.scheduler.enqueue(t);
-    const historical = HISTORICAL_KINDS.includes(t.kind) && t.gate !== undefined;
-    if (historical) this.backfill.total += 1;
+    const counter = t.gate === undefined ? null : t.kind === "option-bars" ? this.round.obars : t.kind === "iv-history" ? this.round.vol : null;
+    if (counter) counter.total += 1;
     const outcome = this.scheduler.enqueue(t);
     void outcome.then((o) => {
-      if (!historical || (!o.ok && o.cancelled)) return;
-      if (o.ok) this.backfill.done += 1; else this.backfill.failed += 1;
+      if (!counter || (!o.ok && o.cancelled)) return;
+      if (o.ok) counter.done += 1; else counter.failed += 1;
       this.emit();
     });
     return outcome;

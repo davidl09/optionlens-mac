@@ -3,6 +3,8 @@ import { durationFor, EOD_RETRY_MS, ledgerKey, parseWants, planWants, WantsError
 
 const RAW = {
   iv_history: [{ symbol: "AAPL", from: "2016-01-01" }, { symbol: "msft", from: "2026-11-01" }],
+  hv_history: [{ symbol: "AAPL", from: "2016-01-01" }, { symbol: "msft", from: "2026-11-01" }],
+  history_symbols: 5,
   underlying_stats: { symbols: ["AAPL", "MSFT", "KO"], max_age_s: 1800 },
   chain_universe: { symbols: ["AAPL", "MSFT", "TSLA"], max_age_s: 3600, expiries: 6, moneyness: 0.2 },
   eod_chains: { session_date: "2026-11-20", symbols: ["AAPL", "SPX"], not_before: "2026-11-20T16:20:00-05:00", deadline: "2026-11-20T20:00:00-05:00" },
@@ -24,6 +26,13 @@ describe("parseWants", () => {
     expect(w.eodChains?.notBefore).toBe(Date.parse("2026-11-20T21:20:00Z"));
     expect(w.optionBars[0]).toEqual({ symbol: "AAPL", sessions: ["2026-11-18"], shape: { expiries: 6, moneyness: 0.15 } });
     expect(w.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }, { symbol: "VIX", from: "2026-11-19" }]);
+    expect(w.hvHistory[1]).toEqual({ symbol: "MSFT", from: "2026-11-01" });
+    expect(w.historySymbols).toBe(5);
+  });
+
+  it("plans IV and HV history per series: a current HV series is not fetched again from 10 years back", () => {
+    const w = parseWants({ iv_history: [{ symbol: "AAPL", from: "2026-11-20" }], hv_history: [] });
+    expect(planWants(w, ctx(Date.parse("2026-11-21T15:00:00Z"))).volHistory).toEqual([{ symbol: "AAPL", from: "2026-11-20", kind: "iv30" }]);
   });
 
   it("treats absent sections as nothing wanted (older servers)", () => {
@@ -32,6 +41,8 @@ describe("parseWants", () => {
     expect(w.chainUniverse).toBeNull();
     expect(w.optionBars).toEqual([]);
     expect(w.onDemandMaxAgeS).toBe(120);
+    expect(w.hvHistory).toEqual([]);
+    expect(w.historySymbols).toBeNull();
   });
 
   it("fails fast on malformed sections", () => {
@@ -73,7 +84,7 @@ describe("planWants", () => {
     expect(p.eod?.symbols).toEqual(["AAPL"]);
     expect(p.universe.symbols).toEqual(["TSLA"]);
     expect(p.stats).toEqual(["KO"]);
-    expect(p.volHistory.map((v) => `${v.kind}:${v.symbol}`)).toEqual(["hv30:AAPL", "iv30:MSFT", "hv30:MSFT"]);
+    expect(p.volHistory.map((v) => `${v.kind}:${v.symbol}`)).toEqual(["iv30:MSFT", "hv30:AAPL", "hv30:MSFT"]);
     expect(p.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }]);
   });
 });

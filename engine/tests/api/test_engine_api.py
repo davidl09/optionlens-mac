@@ -308,8 +308,9 @@ def test_index_history_is_wanted_and_becomes_the_index_daily_bars(client):
 
 def test_ingest_wants(client):
     w = client.get("/api/ingest/wants").json()
-    assert set(w) == {"iv_history", "underlying_stats", "chain_universe", "eod_chains", "option_bars",
-                      "index_symbols", "index_bars", "chains_on_demand_max_age_s"}
+    assert set(w) == {"iv_history", "hv_history", "history_symbols", "underlying_stats", "chain_universe",
+                      "eod_chains", "option_bars", "index_symbols", "index_bars", "chains_on_demand_max_age_s"}
+    assert w["history_symbols"] >= len(w["iv_history"]) and "AAPL" in {x["symbol"] for x in w["hv_history"]}
     assert set(w["chain_universe"]) == {"symbols", "max_age_s", "expiries", "moneyness"}
     assert set(w["underlying_stats"]) == {"symbols", "max_age_s"} and isinstance(w["option_bars"], list)
     assert w["chains_on_demand_max_age_s"] == 120 and set(w["index_symbols"]) == {"VIX", "VIX9D", "VIX3M", "VIX6M"}
@@ -317,6 +318,24 @@ def test_ingest_wants(client):
     assert "AAPL" in ivs and ivs["AAPL"].endswith("-01-01")
     e = w["eod_chains"]
     assert {"session_date", "symbols", "not_before", "deadline"} <= set(e) and "SPX" in e["symbols"]
+
+
+def test_history_wants_resume_from_the_last_backfilled_day_and_ignore_stats_points(client):
+    """IV/HV history is wanted from 10 years back only without a backfilled series: a symbol whose history was
+    ingested resumes the day after its last point; single-day IV30 values of underlying-stats pushes (tagged
+    '<source>:stats', or legacy ones spanning a few days) do not count as a history."""
+    from optionlens.repo import vol_history
+    from optionlens.services import ingest
+    last = date(2026, 11, 20)
+    start = date(2016, 1, 1)
+    vol_history.upsert("ZZH1", "iv30", "ibkr", [(date(2026, 1, 2) + timedelta(days=i), 0.3) for i in range(300)])
+    vol_history.upsert("ZZH1", "iv30", "ibkr:stats", [(last, 0.31)])                          # stats: ignored
+    vol_history.upsert("ZZH2", "iv30", "ibkr", [(date(2026, 11, 18), 0.9), (date(2026, 11, 19), 0.9)])  # legacy stats
+    vol_history.upsert("ZZH2", "hv30", "ibkr", [(date(2016, 1, 4), 0.2), (last, 0.2)])          # current
+    iv = {x["symbol"]: x["from"] for x in ingest.history_want("iv30", ["ZZH1", "ZZH2"], start, last)}
+    hv = {x["symbol"]: x["from"] for x in ingest.history_want("hv30", ["ZZH1", "ZZH2"], start, last)}
+    assert iv == {"ZZH1": date(2026, 1, 2) + timedelta(days=300), "ZZH2": start}
+    assert hv == {"ZZH1": start}
 
 
 def test_ingest_ack_wants_counts_accepted_option_bar_offers(client):
@@ -341,6 +360,9 @@ def test_ingest_underlying_stats_fill_metrics_and_iv_history(client):
     m = metrics.get_metrics("ZZZZ", date(2026, 11, 17))
     assert m["call_volume"] == 100 and m["iv30"] == pytest.approx(0.4) and m["delayed"] is True
     assert vol_history.last_dates("iv30", ["ZZZZ"]) == {"ZZZZ": date(2026, 11, 17)}
+    from optionlens.services import ingest                        # a stats value is not a backfilled history
+    assert ingest.history_want("iv30", ["ZZZZ"], date(2016, 1, 1), date(2026, 11, 17)) == [
+        {"symbol": "ZZZZ", "from": date(2016, 1, 1)}]
     bad = {**body, "stats": [{"symbol": "ZZZZ", "call_volume": -1}]}
     assert client.post("/api/ingest/underlying-stats", json=bad).status_code == 422
 

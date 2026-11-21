@@ -36,6 +36,15 @@ def last_dates(kind: str, symbols: Sequence[str] | None = None) -> dict[str, dat
         [kind, syms, syms])}
 
 
+def history_coverage(kind: str, symbols: Sequence[str], exclude_source_suffix: str) -> dict[str, tuple[date, date]]:
+    """{symbol: (first, last) date} of a series kind over points whose source does not end with
+    `exclude_source_suffix` (e.g. single-day values pushed with underlying stats)."""
+    return {r["symbol"]: (r["f"], r["l"]) for r in query(
+        """SELECT symbol, min(date) AS f, max(date) AS l FROM vol_history
+           WHERE kind = ? AND NOT ends_with(source, ?) AND symbol IN (SELECT unnest(?::VARCHAR[]))
+           GROUP BY symbol""", [kind, exclude_source_suffix, list(symbols)])}
+
+
 def _merged(cols: Sequence[str]) -> str:
     """SELECT of (symbol, date, <cols>) over metrics_daily FULL JOIN ingested iv30, iv30 = collected
     else ingested (one source per date: the alphabetically first). Params: [syms, syms, syms, syms]."""

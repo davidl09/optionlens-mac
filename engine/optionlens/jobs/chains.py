@@ -143,9 +143,9 @@ def store_underlying_stats(session: date, stats: Sequence[Mapping], source: str)
         else:
             rows[sym] = (new, f"{source}{STATS_SUFFIX}")
     n = metrics_repo.upsert_metrics_many(session, rows)
-    for st in stats:
+    for st in stats:   # tagged '<source>:stats': one day's value, not a backfilled history (ingest.wants)
         if st.get("iv30") is not None and st["iv30"] > 0:
-            vol_history_repo.upsert(st["symbol"], "iv30", source, [(session, float(st["iv30"]))])
+            vol_history_repo.upsert(st["symbol"], "iv30", f"{source}{STATS_SUFFIX}", [(session, float(st["iv30"]))])
     return n
 
 

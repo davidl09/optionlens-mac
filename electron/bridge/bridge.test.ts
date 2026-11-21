@@ -40,6 +40,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
 
 const WANTS = {
   iv_history: [{ symbol: "AAPL", from: "2026-01-02" }],
+  hv_history: [{ symbol: "AAPL", from: "2026-01-02" }],
   underlying_stats: { symbols: ["AAPL", "KO"], max_age_s: 1800 },
   chain_universe: { symbols: ["MSFT"], max_age_s: 3600, expiries: 1, moneyness: 0.2 },
   eod_chains: { session_date: "2026-11-20", symbols: ["AAPL"], not_before: "2026-11-20T16:20:00-05:00", deadline: "2026-11-20T20:00:00-05:00" },
@@ -118,7 +119,7 @@ describe("Bridge", () => {
   });
 
   it("an on-demand refresh pre-empts a running IV-history download, which resumes afterwards", async () => {
-    const h = harness({ iv_history: [{ symbol: "MDLN", from: "2016-01-01" }], chains_on_demand_max_age_s: 0 });
+    const h = harness({ iv_history: [{ symbol: "MDLN", from: "2016-01-01" }], hv_history: [{ symbol: "MDLN", from: "2016-01-01" }], chains_on_demand_max_age_s: 0 });
     const order: string[] = [];
     let downloads = 0;
     const real = h.session.historical.bind(h.session);
@@ -141,6 +142,22 @@ describe("Bridge", () => {
     h.bridge.stop();
   });
 
+  it("backfill progress counts symbols whose history is already current as done (not 0 / remaining after a restart)", async () => {
+    // The engine keeps history for 836 symbols; only MDLN still needs its IV and HV series.
+    const h = harness({ iv_history: [{ symbol: "MDLN", from: "2016-01-01" }], hv_history: [{ symbol: "MDLN", from: "2016-01-01" }], history_symbols: 836 });
+    const real = h.session.historical.bind(h.session);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    h.session.historical = async (c, r, signal) => { await gate; return real(c, r, signal); };
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.bridge.status().backfill).toEqual({ total: 1672, done: 1670, failed: 0 });
+    release();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.bridge.status().backfill).toEqual({ total: 1672, done: 1672, failed: 0 });
+    h.bridge.stop();
+  });
+
   it("reports unavailable when not connected", async () => {
     const h = harness({});
     expect(await h.bridge.refreshSymbol("AAPL")).toMatchObject({ status: "unavailable" });
@@ -150,7 +167,7 @@ describe("Bridge", () => {
     const m = market();
     m.historical = (c) => (c.secType === "OPT" ? new TwsRequestError(162, "Historical Market Data Service error message:No market data permissions for OPRA OPT")
       : [{ time: "20261119", open: 0.2, high: 0.2, low: 0.2, close: 0.2, volume: null }]);
-    const h = harness({ option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 1, moneyness: 0.2 }], iv_history: [{ symbol: "KO", from: "2026-01-02" }] }, m);
+    const h = harness({ option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 1, moneyness: 0.2 }], iv_history: [{ symbol: "KO", from: "2026-01-02" }], hv_history: [{ symbol: "KO", from: "2026-01-02" }] }, m);
     h.bridge.start();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.session.historicalCalls.filter((x) => x.contract.secType === "OPT")).toHaveLength(1);   // 4 contracts planned
