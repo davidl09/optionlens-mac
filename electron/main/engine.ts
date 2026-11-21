@@ -31,6 +31,8 @@ export interface EngineOptions {
   stopTimeoutMs?: number;
   /** Uptime after which the restart backoff resets. */
   stableAfterMs?: number;
+  /** Runs once before the first spawn (e.g. the database backup on an app version change); errors are logged. */
+  beforeFirstStart?: () => Promise<void>;
 }
 
 const LISTENING_RE = /^LISTENING (\d{1,5})\s*$/;
@@ -77,6 +79,9 @@ export class EngineSupervisor {
   /** The app is quitting: never start again (e.g. at the end of whileStopped). */
   private shutDown = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** beforeFirstStart has run (prepared) or is running (preparing). */
+  private prepared = false;
+  private preparing: Promise<void> | null = null;
   private exited: Promise<void> = Promise.resolve();
   private readonly stderrTail: string[] = [];
   /** Why the current spawn is being killed by us (start timeout, failed health check). */
@@ -92,8 +97,16 @@ export class EngineSupervisor {
   start(): void {
     if (this.shutDown) return;
     this.stopping = false;
-    if (this.child || this.timer) return;
-    this.spawnOnce();
+    if (this.child || this.timer || this.preparing) return;
+    if (this.prepared || !this.o.beforeFirstStart) { this.prepared = true; this.spawnOnce(); return; }
+    this.set("starting");
+    this.preparing = this.o.beforeFirstStart()
+      .catch((e: unknown) => { this.o.log.error(`before the engine's first start: ${(e as Error).message}`); })
+      .finally(() => {
+        this.preparing = null;
+        this.prepared = true;
+        if (!this.stopping && !this.shutDown) this.spawnOnce();
+      });
   }
 
   /** Stops the engine for good (app quit): later start / restart / whileStopped calls do nothing. */
@@ -104,6 +117,7 @@ export class EngineSupervisor {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.preparing) await this.preparing;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     const child = this.child;
     if (child) {

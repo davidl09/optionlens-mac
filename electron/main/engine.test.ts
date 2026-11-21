@@ -16,14 +16,14 @@ class FakeChild extends EventEmitter implements ChildLike {
   crash(code = 1) { this.stderr.write("Traceback: boom\n"); this.emit("exit", code, null); }
 }
 
-function harness() {
+function harness(beforeFirstStart?: () => Promise<void>) {
   const children: FakeChild[] = [];
   const envs: NodeJS.ProcessEnv[] = [];
   const spawn: SpawnFn = (_cmd, _args, opts) => { const c = new FakeChild(100 + children.length); children.push(c); envs.push(opts.env); return c; };
   const statuses: EngineStatus[] = [];
   const fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, version: "1.2.3" }) }));
   const sup = new EngineSupervisor({ command: { python: "python3", env: { PYTHONPATH: "/engine" } }, dataDir: "/data", spawn, fetch, parentPid: 4242,
-    log: silentLogger, onStatus: (s) => statuses.push(s), stopTimeoutMs: 50 });
+    log: silentLogger, onStatus: (s) => statuses.push(s), stopTimeoutMs: 50, beforeFirstStart });
   return { sup, children, envs, statuses, fetch };
 }
 
@@ -108,6 +108,40 @@ describe("engine supervisor", () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(await p).toBe(7);
     expect(h.children).toHaveLength(2);
+  });
+
+  it("runs beforeFirstStart (the database backup) once, before the first spawn only", async () => {
+    let finish!: () => void;
+    const prepare = vi.fn(() => new Promise<void>((r) => { finish = r; }));
+    const h = harness(prepare);
+    h.sup.start();
+    h.sup.start();
+    expect(h.sup.status().state).toBe("starting");
+    expect(h.children).toHaveLength(0);
+    finish();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.children).toHaveLength(1);
+    const restarted = h.sup.restart();
+    await vi.advanceTimersByTimeAsync(10);
+    await restarted;
+    expect(h.children).toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failing beforeFirstStart is logged and the engine still starts; a stop while it runs prevents the spawn", async () => {
+    const h = harness(async () => { throw new Error("disk full"); });
+    h.sup.start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.children).toHaveLength(1);
+    let finish!: () => void;
+    const h2 = harness(() => new Promise<void>((r) => { finish = r; }));
+    h2.sup.start();
+    const stopped = h2.sup.stop();
+    finish();
+    await stopped;
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h2.children).toHaveLength(0);
+    expect(h2.sup.status().state).toBe("stopped");
   });
 
   it("parses LISTENING lines strictly", () => {
