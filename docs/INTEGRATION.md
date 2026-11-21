@@ -2,7 +2,7 @@
 
 Two parts, one machine:
 - **engine** (this Python code; FastAPI + DuckDB + in-process scheduler) — the app's embedded backend.
-  The Mac app launches it as a local sidecar process bound to loopback. Collects data (Nasdaq
+  The desktop app launches it as a local sidecar process bound to loopback. Collects data (Nasdaq
   prices/calendars, Treasury rates; option data pushed by the IBKR bridge or an optional vendor source),
   archives end-of-day, serves the analytics API. API-only: it does not serve the UI.
 - **optionlens-mac** — Electron app: the UI (React, formerly `web/`), the engine's lifecycle, and the
@@ -23,11 +23,17 @@ API against other local processes and web pages.
 | `OPTIONLENS_CORS_ORIGINS` | `app://optionlens` | Comma list of allowed browser origins (the Electron renderer origin) |
 | `OPTIONLENS_CHAIN_UNIVERSE_SIZE` | `150` | Most-liquid symbols (by option volume) included in the chain universe besides watchlists and recently opened symbols |
 | `OPTIONLENS_CHAIN_SOURCE` | `none` | Optional server-side vendor chain source (none by default) |
-| `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `~/Library/Application Support/OptionLens/data` |
+| `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `<userData>/data` (macOS `~/Library/Application Support/OptionLens/data`, Windows `%APPDATA%\OptionLens\data`, Linux `~/.config/OptionLens/data`) |
 
-Launch: `python -m optionlens.cli serve [--port N]`. Once the API is ready the engine prints exactly one
-line `LISTENING <port>` on stdout (logs go to stderr); the app reads the port from it. SIGTERM (or
-SIGINT) shuts it down gracefully. One engine per DATA_DIR (DuckDB is single-process).
+Launch: `python -m optionlens.cli serve [--port N] [--exit-on-stdin-eof]`. Once the API is ready the engine
+prints exactly one line `LISTENING <port>` on stdout (logs go to stderr); the app reads the port from it.
+Stopping: the app starts the engine with `--exit-on-stdin-eof` and a stdin pipe, and closes that pipe to stop
+it; the engine then shuts down gracefully (scheduler stopped, database closed) and exits with code 0. This is
+the same on macOS, Linux and Windows (Windows has no SIGTERM); the app kills the process if it has not exited
+after 8 s. SIGTERM (or SIGINT) also shuts it down gracefully on macOS and Linux. The parent-pid watchdog
+uses `kill(pid, 0)` on POSIX and a process handle (`OpenProcess` + `WaitForSingleObject`) on Windows.
+One engine per DATA_DIR (DuckDB is single-process and locks the file; on Windows the file cannot be
+replaced while the engine has it open, so the app stops the engine before an import).
 
 ## 2. Authentication
 

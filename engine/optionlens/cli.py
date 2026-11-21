@@ -53,9 +53,9 @@ def _status() -> int:
     return 0
 
 
-def _serve(port: int | None) -> int:
+def _serve(port: int | None, exit_on_stdin_eof: bool) -> int:
     """The app's sidecar: API + scheduler on loopback (see optionlens.sidecar); --port overrides
-    OPTIONLENS_PORT, 0 picks a free port."""
+    OPTIONLENS_PORT, 0 picks a free port; --exit-on-stdin-eof: stop gracefully when stdin closes."""
     from dataclasses import replace
 
     from . import sidecar
@@ -63,7 +63,7 @@ def _serve(port: int | None) -> int:
     from .config import get_settings
 
     s = get_settings() if port is None else replace(get_settings(), port=port)
-    return sidecar.serve(create_app(s), s)
+    return sidecar.serve(create_app(s), s, exit_on_stdin_eof=exit_on_stdin_eof)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     sv = sub.add_parser("serve", help="run the API + scheduler on loopback (prints `LISTENING <port>` when ready)")
     sv.add_argument("--port", type=int, help="port (default OPTIONLENS_PORT; 0 = pick a free port)")
+    sv.add_argument("--exit-on-stdin-eof", action="store_true",
+                    help="shut down gracefully when stdin reaches end-of-file (the app closes it to stop the engine)")
     r = sub.add_parser("run-job")
     r.add_argument("name", choices=sorted(scheduler.JOBS))
     a = p.parse_args(argv)
@@ -99,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     if a.cmd == "serve":
-        return _serve(a.port)
+        return _serve(a.port, a.exit_on_stdin_eof)
     db.connect()
     try:
         match a.cmd:
