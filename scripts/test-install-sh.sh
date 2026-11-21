@@ -5,7 +5,7 @@
 # Usage: scripts/test-install-sh.sh [path to OptionLens-<version>-linux-x64.AppImage]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=../install.sh
+# shellcheck disable=SC1091  # install.sh is linted on its own
 source "$ROOT/install.sh"
 APPIMAGE="${1:-}"
 T="$(mktemp -d)"
@@ -43,7 +43,7 @@ check "desktop entry Exec" "$(desktop_entry "/h/My Apps/OptionLens.AppImage" /h/
 
 if [ -n "$APPIMAGE" ]; then
   VERSION="$(node -p 'require(process.argv[1]).version' "$ROOT/package.json")"
-  is_appimage "$APPIMAGE" && check "is_appimage (built)" yes yes || check "is_appimage (built)" no yes
+  if is_appimage "$APPIMAGE"; then check "is_appimage (built)" yes yes; else check "is_appimage (built)" no yes; fi
   printf '#!/bin/sh\n' >"$T/sh"
   if is_appimage "$T/sh"; then check "is_appimage (script)" yes no; else check "is_appimage (script)" no no; fi
   DIGEST="sha256:$(sha256sum "$APPIMAGE" | awk '{print $1}')"

@@ -9,7 +9,7 @@ import { peFile, versionResource } from "../pe-fixtures.test-helper";
 import { linuxInstaller, linuxLocation, NOT_AN_APPIMAGE, stagedName } from "./linux";
 import { macInstaller } from "./mac";
 import { NOT_INSTALLED, setupMismatch, UNINSTALLER, windowsInstaller, windowsLocation } from "./windows";
-import { withoutAppImageEnv } from "./index";
+import { withoutAppImageEnv } from "../../appimage-env";
 
 const dirs: string[] = [];
 const tempDir = (name = "ol-inst ") => { const d = mkdtempSync(join(tmpdir(), name)); dirs.push(d); return d; };
@@ -105,6 +105,11 @@ describe("Linux installer", () => {
 
   it("starts helpers without the running AppImage's variables", () => {
     expect(withoutAppImageEnv({ HOME: "/h", APPIMAGE: "/a", APPDIR: "/tmp/.mount_x", ARGV0: "x", OWD: "/w" })).toEqual({ HOME: "/h" });
+    // AppRun's prefixes go; the user's own entries stay
+    expect(withoutAppImageEnv({ APPDIR: "/tmp/.mount_x", PATH: "/tmp/.mount_x:/tmp/.mount_x/usr/sbin:/usr/bin:/tmp/.mount_xyz",
+      LD_LIBRARY_PATH: "/tmp/.mount_x/usr/lib", XDG_DATA_DIRS: "/tmp/.mount_x/usr/share/::/usr/share/gnome:/usr/share/" }))
+      .toEqual({ PATH: "/usr/bin:/tmp/.mount_xyz", XDG_DATA_DIRS: "/usr/share/gnome:/usr/share/" });
+    expect(withoutAppImageEnv({ PATH: "/usr/bin" })).toEqual({ PATH: "/usr/bin" });   // not an AppImage: unchanged
   });
 });
 

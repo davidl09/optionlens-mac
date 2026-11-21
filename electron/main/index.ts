@@ -20,6 +20,7 @@ import { registerIpc } from "./ipc";
 import { jsonFile } from "./json-file";
 import { createLogger } from "./log";
 import { isNotificationList, NotificationPoller, notificationRoute, showRetained, type EngineNotification } from "./notifier";
+import { withoutAppImageEnv } from "./appimage-env";
 import { allowPermission } from "./permissions";
 import { APP_SCHEME, serveAsset } from "./protocol";
 import { launchAtLoginFromOs } from "./login-item";
@@ -41,7 +42,8 @@ const textFiles: PlatformDeps["files"] = {
   remove: (path) => rmSync(path, { force: true }),
 };
 const execFileAsync = promisify(execFile);
-const run: PlatformDeps["run"] = async (file, args, timeout) => (await execFileAsync(file, args, { timeout, maxBuffer: 1024 * 1024 })).stdout;
+const run: PlatformDeps["run"] = async (file, args, timeout) =>
+  (await execFileAsync(file, args, { timeout, maxBuffer: 1024 * 1024, env: withoutAppImageEnv(process.env) })).stdout;
 
 async function main(): Promise<void> {
   const userData = app.getPath("userData");

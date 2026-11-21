@@ -54,7 +54,7 @@ download_verified() {
 # one per line, from the GitHub release JSON (no jq or Python needed: the JSON is split at , { } [ so each
 # "key": value pair starts a line; escaped quotes inside the notes never start a line with a bare quote).
 release_fields() {
-  tr ',{}[]' '\n\n\n\n\n' <"$1" | awk -v suffix="$2" '
+  tr ',{}[]' '\n' <"$1" | awk -v suffix="$2" '
     function val(line) { sub(/^[^:]*:[[:space:]]*/, "", line); gsub(/^"|"[[:space:]]*$/, "", line); return line }
     /^[[:space:]]*"draft":[[:space:]]*true/ || /^[[:space:]]*"prerelease":[[:space:]]*true/ { bad = 1 }
     /^[[:space:]]*"tag_name":/ && tag == "" { tag = val($0); sub(/^v/, "", tag) }
@@ -136,7 +136,7 @@ install_linux() {
   png="$(find "$tmp/squashfs-root/usr/share/icons" -name optionlens.png -type f | sort -V | tail -n 1)"
   [ -z "$png" ] || cp -f "$png" "$icon"
   desktop_entry "$dest" "$icon" >"$apps/optionlens.desktop"
-  command -v update-desktop-database >/dev/null && update-desktop-database "$apps" >/dev/null 2>&1 || true
+  if command -v update-desktop-database >/dev/null; then update-desktop-database "$apps" >/dev/null 2>&1 || true; fi
   say "Installed OptionLens $version as $dest (launcher: $apps/optionlens.desktop)"
   if ! command -v fusermount3 >/dev/null && ! command -v fusermount >/dev/null; then
     say "Note: FUSE is not installed; AppImages need it (Debian/Ubuntu: sudo apt install fuse3)."

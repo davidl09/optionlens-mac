@@ -6,6 +6,7 @@ import { copyFile, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { withoutAppImageEnv } from "../../appimage-env";
 import { macLocation } from "../location";
 import type { Exec } from "../stage";
 import { launchSwap, type SwapDeps } from "../swap";
@@ -28,12 +29,6 @@ const kind = (p: string) => { try { return lstatSync(p); } catch { return null; 
 const isFile = (p: string) => kind(p)?.isFile() === true;
 const isDir = (p: string) => kind(p)?.isDirectory() === true;
 const makeTempDir = () => mkdtemp(join(tmpdir(), "optionlens-update-"));
-
-/** The environment without the running AppImage's variables (a new AppImage sets its own). */
-export function withoutAppImageEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const { APPIMAGE: _a, APPDIR: _d, ARGV0: _v, OWD: _o, ...rest } = env;
-  return rest;
-}
 
 function posixSwapDeps(env: NodeJS.ProcessEnv): SwapDeps {
   return {
