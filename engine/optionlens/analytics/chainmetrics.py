@@ -54,8 +54,8 @@ def flow_totals(ca: ChainArrays) -> dict:
             sel = sm & mm[b]
             out[f"{side}_vol_{b}"] = int(ca.volume[sel].sum())
             out[f"{side}_prem_{b}"] = float(prem[sel].sum())
-    d = np.nan_to_num(ca.delta)
-    out["net_delta_volume"] = float(np.sum(ca.volume * d * 100.0))
+    known = np.isfinite(ca.delta)            # contracts without a delta are left out; none known -> null, never 0
+    out["net_delta_volume"] = float(np.sum(ca.volume[known] * ca.delta[known] * 100.0)) if known.any() else None
     return out
 
 

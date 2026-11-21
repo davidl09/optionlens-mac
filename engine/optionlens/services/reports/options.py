@@ -297,7 +297,7 @@ def run_large_volume(p: RunParams) -> Output:
     with np.errstate(divide="ignore", invalid="ignore"):
         sel.update(mid=mid[keep], premium=prem[keep], dte=_dte(sel["expiry"], t),
                    vol_oi=np.where(sel["oi"] > 0, sel["volume"] / sel["oi"], np.nan),
-                   delta_volume=sel["volume"] * np.nan_to_num(sel["delta"]) * 100.0,
+                   delta_volume=sel["volume"] * sel["delta"] * 100.0,        # unknown delta -> null, never 0
                    moneyness_pct=sel["strike"] / sel["underlying"] - 1.0)
     rows, trunc = columnar_rows(sel, [c.key for c in LVC_COLS], ("volume", True))
     return Output(rows, truncated=trunc)

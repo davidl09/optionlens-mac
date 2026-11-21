@@ -289,3 +289,20 @@ def test_ingest_option_bars_reconstruct_archive(client):
     assert min(eod["osi"].tolist()) == "DELL261218C00100000"
     assert client.post("/api/ingest/option-bars", json={"source": "ibkr", "symbol": "DELL",
                                                         "bars": [{**bars[0], "close": None}]}).status_code == 422
+
+
+def test_large_volume_contracts_without_greeks_show_unknown_not_zero(client):
+    """A delayed chain without model computations: IV, delta and delta volume are null, never 0."""
+    body = _chain(delayed=True)
+    for c in body["contracts"]:
+        c.update(iv=None, delta=None, gamma=None, theta=None, vega=None, volume=5000)
+    assert client.post("/api/ingest/chain", json=body).status_code == 200
+    rows = [r for r in client.get("/api/reports/large-volume-contracts?min_volume=1000&symbols=DELL").json()["rows"]]
+    assert rows and all(r["delta"] is None and r["iv"] is None and r["delta_volume"] is None for r in rows)
+    body = _chain(delayed=True)
+    for c in body["contracts"]:
+        c.update(volume=5000)
+    client.post("/api/ingest/chain", json=body)
+    rows = client.get("/api/reports/large-volume-contracts?min_volume=1000&symbols=DELL").json()["rows"]
+    assert all(r["delta_volume"] == pytest.approx(5000 * r["delta"] * 100) for r in rows)
+    client.post("/api/ingest/chain", json=_chain())                     # leave DELL's chain as the other tests expect
