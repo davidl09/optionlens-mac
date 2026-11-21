@@ -68,9 +68,11 @@ def columns(sql: str, params: Sequence[Any] | dict | None = None) -> dict[str, n
             if kind in "fiu":
                 v = v.astype(np.float64).filled(np.nan)
             elif kind == "M":
-                v = v.filled(np.datetime64("NaT"))
-            else:
-                v = v.astype(object).filled(None)
+                v = v.filled(np.array("NaT", dtype=v.dtype))
+            else:   # (filled(None) would use numpy's default fill value '?')
+                mask = np.ma.getmaskarray(v)
+                v = np.asarray(v.astype(object).data, dtype=object)
+                v[mask] = None
         v = np.asarray(v)
         if types.get(k) == "DATE":
             v = v.astype("datetime64[D]")

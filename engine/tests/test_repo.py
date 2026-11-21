@@ -344,3 +344,11 @@ def test_watchlist_symbols_keep_insertion_order(tmpdb):
     assert user.update_watchlist(w["id"], symbols=["KO", "ZM", "AAPL", "BA"])["symbols"] == ["KO", "ZM", "AAPL", "BA"]
     user.add_symbol(w["id"], "AMD")
     assert user.get_watchlist(w["id"])["symbols"] == ["KO", "ZM", "AAPL", "BA", "AMD"]
+
+
+def test_columns_reads_null_strings_and_timestamps_as_missing(tmpdb):
+    """NULL VARCHAR -> None (numpy's masked default fill would be '?'), NULL TIMESTAMP -> NaT."""
+    from optionlens.repo._sql import columns
+    c = columns("SELECT * FROM (VALUES ('a', TIMESTAMP '2026-11-20 21:00:00'), (NULL, NULL)) t(s, ts)")
+    assert c["s"].tolist() == ["a", None]
+    assert np.isnat(c["ts"][1]) and c["ts"].dtype.kind == "M"
