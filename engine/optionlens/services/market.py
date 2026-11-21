@@ -16,7 +16,7 @@ from ..repo import user as user_repo
 from . import context, user
 from .reports import registry, universe
 from .reports.base import jsonable, today
-from .reports.common import bar_lists
+from .reports.common import after_hours_rows, bar_lists
 
 INDEX_CARDS = (("SPY", "SPDR S&P 500 ETF"), ("QQQ", "Invesco QQQ"), ("IWM", "iShares Russell 2000"),
                ("DIA", "SPDR Dow Jones"), ("SPX", "S&P 500 Index"), ("NDX", "Nasdaq-100 Index"),
@@ -96,7 +96,7 @@ def _build() -> dict:
     panels["watchlist"] = (user.watchlist_table(wls[0]["id"])["rows"] if wls else [],
                            "Empty watchlist." if wls else "No watchlist yet — create one under My › Watchlists.")
     return {
-        "asof": f.asof, "indices": indices, **_vix(), "sectors": sectors,
+        "asof": f.asof, "after_hours": after_hours_rows(f), "indices": indices, **_vix(), "sectors": sectors,
         **{k: rows for k, (rows, _) in panels.items()},
         "empty_notes": {k: why for k, (rows, why) in panels.items() if not rows},
     }

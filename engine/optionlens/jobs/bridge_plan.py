@@ -5,6 +5,12 @@
   (N = settings.chain_universe_size), wanted from 09:00 to 20:00 ET on trading days. Reports that need
   full chains cover only these symbols.
 - underlying_stats: the whole universe, during the session (open .. eod_deadline).
+- after-hours fills: outside those hours both are wanted for the symbols whose data of the current
+  session (session_date: the last completed one in the evening, on weekends and before the open) is
+  missing, marked `as_of_session` — stats when more than STATS_FILL_MIN_MISSING of the universe has no
+  metrics row for it, chains for chain-universe symbols without a chain fetched since its open. So a first
+  launch on a weekend or in the evening populates the last session from IBKR's frozen data
+  (docs/INTEGRATION.md §6 "After-hours fills"), watchlists first, then recently opened, then most liquid.
 - eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR.
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
   each (session, symbol) is offered until the bridge has accepted it MAX_OFFERS times (POST
@@ -34,10 +40,17 @@ STATS_MAX_AGE_S = 1800
 CHAIN_HOURS = (time(9, 0), time(20, 0))   # ET, trading days: pre-market until the closing-chain deadline
 MAX_OFFERS = 3
 REOFFER_AFTER = timedelta(hours=6)
+FILL_MAX_AGE_S = 6 * 3600       # an after-hours fill is pushed once; a symbol IBKR sent nothing for waits this long
+STATS_FILL_MIN_MISSING = 0.20   # share of the universe without a metrics row that makes a session "uncovered"
 
 
 def _unique(*groups) -> list[str]:
     return list(dict.fromkeys(s for g in groups for s in g))
+
+
+def _user_first(now: datetime) -> list[str]:
+    """Watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS."""
+    return _unique(user_repo.watchlist_symbols(), views_repo.viewed_since(now - timedelta(days=RECENT_VIEW_DAYS)))
 
 
 def chain_universe(now: datetime | None = None) -> list[str]:
@@ -47,25 +60,45 @@ def chain_universe(now: datetime | None = None) -> list[str]:
     now = now or now_ny()
     n = getattr(get_settings(), "chain_universe_size", 150)
     none = {r["symbol"] for r in symbols_repo.list_symbols(optionable=False)}
-    return [s for s in _unique(user_repo.watchlist_symbols(), views_repo.viewed_since(now - timedelta(days=RECENT_VIEW_DAYS)),
-                               metrics_repo.top_by_option_volume(n) if n else []) if s not in none]
+    return [s for s in _unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []) if s not in none]
+
+
+def prioritized(symbols: list[str], now: datetime) -> list[str]:
+    """`symbols` in fill order: watchlists, recently opened, most liquid (stored option volume), the rest."""
+    want = set(symbols)
+    first = [s for s in _unique(_user_first(now), metrics_repo.top_by_option_volume(len(symbols), symbols=symbols))
+             if s in want]
+    return _unique(first, symbols)
 
 
 def chain_universe_want(now: datetime | None = None) -> dict:
-    """The chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on trading days, else no symbols
-    (outside those hours quotes do not move: refreshing would only take TWS time from other work)."""
+    """The chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on trading days. Outside those hours quotes
+    do not move, so only an after-hours fill (`as_of_session`): the chain-universe symbols without a chain
+    fetched since the open of the current session (session_date), once each (FILL_MAX_AGE_S)."""
     now = (now or now_ny()).astimezone(NY)
-    live = is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]
-    return {"symbols": chain_universe(now) if live else [], "max_age_s": CHAIN_MAX_AGE_S,
-            "expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
+    shape = {"expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
+    if is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]:
+        return {"symbols": chain_universe(now), "max_age_s": CHAIN_MAX_AGE_S, **shape}
+    day = session_date(now)
+    syms = chain_universe(now)
+    have = options_repo.fetched_since(datetime.combine(day, OPEN, NY), syms)
+    return {"symbols": [s for s in syms if s not in have], "max_age_s": FILL_MAX_AGE_S, **shape, "as_of_session": day}
 
 
 def underlying_stats_want(now: datetime | None = None) -> dict:
-    """The universe while today's session runs (open until its eod_deadline), else no symbols."""
+    """The universe while today's session runs (open until its eod_deadline). Otherwise an after-hours fill
+    (`as_of_session` = session_date) when the session is uncovered — more than STATS_FILL_MIN_MISSING of the
+    universe has no metrics row for it: the symbols without one, in `prioritized` order."""
     now = (now or now_ny()).astimezone(NY)
     d = now.date()
-    live = is_trading_day(d) and datetime.combine(d, OPEN, NY) <= now < eod_deadline(d)
-    return {"symbols": symbols_repo.universe_symbols() if live else [], "max_age_s": STATS_MAX_AGE_S}
+    universe = symbols_repo.universe_symbols()
+    if is_trading_day(d) and datetime.combine(d, OPEN, NY) <= now < eod_deadline(d):
+        return {"symbols": universe, "max_age_s": STATS_MAX_AGE_S}
+    day = session_date(now)
+    have = metrics_repo.symbols_on(day)
+    missing = [s for s in universe if s not in have]
+    uncovered = len(missing) > STATS_FILL_MIN_MISSING * len(universe)
+    return {"symbols": prioritized(missing, now) if uncovered else [], "max_age_s": FILL_MAX_AGE_S, "as_of_session": day}
 
 
 def eod_chains_want(now: datetime | None = None) -> dict:

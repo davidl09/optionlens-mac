@@ -34,7 +34,7 @@ from ..analytics.dividends import (PARITY_BAND, PARITY_DTE, TRAILING_COVERAGE_DA
                                    implied_yield_from_chain, trailing_yield)
 from ..config import get_settings
 from ..jobs import hooks, ondemand
-from ..jobs._util import session_close, session_date
+from ..jobs._util import after_session, session_close, session_date
 from ..jobs.bridge_plan import EOD_INDICES as INDEX_SYMBOLS
 from ..models import Bar, Dividend, EarningsEvent, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
@@ -288,7 +288,8 @@ def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
     """The symbol's current quote. A stored quote of the latest session with data is used as it is, the fields it
     lacks (OHLC, volume, previous close) filled from the daily bars; without one (none pushed, or older than the last
     stored bar), the latest daily bar stands in: its close, OHLC, volume and change vs the previous close, `source`
-    the bars' source and `ts` that session's close. None when there is neither. `bars`: the symbol's live bars
+    the bars' source and `ts` that session's close. None when there is neither. `after_hours`: the stored quote was
+    collected after its session's closing data arrived (IBKR frozen data; jobs._util.after_session). `bars`: the symbol's live bars
     (load_bars), read when not given."""
     sym = normalize_symbol(symbol)
     q = quotes_repo.get_quote(sym)
@@ -302,11 +303,11 @@ def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
         for k in _BAR_FILLED:
             if out[k] is None:
                 out[k] = from_bars.get(k)
-        return {**out, "delayed": bool(q.delayed), "source": quotes_repo.source_of(sym)}
+        return {**out, "delayed": bool(q.delayed), "after_hours": after_session(q.ts), "source": quotes_repo.source_of(sym)}
     if not from_bars or from_bars["price"] is None:
         return None
     return {**dict.fromkeys(_QUOTE_KEYS), **from_bars, "symbol": sym, "ts": session_close(bars[-1].date),
-            "delayed": False, "source": bars_source(sym)}
+            "delayed": False, "after_hours": False, "source": bars_source(sym)}
 
 
 def iv_history(symbol: str, cols: Sequence[str]) -> dict[str, np.ndarray]:

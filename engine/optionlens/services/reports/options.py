@@ -86,7 +86,12 @@ def run_uov(p: RunParams) -> Output:
                          f"{p['min_volume']:,} and relative option volume ≥ {p['min_rel_volume']:g}× its average "
                          f"(or, with no prior collected day, volume / open interest ≥ {p['min_vol_oi']:g})."
                          if len(f) and np.isfinite(ov).any() else "No option volume collected yet: the IBKR bridge collects it for every symbol "
-                         "during market hours.")
+                         "during market hours, and after hours for a last session that has none yet.")
+    no_oi = base_mask(f, p) & ge(ov, p["min_volume"]) & ~has_avg & ~(np.nan_to_num(oi) > 0)
+    if no_oi.any():
+        out.notes.append(f"{int(no_oi.sum())} symbol(s) without open interest could not take the interim test: IBKR "
+                         "sent none for them (frozen data outside market hours often omits it); they are tested once "
+                         "open interest or a second session of option volume is collected.")
     n_interim = int((m & ~has_avg).sum())
     if n_interim:
         out.notes.append(f"Interim criterion for {n_interim} symbol(s) with no prior collected day of option "

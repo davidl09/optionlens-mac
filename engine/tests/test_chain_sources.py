@@ -251,20 +251,24 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
     symbols_repo.set_optionable("TSLA", False)                                     # IBKR lists no options
     assert bridge_plan.chain_universe(now) == ["F", "NVDA", "AAPL"]
     symbols_repo.set_optionable("TSLA", True)
+    live = bridge_plan.chain_universe_want(ny(2026, 11, 20, 19, 59))
+    assert live == {"symbols": ["F", "TSLA", "NVDA", "AAPL"], "max_age_s": 3600, "expiries": 6, "moneyness": 0.20}
+    # after the window (20:30 ET), before it (08:59 ET) and on Saturday: only an after-hours fill of the current
+    # session (none of these symbols has a chain fetched since its open)
     cu = bridge_plan.chain_universe_want(now)
-    assert cu["expiries"] == 6 and cu["moneyness"] == 0.20 and cu["max_age_s"] == 3600
-    assert cu["symbols"] == []                                                     # 20:30 ET: after the window
-    assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 19, 59))["symbols"] == ["F", "TSLA", "NVDA", "AAPL"]
-    assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 8, 59))["symbols"] == []
-    assert bridge_plan.chain_universe_want(ny(2026, 11, 21, 12, 0))["symbols"] == []  # Saturday
+    assert cu["expiries"] == 6 and cu["moneyness"] == 0.20 and cu["max_age_s"] == bridge_plan.FILL_MAX_AGE_S
+    assert cu["symbols"] == ["F", "TSLA", "NVDA", "AAPL"] and cu["as_of_session"] == FRI
+    assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 8, 59))["as_of_session"] == date(2026, 11, 19)
+    assert bridge_plan.chain_universe_want(ny(2026, 11, 21, 12, 0))["as_of_session"] == FRI   # Saturday
     # eod chains: chain universe + indices, minus closing chains already archived from IBKR
     chains.store_chain(snap(payload, ny(2026, 11, 20, 16, 30)), ny(2026, 11, 20, 16, 30), final=True, source="ibkr")
     e = bridge_plan.eod_chains_want(ny(2026, 11, 20, 17, 0))
     assert e["session_date"] == FRI and "AAPL" not in e["symbols"] and {"SPX", "NDX", "RUT", "XSP", "F"} <= set(e["symbols"])
     assert e["not_before"] == ny(2026, 11, 20, 16, 20) and e["deadline"] == ny(2026, 11, 20, 20, 0)
-    # underlying stats: the universe during the session window only
-    assert set(bridge_plan.underlying_stats_want(ny(2026, 11, 20, 11, 0))["symbols"]) == {"AAPL", "MSFT", "TSLA", "NVDA", "F"}
-    assert bridge_plan.underlying_stats_want(ny(2026, 11, 21, 11, 0))["symbols"] == []
+    # underlying stats: the universe during the session window; outside it an after-hours fill (test_fill_wants)
+    us = bridge_plan.underlying_stats_want(ny(2026, 11, 20, 11, 0))
+    assert set(us["symbols"]) == {"AAPL", "MSFT", "TSLA", "NVDA", "F"} and "as_of_session" not in us
+    assert bridge_plan.underlying_stats_want(ny(2026, 11, 21, 11, 0))["as_of_session"] == FRI
     # option bars: sessions lacking an archive, only where the underlying close is stored; bounded offers
     for s in ("F", "TSLA", "NVDA", "AAPL"):
         bars_repo.upsert_bars([Bar(s, d, None, None, None, 10.0, 1) for d in (date(2026, 11, 18), date(2026, 11, 19), FRI)])

@@ -66,6 +66,10 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   instead of an error.
 - `SymbolSummary.optionable` is tri-state: `true` once a chain was stored, `false` when a chain source (the IBKR
   bridge via `/api/ingest/no-options`, or a vendor source) confirmed no listed options, `null` = unknown.
+- `Quote.after_hours` / `Chain.after_hours`: the stored quote / chain was collected after its session's closing data
+  arrived (close + 20 min: evening, weekend, before the next open), i.e. from IBKR's frozen data of that session.
+  `ReportResult.after_hours` / `MarketOverview.after_hours`: some rows' session values are an after-hours fill
+  (§6 "After-hours fills"). The UI shows a neutral "Last session's close (collected after hours)" badge for them.
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
   of that same value, and only when it is from the last session (else null: stale, never shown as today's).
@@ -156,7 +160,9 @@ POST /api/ingest/underlying-stats          // universe-wide per-underlying optio
                "call_volume": 338000, "put_volume": 251000, "call_oi": 2960000, "put_oi": 2730000,
                "iv30": 0.251, "hv30": 0.27 } ] }
 → 200 {"stored": n}   // fills that session's metrics row fields where no chain-derived value exists
-                      // (chain-derived values for the same session win); iv30 also feeds IV history
+                      // (chain-derived values for the same session win); iv30 also feeds IV history.
+                      // session_date must be the session of ts (400 otherwise, e.g. a fill queued before
+                      // the open and sent after it); ts at/after 20:00 ET of session_date = after-hours fill
 POST /api/ingest/option-bars               // historical daily bars of individual contracts (gap catch-up)
 { "source": "ibkr", "symbol": "AAPL",
   "bars": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C", "date": "2026-11-19",
@@ -192,10 +198,12 @@ work makes progress in every cycle.
 { "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // IV30 series to fetch (see below)
   "hv_history": [ {"symbol": "AAPL", "from": "2026-11-20"} ],   // HV30 series, same rule per series
   "history_symbols": 836,                                       // symbols kept (wanted or already current)
-  "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, during the session
+  "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, open-20:00 ET; else
+                                                                // an after-hours fill (below) with "as_of_session"
   "chain_universe": { "symbols": ["AAPL", ...], "max_age_s": 3600,       // watchlists + most liquid N (config,
                       "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols;
-                                                                // 09:00-20:00 ET on trading days, else []
+                                                                // 09:00-20:00 ET on trading days; else an
+                                                                // after-hours fill (below) with "as_of_session"
   "eod_chains": { "session_date": "2026-11-20", "symbols": ["AAPL", ...], "not_before": "...", "deadline": "..." },
                                                                 // chain_universe + indices (SPX, NDX, RUT, XSP)
                                                                 // after close+20m until 20:00 ET
@@ -208,6 +216,36 @@ work makes progress in every cycle.
                                                                 // the day after the last stored bar
   "chains_on_demand_max_age_s": 120 }
 ```
+**After-hours fills.** Outside those hours (evening, weekend, weekday before the open) the engine asks for the current
+session's data (`session_date`: the last completed session) when it is missing — so a first launch on a weekend
+populates the universe reports, dashboard, IV rankings and screeners instead of waiting for Monday:
+```
+"underlying_stats": { "symbols": [...], "max_age_s": 21600, "as_of_session": "2026-11-20" },
+     // when > 20% of the universe has no metrics row for as_of_session: those symbols (else [])
+"chain_universe": { "symbols": [...], "max_age_s": 21600, "expiries": 6, "moneyness": 0.20, "as_of_session": "2026-11-20" },
+     // chain-universe symbols without a chain fetched since as_of_session's open
+```
+Symbols come in fill order: watchlists, recently opened, most liquid (stored option volume), the rest. `max_age_s`
+6 h: a fill is pushed once; a symbol IBKR sent nothing for is asked again 6 h later. The bridge runs them on its
+normal scheduler (on-demand still first) right after connecting, the stats pass before the chains (it takes a few
+minutes for the whole universe, and its option volumes rank the chain universe): it asks for the chains again once
+no stats work is left. The session-wide market data type 4 (delayed-frozen) makes TWS answer with the session's
+frozen values; generic ticks 100/101/104/106 are often absent then and are posted as null (never 0) — current IV30
+then comes from the IV history (§5). The stats push uses `session_date` = `as_of_session`. The bridge status reports
+`populate: {sessionDate, done, total}` ("Populating last session's data: 340/1145" in Settings, Status and empty
+views) while a fill runs.
+
+Precedence of one session's `metrics_daily` row (jobs/chains.py), with `after_hours` = the row is a fill:
+- the session's own data — chains fetched before close + 20 min or a closing snapshot (`final`), stats with `ts`
+  before 20:00 ET — replaces a fill, and among itself follows the rules above (IBKR outranks other chain
+  sources; chain-derived values win over stats);
+- a fill (a non-final chain fetched later, stats with `ts` at/after 20:00 ET) only creates the row of a session
+  that has none, or refreshes an earlier fill; it never touches a row of the session's own data, not even its
+  NULL fields. Its close, change and volume come from the session's stored daily bar when there is one (a
+  frozen stock price can be an extended-hours trade);
+- `option_latest` and `quotes_latest` always hold the newest data (`after_hours` on Chain / Quote says when it
+  was collected); `option_eod` (the archive) is written only from a closing snapshot (`final`), never from a fill.
+
 The underlying-stats pass also posts each stock's quote (last or mid, bid/ask, open/high/low, previous close,
 volume) to `/api/ingest/quotes` from the same streams. Without a quote of the latest session (none pushed,
 weekends, no chain), `SymbolSummary.quote` and the universe tables (`price`, `volume`, OHLC, change) show the

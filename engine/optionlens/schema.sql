@@ -182,3 +182,8 @@ ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS greeks_source VARCHAR;
 ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS iv_source VARCHAR;
 ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS greeks_source VARCHAR;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS iv_computed BOOLEAN;
+-- metrics_daily.after_hours (docs/INTEGRATION.md §6 "After-hours fills"): the row was created after the session's
+-- collection window had ended (IBKR frozen data of the last session, e.g. a weekend first launch) because the
+-- session had no row; a push from inside the window or a closing snapshot replaces it, and it never replaces one.
+-- NULL / false = collected during the session or from its closing snapshot.
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS after_hours BOOLEAN;

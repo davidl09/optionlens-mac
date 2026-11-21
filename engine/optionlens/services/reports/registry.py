@@ -85,6 +85,7 @@ def finalize(d: ReportDef, p: RunParams, out: Output) -> dict:
     return {
         "id": d.id, "title": d.title, "asof": jsonable(out.asof), "params": jsonable(dict(p)),
         "columns": [c.as_dict() for c in d.columns], "rows": jsonable(rows), "truncated": truncated,
+        "after_hours": out.after_hours,
         "notes": [*d.notes, *out.notes], **({"extra": jsonable(out.extra)} if out.extra is not None else {}),
         **({"method": list(d.method)} if d.method else {}),
         **({"empty_reason": reason} if not rows and (reason := empty_reason(d, out)) else {}),

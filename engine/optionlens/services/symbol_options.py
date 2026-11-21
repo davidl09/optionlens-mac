@@ -10,6 +10,7 @@ import numpy as np
 from ..analytics import chainmetrics as cm
 from ..analytics import optbacktest, stats, strategies
 from ..analytics.chain import ChainArrays, option_row
+from ..jobs._util import after_session
 from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from . import context as ctx
@@ -72,6 +73,7 @@ def chain(symbol: str, expiry: str | None = None) -> dict:
         "strikes": sorted({r["strike"] for r in rows}),
         "calls": [r for r in rows if r["right"] == "C"], "puts": [r for r in rows if r["right"] == "P"],
         "delayed": options_repo.latest_delayed(ca.symbol),
+        "after_hours": after_session(ca.asof),   # collected after the session's close (IBKR frozen data)
     }
 
 

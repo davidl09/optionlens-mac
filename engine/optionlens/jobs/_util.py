@@ -40,6 +40,12 @@ def final_since(day: date) -> datetime:
     return session_close(day) + timedelta(minutes=FINAL_DELAY_MIN)
 
 
+def after_session(ts: datetime) -> bool:
+    """Whether data observed at `ts` was collected after its session's closing data arrived (final_since): in the
+    evening, on a weekend or before the next open, IBKR sends the session's frozen closing values."""
+    return ts >= final_since(session_date(ts))
+
+
 def eod_deadline(day: date) -> datetime:
     """Until when a data client (the IBKR bridge) may push closing chains of session `day`: 20:00 ET."""
     return datetime.combine(day, EOD_DEADLINE, NY)

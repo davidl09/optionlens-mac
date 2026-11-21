@@ -17,6 +17,8 @@ export interface Quote {
   open: number | null; high: number | null; low: number | null; prev_close: number | null;
   volume: number | null; bid: number | null; ask: number | null; iv30: number | null;
   source?: DataSource; delayed?: boolean;
+  /** Collected after its session's close (IBKR frozen data: evening, weekend, before the open). */
+  after_hours?: boolean;
 }
 
 export interface Bar {
@@ -49,6 +51,8 @@ export interface IndexCard { symbol: string; name: string; price: number | null;
 export interface VixPoint { tenor: "VIX9D" | "VIX" | "VIX3M" | "VIX6M"; value: number | null; change: number | null }
 export interface MarketOverview {
   asof: ISODateTime | null;
+  /** Some symbols' session values are an after-hours fill (collected from IBKR frozen data after the close). */
+  after_hours?: boolean;
   indices: IndexCard[];
   vix_term: VixPoint[];
   vix_history: { date: ISODate; vix9d: number | null; vix: number | null; vix3m: number | null; vix6m: number | null }[]; // 1y
@@ -125,6 +129,8 @@ export interface Chain {
   strikes: number[];               // sorted asc for selected expiry
   calls: OptionRow[]; puts: OptionRow[];   // selected expiry, sorted by strike
   source?: DataSource; delayed?: boolean;
+  /** Fetched after its session's close (IBKR frozen data: the session's closing quotes). */
+  after_hours?: boolean;
 }
 
 // ---------------- activity / OI ----------------
@@ -306,6 +312,8 @@ export interface ReportResult {
   id: string; title: string; asof: ISODateTime | null;
   params: Record<string, unknown>;     // effective params
   columns: ColumnDef[]; rows: ReportRow[]; truncated: boolean;
+  /** Some rows' session values are an after-hours fill (collected from IBKR frozen data after the close). */
+  after_hours?: boolean;
   notes: string[];                     // limitations / proxies, in plain words
   /** The precise method behind the notes (formulas, thresholds), shown on request. */
   method?: string[];

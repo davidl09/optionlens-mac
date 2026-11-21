@@ -175,6 +175,7 @@ class Output:
     asof: datetime | None = None
     truncated: bool = False
     presorted: bool = False          # rows already in the intended order (skip default_sort)
+    after_hours: bool = False        # some rows' session values are an after-hours fill (metrics_daily.after_hours)
 
 
 @dataclass(frozen=True)

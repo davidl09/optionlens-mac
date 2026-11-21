@@ -115,6 +115,30 @@ def test_ingest_chain_is_served_as_the_symbol_chain(client):
     assert "DELL" in ingest.sweep_hooks.pending.get(SESSION, set())          # on_sweep_complete scheduled
 
 
+def test_after_hours_chain_and_quote_are_labelled(client):
+    """A chain fetched after its session's close (IBKR frozen data) says so on the chain and its quote; one fetched
+    during the session does not."""
+    assert client.post("/api/ingest/chain", json=_chain()).status_code == 200
+    ch = client.get("/api/symbol/DELL/chain").json()
+    assert ch["after_hours"] is False and ch["underlying"]["after_hours"] is False
+    sat = "2026-11-21T17:00:00+00:00"                               # Saturday: Friday's closing values
+    body = _chain(fetched_at=sat, underlying={"price": 120.0, "bid": 119.9, "ask": 120.1, "prev_close": 118.0,
+                                              "volume": 1000, "ts": sat})
+    assert client.post("/api/ingest/chain", json=body).status_code == 200
+    ch = client.get("/api/symbol/DELL/chain").json()
+    assert ch["after_hours"] is True and ch["underlying"]["after_hours"] is True
+    assert client.post("/api/ingest/chain", json=_chain()).status_code == 200      # older: latest stays Saturday's
+    assert client.get("/api/symbol/DELL/chain").json()["after_hours"] is True
+    from optionlens import db                                       # leave DELL as the other tests expect it
+    from optionlens.repo import metrics
+    with db.write() as cur:
+        for t in ("option_latest", "quotes_latest"):
+            cur.execute(f"DELETE FROM {t} WHERE symbol = 'DELL'")
+        cur.execute("DELETE FROM metrics_daily WHERE symbol = 'DELL' AND date = DATE '2026-11-20'")
+    assert metrics.get_metrics("DELL", date(2026, 11, 20)) is None
+    assert client.post("/api/ingest/chain", json=_chain()).status_code == 200
+
+
 def test_ingest_delayed_flag_is_required_and_exposed(client):
     body = _chain()
     del body["delayed"]
@@ -311,8 +335,9 @@ def test_ingest_wants(client):
     assert set(w) == {"iv_history", "hv_history", "history_symbols", "underlying_stats", "chain_universe",
                       "eod_chains", "option_bars", "index_symbols", "index_bars", "chains_on_demand_max_age_s"}
     assert w["history_symbols"] >= len(w["iv_history"]) and "AAPL" in {x["symbol"] for x in w["hv_history"]}
-    assert set(w["chain_universe"]) == {"symbols", "max_age_s", "expiries", "moneyness"}
-    assert set(w["underlying_stats"]) == {"symbols", "max_age_s"} and isinstance(w["option_bars"], list)
+    fill = {"as_of_session"}                                # present outside the live hours (after-hours fill)
+    assert set(w["chain_universe"]) - fill == {"symbols", "max_age_s", "expiries", "moneyness"}
+    assert set(w["underlying_stats"]) - fill == {"symbols", "max_age_s"} and isinstance(w["option_bars"], list)
     assert w["chains_on_demand_max_age_s"] == 120 and set(w["index_symbols"]) == {"VIX", "VIX9D", "VIX3M", "VIX6M"}
     ivs = {x["symbol"]: x["from"] for x in w["iv_history"]}
     assert "AAPL" in ivs and ivs["AAPL"].endswith("-01-01")

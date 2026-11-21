@@ -12,7 +12,7 @@ from ..analytics import computed_iv
 from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
 from ..analytics.chain import ChainArrays
 from ..jobs import bridge_plan, catchup, chains, hooks
-from ..jobs._util import session_close, session_date
+from ..jobs._util import eod_deadline, session_close, session_date
 from ..jobs.marketdata import VIX_FAMILY
 from ..models import Bar, ChainSnapshot, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
@@ -176,9 +176,16 @@ def quotes(body: dict, now: datetime | None = None) -> dict:
 
 def underlying_stats(body: dict, now: datetime | None = None) -> dict:
     """Per-underlying option stats of a session -> that session's metrics rows (jobs.chains.
-    store_underlying_stats: chain-derived values win; iv30 also feeds the IV history)."""
+    store_underlying_stats: chain-derived values win; iv30 also feeds the IV history). `session_date` must be
+    the session of `ts`; stats collected after that session's stats window (eod_deadline: evening, weekend,
+    next pre-market) are an after-hours fill."""
+    day, ts = body["session_date"], body["ts"]
+    if ts > (now or datetime.now(timezone.utc)) + CLOCK_SKEW:
+        raise BadRequest(f"ts {ts.isoformat()} is in the future")
+    if session_date(ts) != day:
+        raise BadRequest(f"stats collected at {ts.isoformat()} are not of session {day} (they are of {session_date(ts)})")
     stats = [{**st, "delayed": body["delayed"]} for st in body["stats"]]
-    n = chains.store_underlying_stats(body["session_date"], stats, body["source"])
+    n = chains.store_underlying_stats(day, stats, body["source"], after_hours=ts >= eod_deadline(day))
     _sweep_done(body["session_date"], [st["symbol"] for st in stats])
     bridge_repo.record_push(now or datetime.now(timezone.utc))
     ctx.invalidate()

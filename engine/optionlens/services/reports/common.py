@@ -91,7 +91,13 @@ def frame_output(f: Frame, mask: np.ndarray, columns: Sequence[Col], *, rename: 
         idx, truncated = idx[:limit], True
     lists = {k: _tolist((extra[k] if k in extra else f[rename.get(k, k)])[idx]) for k in keys}
     rows = [{k: lists[k][i] for k in keys} for i in range(len(idx))]
-    return Output(rows, list(notes), asof=f.asof, truncated=truncated)
+    return Output(rows, list(notes), asof=f.asof, truncated=truncated, after_hours=after_hours_rows(f, idx))
+
+
+def after_hours_rows(f: Frame, idx: np.ndarray | None = None) -> bool:
+    """Whether any frame row (of `idx`, default all) holds session values from an after-hours fill."""
+    a = f.cols.get("after_hours")
+    return a is not None and bool(np.nan_to_num(a if idx is None else a[idx]).any())
 
 
 def order_by(a: np.ndarray, descending: bool = True) -> np.ndarray:

@@ -84,6 +84,11 @@ def metrics_on(day: date | None = None) -> dict[str, dict]:
     return {r["symbol"]: r for r in query("SELECT * FROM metrics_daily WHERE date = ?", [d])}
 
 
+def symbols_on(day: date) -> set[str]:
+    """Symbols with a row for `day`."""
+    return {r["symbol"] for r in query("SELECT symbol FROM metrics_daily WHERE date = ?", [day])}
+
+
 def get_metrics(symbol: str, day: date | None = None) -> dict | None:
     """One symbol's row for day (default: its latest row) or None."""
     rows = query("""SELECT * FROM metrics_daily WHERE symbol = ? AND (?::DATE IS NULL OR date = ?)

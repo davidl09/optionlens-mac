@@ -99,13 +99,16 @@ def test_late_fetch_keeps_finalized_metrics_row(tmpdb, payload):
     assert metrics_repo.dates("AAPL") == [FRI]
 
 
-def test_late_fetch_creates_no_row_and_final_uses_close_as_of(tmpdb, payload):
+def test_late_fetch_creates_an_after_hours_row_and_final_uses_close_as_of(tmpdb, payload):
     symbols_repo.upsert_symbols([{"symbol": "AAPL", "kind": "stock"}])
     sat = ny(2026, 11, 21, 12, 0)
-    chains.store_chain(snap_at(payload, sat), sat)
-    assert metrics_repo.get_metrics("AAPL") is None
+    chains.store_chain(snap_at(payload, sat), sat)                                 # no row yet: after-hours fill
+    fill = metrics_repo.get_metrics("AAPL")
+    assert fill["date"] == FRI and fill["after_hours"] is True
+    assert options_repo.eod_sources([FRI], ["AAPL"])[FRI] == {}                    # never archived
     chains.store_chain(snap_at(payload, sat), sat, final=True)                     # catch-up EOD on Saturday
     on_sat = metrics_repo.get_metrics("AAPL", FRI)
+    assert on_sat["after_hours"] is False                                          # the closing snapshot wins
     at_close = ny(2026, 11, 20, 16, 0)
     chains.store_chain(snap_at(payload, at_close), at_close)
     assert metrics_repo.get_metrics("AAPL", FRI)["iv30"] == pytest.approx(on_sat["iv30"])   # T from the close
