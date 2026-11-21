@@ -91,6 +91,17 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     return {"stored": len(snap.contracts), "symbol": sym}
 
 
+def no_options(body: dict, now: datetime | None = None) -> dict:
+    """POST /api/ingest/no-options: the client's chain source (IBKR: no option parameters for the
+    underlying) lists no options for the symbol -> optionable false, so the UI says so instead of
+    waiting for a chain. A later stored chain sets it true again; stored data is kept. 404 for unknown
+    symbols."""
+    sym = ctx.ensure_known(body["symbol"])["symbol"]
+    symbols_repo.set_optionable(sym, False)
+    bridge_repo.record_push(now or datetime.now(timezone.utc))
+    return {"symbol": sym, "optionable": False}
+
+
 # ----------------------------------------------------------------------------- series
 def vol_history(kind: str, body: dict, now: datetime | None = None) -> dict:
     """Upsert a symbol's daily IV30/HV30 series (non-finite or non-positive values are skipped)."""

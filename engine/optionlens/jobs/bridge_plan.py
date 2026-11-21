@@ -42,11 +42,13 @@ def _unique(*groups) -> list[str]:
 
 def chain_universe(now: datetime | None = None) -> list[str]:
     """Watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS, then the top
-    settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions."""
+    settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions; without
+    symbols a chain source confirmed list no options (opening one still asks the bridge on demand)."""
     now = now or now_ny()
     n = getattr(get_settings(), "chain_universe_size", 150)
-    return _unique(user_repo.watchlist_symbols(), views_repo.viewed_since(now - timedelta(days=RECENT_VIEW_DAYS)),
-                   metrics_repo.top_by_option_volume(n) if n else [])
+    none = {r["symbol"] for r in symbols_repo.list_symbols(optionable=False)}
+    return [s for s in _unique(user_repo.watchlist_symbols(), views_repo.viewed_since(now - timedelta(days=RECENT_VIEW_DAYS)),
+                               metrics_repo.top_by_option_volume(n) if n else []) if s not in none]
 
 
 def chain_universe_want(now: datetime | None = None) -> dict:

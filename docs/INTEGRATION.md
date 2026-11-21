@@ -52,6 +52,17 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   `"vendor" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed"`.
 - `Status` gains `sources: { name: string; ok: boolean | null; last_success_at: string | null; detail: string | null }[]`
   and `bridge: { connected: boolean; last_push_at: string | null; client: string | null }`.
+- Errors are `{"detail": "<message>"}`; where the UI acts on an error the body adds a machine-readable `code`.
+  Every endpoint that needs a stored chain (chain, activity, open-interest, contract, skew, implied-moves,
+  straddle, ideas, `POST /api/calc/strategy`) answers a known symbol without one with
+  `404 {"detail": "...", "code": "no_chain"}` (not fetched yet), or `"code": "no_options"` when a chain source
+  confirmed the symbol lists no options. The app shows "fetching" / "connect IB Gateway" / "no options" for these
+  instead of an error.
+- `SymbolSummary.optionable` is tri-state: `true` once a chain was stored, `false` when a chain source (the IBKR
+  bridge via `/api/ingest/no-options`, or a vendor source) confirmed no listed options, `null` = unknown.
+- Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
+  the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
+  of that same value, and only when it is from the last session (else null: stale, never shown as today's).
 
 ## 6. Ingest API (written by the IBKR bridge; all POST except `wants`, Bearer auth, JSON, idempotent)
 
@@ -85,6 +96,11 @@ data, and sends `final: true` only when at least 95% of the contracts it request
 complete closing chain is posted with `final: false` (live chain only, never archived) and retried later.
 
 ```
+POST /api/ingest/no-options                // IBKR lists no options for the symbol (reqSecDefOptParams
+{ "source": "ibkr", "symbol": "DELL" }    // returned no parameters / no future expiries)
+→ 200 {"symbol": "DELL", "optionable": false}   // 404 for unknown symbols. A later chain push sets it true
+                                                // again; stored data is kept. Such symbols leave the chain
+                                                // universe (opening one still asks the bridge, §7)
 POST /api/ingest/iv-history
 { "source": "ibkr", "symbol": "AAPL", "kind": "iv30",   // IBKR OPTION_IMPLIED_VOLATILITY daily close
   "bars": [ { "date": "2025-11-20", "value": 0.243 }, ... ] }
@@ -174,3 +190,9 @@ server's own collected IV30 for that date is missing (collected values win; both
 When the user opens a symbol page the app (renderer → main) asks the bridge to fetch that symbol's chain
 from IBKR (if connected) and POST it, then reloads the page data from the engine. Without IBKR the engine
 serves the most recent chain it has stored (from an earlier IBKR push or a vendor source).
+
+The on-demand refresh runs at any time, also outside market hours and on weekends: the bridge requests
+market data type 4 (delayed-frozen), so TWS answers with the last values of the session. Its result
+(`RefreshResult`, electron/shared/api.ts) is `refreshed` / `fresh` / `no-options` (IBKR lists no options:
+the bridge POSTed `/api/ingest/no-options`) / `unavailable` (bridge off, not connected or paused; asked again
+when the bridge connects while the page is open) / `failed`. After `refreshed` or `no-options` the page reloads.

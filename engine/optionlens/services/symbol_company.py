@@ -9,7 +9,6 @@ from typing import Any
 from ..analytics import stats
 from ..jobs import ondemand
 from ..repo import bars as bars_repo
-from ..repo import metrics as metrics_repo
 from ..repo import symbols as symbols_repo
 from . import context as ctx
 from .errors import BadRequest
@@ -184,7 +183,6 @@ def peers(symbol: str) -> dict:
     group = [row] + _peer_rows(row)
     syms = [r["symbol"] for r in group]
     closes = bars_repo.last_closes(260, syms)
-    mets = {s: metrics_repo.get_metrics(s) or {} for s in syms}
     ranks = ctx.iv_rank_all()
     rows = []
     for r in group:
@@ -197,7 +195,7 @@ def peers(symbol: str) -> dict:
                      "price": q["price"] if q else (float(c["close"][-1]) if c is not None and len(c["close"]) else None),
                      "change_pct": q["change_pct"] if q else ret.get("d1"),
                      "ret_1m": ret.get("m1"), "ret_3m": ret.get("m3"), "ret_ytd": ret.get("ytd"), "ret_1y": ret.get("y1"),
-                     "iv30": ctx.num(mets[s].get("iv30")), "iv_rank": (ranks.get(s) or {}).get("iv_rank"),
+                     "iv30": (ranks.get(s) or {}).get("iv30"), "iv_rank": (ranks.get(s) or {}).get("iv_rank"),
                      "pe": _num((summ[0] or {}).get("PERatio")) if summ else None})
     notes = ["Peers = same industry, largest market caps (symbols table)."]
     if not row.get("industry"):

@@ -11,7 +11,7 @@ import { CODE, TwsRequestError, TwsTimeoutError, type TwsContract } from "./tws"
 function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
-  return { calls, wants: async () => ({}), chain: rec("chain"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
+  return { calls, wants: async () => ({}), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
     underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat") };
 }
 
@@ -92,7 +92,7 @@ describe("pushChain", () => {
   it("fetches expiries/strikes per the shape and posts the contract JSON", async () => {
     const s = new FakeSession(aaplMarket());
     const ctx = ctxFor(s);
-    const n = (await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 2, moneyness: 0.25 }, final: true, sessionDate: "2026-11-20" })).contracts;
+    const n = (await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 2, moneyness: 0.25 }, final: true, sessionDate: "2026-11-20" }))?.contracts;
     const body = ctx.ingest.calls.chain[0] as { contracts: { expiry: string; strike: number }[]; final: boolean; session_date: string; underlying: { price: number; prev_close: number } };
     expect(n).toBe(body.contracts.length);
     expect(body.final).toBe(true);
@@ -135,8 +135,28 @@ describe("pushChain", () => {
     const base = m.ticks;
     m.ticks = (id) => (id.endsWith(":C") && Number(id.split(":")[2]) >= 110 ? [] : base(id));
     const r = await pushChain(ctxFor(new FakeSession(m)), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
-    expect(r.contracts).toBe(9);
-    expect(r.coverage).toBeCloseTo(0.9, 6);
+    expect(r?.contracts).toBe(9);
+    expect(r?.coverage).toBeCloseTo(0.9, 6);
+  });
+
+  it("reports a symbol IBKR lists no options for (no option parameters) to the engine instead of a chain", async () => {
+    const m = aaplMarket();
+    m.optionParams = [];
+    const ctx = ctxFor(new FakeSession(m));
+    expect(await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null })).toBeNull();
+    expect(ctx.ingest.calls.noOptions).toEqual([{ source: "ibkr", symbol: "AAPL" }]);
+    expect(ctx.ingest.calls.chain).toBeUndefined();
+    m.optionParams = [{ exchange: "SMART", tradingClass: "AAPL", multiplier: "100", expirations: ["20261113"], strikes: [] }];   // expired only
+    expect(await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null })).toBeNull();
+    expect(ctx.ingest.calls.noOptions).toHaveLength(2);
+  });
+
+  it("an unanswered option-parameter request is a failure, never 'no options'", async () => {
+    const s = new FakeSession(aaplMarket());
+    s.optionParams = async () => { throw new TwsTimeoutError("AAPL option parameters", 10_000); };
+    const ctx = ctxFor(s);
+    await expect(pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null })).rejects.toThrow(TwsTimeoutError);
+    expect(ctx.ingest.calls.noOptions).toBeUndefined();
   });
 
   it("fails clearly when TWS sends no underlying price", async () => {

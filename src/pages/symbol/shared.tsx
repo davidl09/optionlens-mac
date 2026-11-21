@@ -1,6 +1,7 @@
 // Pieces shared by several symbol tabs.
 import { useParams, useSearchParams } from "react-router-dom";
 import type { ColumnDef, ExpiryInfo, ReportRow, TradeIdea } from "../../api/types";
+import { todayNY } from "../../lib/dates";
 import { fmt, MONTHS } from "../../lib/format";
 
 export function useSym(): string {
@@ -23,6 +24,11 @@ export function useQueryValue(key: string, fallback: string | null = null): [str
 export function shortDate(iso: string): string {
   const [y, m, d] = iso.split("-");
   return `${MONTHS[Number(m) - 1]} ${Number(d)}${y !== String(new Date().getFullYear()) ? ` ’${y.slice(2)}` : ""}`;
+}
+
+/** "Nov 20" for an IV30 as-of date that is not today (NY), else null (today's value needs no date). */
+export function ivAsOf(asof: string | null): string | null {
+  return asof && asof !== todayNY() ? shortDate(asof) : null;
 }
 
 export function ExpiryPills({ expiries, value, onChange, allowAll = false }: {

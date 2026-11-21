@@ -18,7 +18,7 @@ from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
 from ..services import alerts
-from ..services.errors import BadRequest, NotFound
+from ..services.errors import BadRequest, NoChain, NotFound
 from . import (
     routes_backtest,
     routes_calc,
@@ -56,8 +56,9 @@ async def lifespan(app: FastAPI):
         db.close()
 
 
-def _detail(status: int, detail: str) -> ApiJSON:
-    return ApiJSON({"detail": detail}, status_code=status)
+def _detail(status: int, detail: str, code: str | None = None) -> ApiJSON:
+    """Error body {"detail": message}, plus a machine-readable "code" where the UI acts on the error."""
+    return ApiJSON({"detail": detail, **({"code": code} if code else {})}, status_code=status)
 
 
 def _validation_message(exc: RequestValidationError) -> str:
@@ -75,7 +76,7 @@ def _install_errors(app: FastAPI) -> None:
 
     @app.exception_handler(NotFound)
     async def not_found(_: Request, exc: NotFound):
-        return _detail(404, str(exc))
+        return _detail(404, str(exc), exc.code if isinstance(exc, NoChain) else None)
 
     @app.exception_handler(BadRequest)
     async def bad_request(_: Request, exc: BadRequest):

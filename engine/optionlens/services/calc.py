@@ -9,7 +9,7 @@ from ..analytics.calendar import now_ny
 from ..analytics.chain import ChainArrays
 from ..models import normalize_symbol
 from . import context as ctx
-from .errors import BadRequest, NotFound
+from .errors import BadRequest, NoChain
 
 MAX_LEGS = 8
 POINTS = (11, 1001)
@@ -68,7 +68,7 @@ def calculate(req: dict) -> dict:
     sym = normalize_symbol(req["symbol"])
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False) or ctx.load_chain_arrays(sym)
     if ca is None:
-        raise NotFound(f"no option chain for {sym}")
+        raise NoChain(sym, ctx.optionable(sym))
     legs = _legs(ca, req["legs"])
     shift = float(req.get("iv_shift") or 0.0)
     if abs(shift) > MAX_IV_SHIFT:

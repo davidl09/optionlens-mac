@@ -78,3 +78,20 @@ def test_bridge_status_round_trip(tmpdb):
     s = bridge.get_status()
     assert s == {"client": "optionlens-mac 0.1.0", "ibkr_connected": True, "account_type": "paper",
                  "heartbeat_at": t + timedelta(seconds=5), "last_push_at": t}
+
+
+def test_current_iv30_falls_back_to_the_merged_history_with_its_date(tmpdb):
+    days = _days(30)
+    vol_history.upsert("DELL", "iv30", "ibkr", [(d, 0.20 + i / 100) for i, d in enumerate(days)])   # max on the last day
+    r = context.iv_rank_info("DELL")
+    assert r["iv30"] == pytest.approx(0.49) and r["iv30_asof"] == days[-1]       # no collected IV30: the ingested one
+    assert r["iv_rank"] == pytest.approx(1.0) and r["iv_percentile"] == pytest.approx(29 / 30)   # rank of that value
+    metrics.upsert_metrics(days[-1] + timedelta(days=1), "DELL", {"hv30": 0.3})   # newest row (stats only): no IV30
+    r = context.iv_rank_info("DELL")
+    assert r["iv30"] == pytest.approx(0.49) and r["iv30_asof"] == days[-1]       # still the latest stored IV30 ...
+    assert r["iv_rank"] is None and r["iv_percentile"] is None                   # ... not the last session's: no rank
+    metrics.upsert_metrics(days[-1] + timedelta(days=1), "DELL", {"iv30": 0.25})  # collected IV30 of that session wins
+    r = context.iv_rank_info("DELL")
+    assert r["iv30"] == 0.25 and r["iv30_asof"] == days[-1] + timedelta(days=1) and r["iv_rank"] == pytest.approx(0.05 / 0.29)
+    none = context.iv_rank_info("NONE")                                          # no history: unknown, never 0
+    assert none["iv30"] is None and none["iv30_asof"] is None and none["iv_rank"] is None

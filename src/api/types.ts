@@ -60,12 +60,14 @@ export interface NextEarnings { date: ISODate; timing: "bmo" | "amc" | "unknown"
 export interface NextDividend { ex_date: ISODate; amount: number; days: number; yield: number | null }
 export interface SymbolSummary {
   symbol: string; name: string; kind: SymbolKind; sector: string | null; industry: string | null;
-  market_cap: number | null; optionable: boolean; in_universe: boolean;
+  market_cap: number | null; in_universe: boolean;
+  optionable: boolean | null;   // true: a chain is stored; false: a chain source (IBKR) confirmed no listed options; null: unknown (not fetched yet)
   quote: Quote | null;
   avg_volume_30d: number | null; rel_volume: number | null;
   high_52w: number | null; low_52w: number | null; high_3y: number | null; low_3y: number | null;
   beta_1y: number | null; corr_spy_1y: number | null;
-  iv30: number | null; iv_rank: number | null; iv_percentile: number | null; iv_history_days: number;
+  // iv30: latest stored IV30 (collected, else IBKR-ingested) as of iv30_asof; IV rank/percentile are of that value (null unless it is the last session's)
+  iv30: number | null; iv30_asof: ISODate | null; iv_rank: number | null; iv_percentile: number | null; iv_history_days: number;
   hv20: number | null; iv_hv_ratio: number | null;
   call_volume: number | null; put_volume: number | null;
   avg_option_volume_20d: number | null; avg_option_volume_days: number;   // average over up to 20 prior stored days (days used; 0 = none)
@@ -136,7 +138,7 @@ export interface ContractHistory {
 export interface TermPoint { expiry: ISODate; dte: number; atm_iv: number | null }
 export interface Volatility {
   symbol: string; asof: ISODateTime | null;
-  iv30: number | null; iv_rank: number | null; iv_percentile: number | null; history_days: number;
+  iv30: number | null; iv30_asof: ISODate | null; iv_rank: number | null; iv_percentile: number | null; history_days: number;  // as SymbolSummary
   iv_high_52w: number | null; iv_low_52w: number | null;
   constant_maturity: { tenor: 30 | 60 | 90 | 120 | 180 | 360; iv: number | null; chg_1d: number | null; chg_1w: number | null }[];
   term_today: TermPoint[]; term_1w: TermPoint[] | null; term_1m: TermPoint[] | null;  // 1w/1m from option_eod

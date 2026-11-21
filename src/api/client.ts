@@ -13,7 +13,8 @@ import type {
 } from "./types";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** `code`: the engine's machine-readable error code where it sends one (e.g. "no_chain"), else null. */
+  constructor(public status: number, message: string, public code: string | null = null) {
     super(message);
     this.name = "ApiError";
   }
@@ -44,6 +45,10 @@ function errorMessage(body: unknown, fallback: string): string {
     }
   }
   return fallback;
+}
+
+function errorCode(body: unknown): string | null {
+  return body && typeof body === "object" && "code" in body && typeof body.code === "string" ? body.code : null;
 }
 
 // ---------------- engine connection + connectivity ----------------
@@ -104,7 +109,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   }
   if (res.status === 401) setConnectivity("unauthorized");
   else setConnectivity("ok");
-  if (!res.ok) throw new ApiError(res.status, errorMessage(parsed, `${res.status} ${res.statusText || "error"}`));
+  if (!res.ok) throw new ApiError(res.status, errorMessage(parsed, `${res.status} ${res.statusText || "error"}`), errorCode(parsed));
   return parsed as T;
 }
 

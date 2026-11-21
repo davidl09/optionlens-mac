@@ -121,9 +121,8 @@ def summary(symbol: str) -> dict:
     bars_ = ctx.load_bars(sym)
     a = stats.bar_arrays(bars_)
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
-    m = metrics_repo.get_metrics(sym) or {}
     rank = ctx.iv_rank_info(sym)
-    iv30 = ctx.num(m.get("iv30"))
+    iv30 = rank["iv30"]
     hv20 = vol.hv(a.close, 20)
     h52, l52 = stats.high_low(a.high, a.low, a.close, 252)
     h3, l3 = stats.high_low(a.high, a.low, a.close, 756)
@@ -135,13 +134,13 @@ def summary(symbol: str) -> dict:
     ideas = symbol_options.ideas(sym)["by_edge"][:3] if ca else []
     return {
         "symbol": sym, "name": row["name"] or sym, "kind": row["kind"], "sector": row["sector"],
-        "industry": row["industry"], "market_cap": row["market_cap"], "optionable": bool(row["optionable"]),
+        "industry": row["industry"], "market_cap": row["market_cap"], "optionable": row["optionable"],
         "in_universe": bool(row["in_universe"]), "quote": ctx.quote_dict(sym),
         "avg_volume_30d": stats.avg_volume(a.volume, 30, exclude_last=True),
         "rel_volume": stats.relative_volume(a.volume, 30),
         "high_52w": h52, "low_52w": l52, "high_3y": h3, "low_3y": l3,
         "beta_1y": beta, "corr_spy_1y": corr,
-        "iv30": iv30, "iv_rank": rank["iv_rank"], "iv_percentile": rank["iv_percentile"],
+        "iv30": iv30, "iv30_asof": rank["iv30_asof"], "iv_rank": rank["iv_rank"], "iv_percentile": rank["iv_percentile"],
         "iv_history_days": rank["history_days"],
         "hv20": hv20, "iv_hv_ratio": iv30 / hv20 if iv30 is not None and hv20 else None,
         **_option_volume(sym),

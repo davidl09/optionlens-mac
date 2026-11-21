@@ -128,6 +128,11 @@ async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
 
 export interface ResolvedChain { underlying: QuoteSnapshot; spot: number; contracts: TwsContract[] }
 
+/** TWS answered the option-parameter request with no listed (future) expiries: the symbol has no options. */
+export class NoListedOptions extends Error {
+  constructor(symbol: string) { super(`${symbol}: IBKR lists no options`); this.name = "NoListedOptions"; }
+}
+
 /** Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. */
 export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape, spotOverride: number | null = null): Promise<ResolvedChain> {
   const und = underlyingContract(symbol);
@@ -139,7 +144,7 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
   if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
   const params = await ctx.session.optionParams({ symbol: und.symbol, secType: und.secType, conId: details.conId }, ctx.signal);
   const expiries = pickExpiries(params, und.symbol, ctx.now(), shape.expiries);
-  if (!expiries.length) throw new Error(`${symbol}: no listed option expiries`);
+  if (!expiries.length) throw new NoListedOptions(symbol);
   const all: TwsContract[] = [];
   for (const e of expiries) {
     throwIfAborted(ctx.signal);
@@ -200,10 +205,18 @@ export async function sessionClose(ctx: JobContext, symbol: string, sessionDate:
  * Fetches and posts one chain (only the contracts that got data). A closing chain is centred on the
  * session's regular close and carries it as underlying.rth_close. A closing chain below
  * FINAL_MIN_COVERAGE is never archived: it is posted as a live chain and the task fails, so it is retried.
+ * When IBKR lists no options for the symbol, posts that instead (POST /api/ingest/no-options) and returns null.
  */
-export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed> {
+export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed | null> {
   const rthClose = req.final && req.sessionDate ? await sessionClose(ctx, req.symbol, req.sessionDate) : null;
-  const r = await resolveOptionContracts(ctx, req.symbol, req.shape, rthClose);
+  let r: ResolvedChain;
+  try {
+    r = await resolveOptionContracts(ctx, req.symbol, req.shape, rthClose);
+  } catch (e) {
+    if (!(e instanceof NoListedOptions)) throw e;
+    await ctx.ingest.noOptions({ source: "ibkr", symbol: req.symbol });
+    return null;
+  }
   const quotes = await optionQuotes(ctx, r.contracts);
   const fetchedAt = ctx.now().toISOString();
   const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose);

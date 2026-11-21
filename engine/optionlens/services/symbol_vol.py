@@ -51,7 +51,6 @@ def volatility(symbol: str) -> dict:
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
     bars = ctx.load_bars(sym)
     a = stats.bar_arrays(bars)
-    m = metrics_repo.get_metrics(sym) or {}
     rank = ctx.iv_rank_info(sym)
     ivs = ctx.metrics_series(sym, ["iv30", "iv60", "iv90"])
     hv10, hv20, hv60 = (vol.hv_series(a.close, n) for n in (10, 20, 60))
@@ -64,7 +63,7 @@ def volatility(symbol: str) -> dict:
             for i, d in enumerate(a.dates) if d in iv_dates]
     return {
         "symbol": sym, "asof": ca.asof if ca else None,
-        "iv30": ctx.num(m.get("iv30")), "iv_rank": rank["iv_rank"], "iv_percentile": rank["iv_percentile"],
+        "iv30": rank["iv30"], "iv30_asof": rank["iv30_asof"], "iv_rank": rank["iv_rank"], "iv_percentile": rank["iv_percentile"],
         "history_days": rank["history_days"], "iv_high_52w": rank["iv_high_52w"], "iv_low_52w": rank["iv_low_52w"],
         "constant_maturity": _constant_maturity(sym),
         "term_today": ctx.derived(ca, "term", cm.term_structure) if ca else [],

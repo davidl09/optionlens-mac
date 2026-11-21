@@ -149,3 +149,17 @@ def test_iv_rank_current_window_and_staleness():
     assert cur["iv_rank"] == pytest.approx(1.0) and cur["iv_high_52w"] == pytest.approx(0.451)
     stale = v.iv_rank_current(days, ivs, days[-1] + timedelta(days=1))   # not swept in the last session
     assert stale["iv_rank"] is None and stale["iv_percentile"] is None and stale["history_days"] == 252
+
+
+def test_iv_rank_current_ranks_the_latest_finite_value_of_its_date():
+    from datetime import date, timedelta
+    from optionlens.analytics import vol as v
+    days = [date(2025, 1, 1) + timedelta(days=i) for i in range(40)]
+    ivs = [0.2 + 0.01 * i for i in range(39)] + [float("nan")]          # last row without an IV30
+    r = v.iv_rank_current(days, ivs, days[-1])
+    assert r["iv30"] == pytest.approx(0.58) and r["iv30_asof"] == days[-2]
+    assert r["iv_rank"] is None and r["iv_percentile"] is None            # stale: not the session's value
+    r = v.iv_rank_current(days, ivs, days[-2])
+    assert r["iv_rank"] == pytest.approx(1.0)
+    empty = v.iv_rank_current([], [], days[-1])
+    assert empty["iv30"] is None and empty["iv30_asof"] is None and empty["iv_rank"] is None

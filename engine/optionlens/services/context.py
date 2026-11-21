@@ -25,7 +25,7 @@ import numpy as np
 
 from ..analytics import earnings as earn_a
 from ..analytics import vol
-from ..analytics.calendar import NY, is_trading_day, now_ny
+from ..analytics.calendar import now_ny
 from ..analytics.chain import ChainArrays
 from ..analytics.stats import bar_arrays_from_columns
 from ..analytics.strategies import close_dt
@@ -33,7 +33,8 @@ from ..analytics.dividends import (PARITY_BAND, PARITY_DTE, TRAILING_COVERAGE_DA
                                    implied_yield_from_chain, trailing_yield)
 from ..config import get_settings
 from ..jobs import hooks, ondemand
-from ..models import Bar, Dividend, EarningsEvent, OptionContract, normalize_symbol
+from ..jobs._util import session_date
+from ..models import Bar, Dividend, EarningsEvent, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
@@ -249,14 +250,27 @@ def load_bars(symbol: str, start: date | None = None, live: bool = True) -> list
         c["close"].tolist(), vols)]
     if live:
         q = quotes_repo.get_quote(sym)
-        d = q.ts.astimezone(NY).date() if q and q.ts else None
-        if q and q.price and d and is_trading_day(d) and (not out or out[-1].date < d) \
-                and (start is None or d >= start):
+        d = quote_session(q) if q else None
+        if q and q.price and d and (not out or out[-1].date < d) and (start is None or d >= start):
             out.append(Bar(sym, d, q.open, q.high, q.low, float(q.price), q.volume))
     return out
 
 
 # ============================================================================ quote / metrics
+def quote_session(q: Quote) -> date | None:
+    """The trading session a stored quote belongs to (its live daily bar's date): the session of its
+    time stamp, so a quote fetched on a weekend or before the open is the previous session's, never a
+    bar dated on a non-trading day."""
+    return session_date(q.ts) if q.ts else None
+
+
+def optionable(symbol: str) -> bool | None:
+    """The symbols row's optionable flag: True once a chain was stored, False when a chain source
+    confirmed the symbol lists no options, None (unknown) otherwise or for an unknown symbol."""
+    row = symbols_repo.get_symbol(normalize_symbol(symbol))
+    return row["optionable"] if row else None
+
+
 def quote_dict(symbol: str) -> dict | None:
     q = quotes_repo.get_quote(symbol)
     if q is None or q.price is None:
@@ -287,14 +301,15 @@ def metrics_series(symbol: str, cols: list[str]) -> dict[str, dict[date, float |
 
 # ============================================================================ IV rank / calendars
 def iv_rank_info(symbol: str) -> dict:
-    """{iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from the iv_history iv30
-    (vol.iv_rank_current: last 252 rows, rank only when current on iv_session)."""
+    """{iv30, iv30_asof, iv_rank, iv_percentile, history_days, iv_high_52w, iv_low_52w} from the
+    iv_history iv30 (vol.iv_rank_current: the latest stored IV30 and its date; rank of that value over
+    the last 252 rows, only when it is from iv_session). Every page shows this iv30 as the current IV30."""
     h = iv_history(symbol, ["iv30"])
     return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), iv_session())
 
 
 def iv_rank_all() -> dict[str, dict]:
-    """iv_rank_info for every symbol with IV history (one query; cached per sweep)."""
+    """iv_rank_info for every symbol with IV history (one query, last 252 rows; cached per sweep)."""
     def build():
         session = iv_session()
         return {s: vol.iv_rank_current(_dates(c["date"]), c["iv30"].tolist(), session)

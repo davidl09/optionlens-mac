@@ -122,7 +122,20 @@ const IDEAS: TradeIdea[] = [
   { strategy: "seasonality", label: "December seasonality", family: "seasonality", legs: "Long stock", expiry: null, cost: null, max_profit: null, max_loss: null, pop: 0.7, ev_hv: null, edge: null, note: "Up in 7 of the last 10 Decembers (avg +2.1%)." },
 ];
 
+/** Symbols the mocked engine has no chain for, with the engine's error code (INTEGRATION.md §5). */
+export const NO_CHAIN: Record<string, "no_chain" | "no_options"> = { DELL: "no_chain", XNOP: "no_options" };
+const TODAY_NY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
 export function summary(sym: string): SymbolSummary {
+  const s = baseSummary(sym);
+  const code = NO_CHAIN[sym];
+  if (!code) return s;
+  // No chain: optionable unknown (or confirmed none); IV30 only from the stored (ingested) history, as of the last session.
+  return { ...s, optionable: code === "no_options" ? false : null, iv30: 0.523, iv30_asof: "2026-11-20", iv_rank: 1, iv_percentile: 0.99,
+    iv_history_days: 252, iv_hv_ratio: 0.523 / s.hv20!, call_volume: null, put_volume: null, pc_volume_ratio: null, total_oi: null, ideas: [], options_asof: null };
+}
+
+function baseSummary(sym: string): SymbolSummary {
   const b = bars("1y");
   reseed(13);
   const name = SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`;
@@ -130,7 +143,7 @@ export function summary(sym: string): SymbolSummary {
     symbol: sym, name, kind: ["SPY", "QQQ", "IWM", "DIA"].includes(sym) ? "etf" : ["SPX", "NDX", "RUT", "XSP"].includes(sym) ? "index" : "stock",
     sector: "Technology", industry: "Consumer Electronics", market_cap: 3.48e12, optionable: true, in_universe: true, quote: quote(sym),
     avg_volume_30d: 52_100_000, rel_volume: 0.93, high_52w: 248.1, low_52w: 168.3, high_3y: 248.1, low_3y: 124.2, beta_1y: 1.12, corr_spy_1y: 0.71,
-    iv30: 0.274, iv_rank: null, iv_percentile: null, iv_history_days: 12, hv20: 0.221, iv_hv_ratio: 1.24,
+    iv30: 0.274, iv30_asof: TODAY_NY, iv_rank: null, iv_percentile: null, iv_history_days: 12, hv20: 0.221, iv_hv_ratio: 1.24,
     call_volume: 412_300, put_volume: 288_100, avg_option_volume_20d: null, avg_option_volume_days: 0, rel_option_volume: null, pc_volume_ratio: 0.7, total_oi: 5_500_000,
     returns: { d1: 0.0126, d5: -0.018, m1: 0.041, m3: 0.083, m6: 0.12, ytd: 0.19, y1: 0.24, y3: null },
     next_earnings: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: null, avg_abs_move_pct: 0.038 },
@@ -159,11 +172,16 @@ export function priceAction(): PriceAction {
 }
 
 export function volatility(sym: string): Volatility {
+  const v = baseVolatility(sym);
+  return NO_CHAIN[sym] ? { ...v, asof: null, iv30: 0.523, iv30_asof: "2026-11-20", term_today: [], term_1w: null, term_1m: null } : v;
+}
+
+function baseVolatility(sym: string): Volatility {
   const b = bars("3y");
   reseed(17);
   const term = (shift: number) => expiries().map((e) => ({ expiry: e.expiry, dte: e.dte, atm_iv: e.atm_iv === null ? null : round(e.atm_iv + shift, 4) }));
   return {
-    symbol: sym, asof: NOW, iv30: 0.274, iv_rank: null, iv_percentile: null, history_days: 12, iv_high_52w: null, iv_low_52w: null,
+    symbol: sym, asof: NOW, iv30: 0.274, iv30_asof: TODAY_NY, iv_rank: null, iv_percentile: null, history_days: 12, iv_high_52w: null, iv_low_52w: null,
     constant_maturity: ([30, 60, 90, 120, 180, 360] as const).map((t, i) => ({ tenor: t, iv: round(0.274 + i * 0.004, 4), chg_1d: round((rnd() - 0.5) * 0.02, 4), chg_1w: null })),
     term_today: term(0), term_1w: term(0.012), term_1m: null,
     hv: ([10, 20, 30, 60, 90, 252] as const).map((w) => ({ window: w, value: round(0.2 + w / 3000, 4) })), parkinson20: 0.198,

@@ -9,7 +9,7 @@ import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
 import { Async, Card } from "../../components/ui";
 import { fmt, plural } from "../../lib/format";
-import { IDEA_COLUMNS, ideasAsRows, useSym } from "./shared";
+import { IDEA_COLUMNS, ideasAsRows, ivAsOf, useSym } from "./shared";
 
 export const MIN_IV_HISTORY = 20;
 
@@ -67,7 +67,7 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
             { label: "Sector", value: s.sector, fmt: "text", sub: s.industry ?? undefined },
             { label: "Beta (1y vs SPY)", value: s.beta_1y, fmt: "num2" },
             { label: "Corr SPY (1y)", value: s.corr_spy_1y, fmt: "num2" },
-            { label: "IV30", value: s.iv30, fmt: "vol" },
+            { label: "IV30", value: s.iv30, fmt: "vol", sub: ivAsOf(s.iv30_asof) ? `as of ${ivAsOf(s.iv30_asof)}` : undefined },
             { label: "IV rank", value: s.iv_rank, fmt: "pct", hint: ivHint, sub: `${s.iv_history_days}d history` },
             { label: "IV percentile", value: s.iv_percentile, fmt: "pct", hint: ivHint },
             { label: "HV20", value: s.hv20, fmt: "vol" },

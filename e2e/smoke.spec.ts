@@ -227,3 +227,16 @@ test("screenshots: dashboard, summary (dark + light), phone", async ({ page }) =
   await page.screenshot({ path: `${SHOTS}/menu-phone.png` });
   clean(p);
 });
+
+test("a symbol without a stored chain (no bridge): options tabs show a neutral notice, not an error", async ({ page }) => {
+  const p = await setup(page, [/404/]);
+  for (const tab of ["chain", "calculator", "skew", "ideas"]) {
+    await page.goto(`/s/DELL/${tab}`);
+    await expect(page.locator(".chain-notice")).toContainText("No option chain stored for DELL yet.");
+    await expect(page.locator(".error-box")).toHaveCount(0);
+  }
+  await page.goto("/s/XNOP/straddle");
+  await expect(page.locator(".chain-notice")).toHaveText("No listed options for XNOP.");
+  await expect(page.locator(".qh-name .badge.warn")).toHaveText("no options");
+  clean(p);
+});

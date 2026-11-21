@@ -225,8 +225,8 @@ def with_live_bar(b: dict, q) -> tuple:
     dates = [d.astype("datetime64[D]").item() for d in b["date"]]
     o, h, lo, c, v = (np.asarray(b[k], float) for k in ("open", "high", "low", "close", "volume"))
     live = False
-    if q is not None and q.price:
-        qd = q.ts.astimezone(NY).date()
+    qd = context.quote_session(q) if q is not None and q.price else None
+    if qd is not None:
         if not dates or qd > dates[-1]:
             dates = dates + [qd]
             o = np.append(o, np.nan if q.open is None else q.open)
@@ -279,6 +279,8 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
         C["iv_history_days"][i] = r["history_days"] if r else int(np.isfinite(iv).sum())
         if has_today:
             if r:
+                if r["iv30_asof"] == mdate:   # the value the rank is of (collected, else ingested IV30)
+                    C["iv30"][i] = _f(r["iv30"])
                 C["iv_rank"][i], C["iv_pct"][i] = _f(r["iv_rank"]), _f(r["iv_percentile"])
                 C["iv_high_52w"][i], C["iv_low_52w"][i] = _f(r["iv_high_52w"]), _f(r["iv_low_52w"])
             prev = iv[:-1]

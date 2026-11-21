@@ -57,6 +57,7 @@ export interface BridgeStatus {
 export type RefreshResult =
   | { status: "refreshed" }
   | { status: "fresh" }                      // pushed within chains_on_demand_max_age_s
+  | { status: "no-options" }                 // IBKR lists no options for the symbol (reported to the engine)
   | { status: "unavailable"; message: string }  // bridge off / TWS not connected / paused
   | { status: "failed"; message: string };
 

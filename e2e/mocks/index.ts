@@ -7,6 +7,8 @@ import * as s from "./symbol";
 export interface MockResponse { status: number; body: unknown }
 
 const ok = (body: unknown): MockResponse => ({ status: 200, body });
+/** Endpoints that need a stored chain (404 + code for the NO_CHAIN symbols). */
+const CHAIN_ENDPOINTS = new Set(["chain", "activity", "open-interest", "contract", "skew", "implied-moves", "straddle", "ideas"]);
 
 export function handle(method: string, url: URL, body: unknown): MockResponse | null {
   const p = url.pathname;
@@ -59,6 +61,10 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
     const tail = parts.slice(3).join("/");
     const lookback = Number(q.get("lookback") ?? 12), entry = Number(q.get("entry") ?? -1), exit = Number(q.get("exit") ?? 1);
     if (sym === "NOPE") return { status: 404, body: { detail: "Unknown symbol NOPE" } };
+    const noChain = s.NO_CHAIN[sym];
+    if (noChain && CHAIN_ENDPOINTS.has(parts[3])) {
+      return { status: 404, body: { detail: noChain === "no_options" ? `${sym} lists no options` : `no option chain for ${sym}`, code: noChain } };
+    }
     switch (parts[3]) {
       case "summary": return ok(s.summary(sym));
       case "bars": return ok(s.bars(q.get("range") ?? "1y"));

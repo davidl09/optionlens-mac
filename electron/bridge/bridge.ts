@@ -67,6 +67,8 @@ export class Bridge {
   private readonly obarsInFlight = new Set<string>();
   /** Task groups (symbol + kind) TWS refused for lack of a market-data permission: when, and what. */
   private readonly denied = new Map<string, { at: number; label: string }>();
+  /** Symbols whose last chain attempt found that IBKR lists no options. */
+  private readonly noOptions = new Set<string>();
   /** Last chain posted with less than FINAL_MIN_COVERAGE of its contracts quoted (status note). */
   private incompleteChain: { symbol: string; coverage: number } | null = null;
 
@@ -145,7 +147,7 @@ export class Bridge {
     const last = this.lastChainPush.get(sym);
     if (last !== undefined && this.now() - last < (this.wants?.onDemandMaxAgeS ?? 120) * 1000) return { status: "fresh" };
     const outcome = await this.scheduler.enqueue(this.chainTask("on-demand", onDemandKey(sym), sym, FULL_CHAIN, null));
-    if (outcome.ok) return { status: "refreshed" };
+    if (outcome.ok) return this.noOptions.has(sym) ? { status: "no-options" } : { status: "refreshed" };
     return outcome.cancelled ? { status: "unavailable", message: "Refresh cancelled." } : { status: "failed", message: outcome.error };
   }
 
@@ -310,6 +312,8 @@ export class Bridge {
     return this.task(kind, key, `${symbol} ${final ? "closing chain" : "chain"}`, async (ctx) => {
       this.lastChainAttempt.set(symbol, this.now());
       const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
+      if (r === null) { this.noOptions.add(symbol); this.pushed(); return; }
+      this.noOptions.delete(symbol);
       if (r.coverage < FINAL_MIN_COVERAGE) {
         this.incompleteChain = { symbol, coverage: r.coverage };
         this.d.log.warn(`bridge: ${symbol} chain incomplete (${Math.round(r.coverage * 100)}% of contracts quoted)`);

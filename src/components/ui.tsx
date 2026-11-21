@@ -1,5 +1,5 @@
 // Small presentational primitives.
-import { ReactNode, RefObject, useEffect } from "react";
+import { createContext, ReactNode, RefObject, useContext, useEffect } from "react";
 import type { DataSource } from "../api/types";
 import type { ApiState } from "../api/useApi";
 import { fmtDateTime, NULL_TEXT } from "../lib/format";
@@ -96,9 +96,14 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-/** Spinner on first load, error box on failure, stale data dimmed while refetching. */
+/** How Async shows a failed query: a page provides a view for the errors it understands (null = ErrorBox). */
+export type ErrorView = (error: Error, retry: () => void) => ReactNode | null;
+export const AsyncErrorView = createContext<ErrorView>(() => null);
+
+/** Spinner on first load, error box (or the page's AsyncErrorView) on failure, stale data dimmed while refetching. */
 export function Async<T>({ state, children }: { state: ApiState<T>; children: (data: T) => ReactNode }) {
-  if (state.error && !state.loading) return <ErrorBox error={state.error} onRetry={state.refetch} />;
+  const errorView = useContext(AsyncErrorView);
+  if (state.error && !state.loading) return errorView(state.error, state.refetch) ?? <ErrorBox error={state.error} onRetry={state.refetch} />;
   if (state.data === null) return state.loading ? <Spinner /> : null;
   return <div className={state.loading ? "refetching" : undefined}>{children(state.data)}</div>;
 }

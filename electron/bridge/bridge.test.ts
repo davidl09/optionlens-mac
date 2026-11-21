@@ -26,7 +26,7 @@ function market() {
 function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer } = {}) {
   const calls: string[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
-  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: rec("chain"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: rec("chain"), noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
     underlyingStats: async () => { calls.push("stats"); return {}; }, optionBars: rec("obars"), heartbeat: async () => { calls.push("heartbeat"); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
@@ -75,6 +75,24 @@ describe("Bridge", () => {
     expect(await p).toEqual({ status: "refreshed" });
     expect(h.calls).toContain("chain:AAPL");
     expect(await h.bridge.refreshSymbol("AAPL")).toEqual({ status: "fresh" });
+    h.bridge.stop();
+  });
+
+  it("a refresh of a symbol IBKR lists no options for reports it (and the engine is told)", async () => {
+    const m = market();
+    m.optionParams = [];
+    const h = harness({ iv_history: [], chains_on_demand_max_age_s: 120 }, m);
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const p = h.bridge.refreshSymbol("DELL");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await p).toEqual({ status: "no-options" });
+    expect(h.calls).toContain("noOptions:DELL");
+    expect(h.calls).not.toContain("chain:DELL");
+    m.optionParams = market().optionParams;                     // options listed later: a normal refresh again
+    const again = h.bridge.refreshSymbol("DELL");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await again).toEqual({ status: "refreshed" });
     h.bridge.stop();
   });
 

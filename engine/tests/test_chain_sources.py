@@ -238,6 +238,9 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
         metrics_repo.upsert_metrics(date(2026, 11, 19), sym, {"call_volume": v, "put_volume": v})
     monkeypatch.setattr(bridge_plan, "get_settings", lambda: type("S", (), {"chain_universe_size": 2})())
     assert bridge_plan.chain_universe(now) == ["F", "TSLA", "NVDA", "AAPL"]
+    symbols_repo.set_optionable("TSLA", False)                                     # IBKR lists no options
+    assert bridge_plan.chain_universe(now) == ["F", "NVDA", "AAPL"]
+    symbols_repo.set_optionable("TSLA", True)
     cu = bridge_plan.chain_universe_want(now)
     assert cu["expiries"] == 6 and cu["moneyness"] == 0.20 and cu["max_age_s"] == 3600
     assert cu["symbols"] == []                                                     # 20:30 ET: after the window

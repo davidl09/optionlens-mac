@@ -31,6 +31,8 @@ export interface UnderlyingStats { source: "ibkr"; session_date: string; ts: str
 export interface IngestQuotes { source: "ibkr"; delayed: boolean; quotes: IngestQuote[] }
 export interface OptionBar { expiry: string; strike: number; right: "C" | "P"; date: string; open: N; high: N; low: N; close: number; volume: N }
 export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] }
+/** IBKR lists no options for the symbol (no option parameters / no future expiries): the engine marks it optionable=false. */
+export interface NoOptions { source: "ibkr"; symbol: string }
 /** The bridge accepted (queued) these wants; the engine counts only accepted option_bars offers. */
 export interface AckWants { kind: "option_bars"; items: { symbol: string; sessions: string[] }[] }
 export interface Heartbeat { client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null }
@@ -38,6 +40,7 @@ export interface Heartbeat { client: string; ibkr_connected: boolean; account_ty
 export interface IngestApi {
   wants(): Promise<unknown>;
   chain(b: IngestChain): Promise<unknown>;
+  noOptions(b: NoOptions): Promise<unknown>;
   volHistory(b: VolBars): Promise<unknown>;
   indexBars(b: IndexBars): Promise<unknown>;
   quotes(b: IngestQuotes): Promise<unknown>;
@@ -51,6 +54,7 @@ export function ingestApi(http: JsonHttp): IngestApi {
   return {
     wants: () => http.get("/api/ingest/wants"),
     chain: (b) => http.post("/api/ingest/chain", b),
+    noOptions: (b) => http.post("/api/ingest/no-options", b),
     volHistory: (b) => http.post(b.kind === "iv30" ? "/api/ingest/iv-history" : "/api/ingest/hv-history", b),
     indexBars: (b) => http.post("/api/ingest/index-bars", b),
     quotes: (b) => http.post("/api/ingest/quotes", b),

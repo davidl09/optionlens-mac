@@ -9,7 +9,8 @@ import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
 import { AsOf, Async, Card, InfoBox, Segmented } from "../../components/ui";
 import { fmt, MONTHS } from "../../lib/format";
-import { ExpiryPills, shortDate, useQueryValue, useSym } from "./shared";
+import { NoChainNotice } from "./ChainRefresh";
+import { ExpiryPills, ivAsOf, shortDate, useQueryValue, useSym } from "./shared";
 import { ivHistoryHint } from "./SummaryTab";
 
 const CM_COLUMNS: ColumnDef[] = [
@@ -53,7 +54,7 @@ function VolatilityBody({ v }: { v: Volatility }) {
     <div className="stack">
       <Card title="Implied volatility" subtitle={<AsOf ts={v.asof} />}>
         <StatGrid items={[
-          { label: "IV30", value: v.iv30, fmt: "vol" },
+          { label: "IV30", value: v.iv30, fmt: "vol", sub: ivAsOf(v.iv30_asof) ? `as of ${ivAsOf(v.iv30_asof)}` : undefined },
           { label: "IV rank (52w)", value: v.iv_rank, fmt: "pct", hint },
           { label: "IV percentile", value: v.iv_percentile, fmt: "pct", hint },
           { label: "IV history", value: v.history_days, fmt: "int", sub: "days collected" },
@@ -76,7 +77,7 @@ function VolatilityBody({ v }: { v: Volatility }) {
       </Card>
       <div className="grid-2">
         <Card title="Term structure (ATM IV by DTE)" subtitle={v.term_1w ? undefined : "1w / 1m comparison appears once stored history allows"}>
-          <LineChart series={term} xType="value" xFmt="int" yFmt="vol" height={260} />
+          {v.asof === null ? <NoChainNotice /> : <LineChart series={term} xType="value" xFmt="int" yFmt="vol" height={260} />}
         </Card>
         <Card title="Constant-maturity IV">
           <DataTable minimal rowLink={false} columns={CM_COLUMNS} rows={v.constant_maturity as unknown as ReportRow[]} />

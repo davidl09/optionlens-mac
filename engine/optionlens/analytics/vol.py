@@ -100,13 +100,17 @@ IV_RANK_ROWS = 252   # stored daily rows in the IV rank window
 
 
 def iv_rank_current(dates: Sequence, iv30: Sequence[float | None], session) -> dict:
-    """The one IV rank rule for symbol pages and reports: `iv_rank_percentile` over the last
-    IV_RANK_ROWS stored rows (chronological ``dates`` / ``iv30``), and rank/percentile only when the
-    latest row is ``session`` (the current / last swept session) — a symbol not swept then is stale
-    (None), never shown as today's rank."""
+    """The one current-IV30 and IV rank rule for symbol pages and reports (chronological ``dates`` /
+    ``iv30``): the current IV30 is the latest finite stored value (``iv30``, its date ``iv30_asof``;
+    None when there is none); `iv_rank_percentile` of that value over the last IV_RANK_ROWS stored rows,
+    rank/percentile only when ``iv30_asof`` is ``session`` (the current / last swept session) — an older
+    value is stale (None), never shown as today's rank."""
     vals = list(iv30)[-IV_RANK_ROWS:]
     out = iv_rank_percentile(vals)
-    if session is None or not len(dates) or dates[-1] != session:
+    finite = [i for i, v in enumerate(iv30) if v is not None and np.isfinite(v)]
+    out["iv30"] = float(iv30[finite[-1]]) if finite else None
+    out["iv30_asof"] = dates[finite[-1]] if finite else None
+    if session is None or out["iv30_asof"] is None or out["iv30_asof"] != session:
         out["iv_rank"] = out["iv_percentile"] = None
     return out
 

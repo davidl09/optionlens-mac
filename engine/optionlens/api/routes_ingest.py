@@ -66,6 +66,11 @@ class ChainIn(_In):
     contracts: list[ContractIn] = Field(max_length=ingest.MAX_CONTRACTS)
 
 
+class NoOptionsIn(_In):
+    source: Source
+    symbol: Symbol
+
+
 class PointIn(_In):
     date: date
     value: float
@@ -172,6 +177,11 @@ class AckWantsIn(_In):
 @router.post("/chain")
 async def chain(req: ChainIn):
     return await respond(ingest.chain, req.model_dump())
+
+
+@router.post("/no-options")
+async def no_options(req: NoOptionsIn):
+    return await respond(ingest.no_options, req.model_dump())
 
 
 @router.post("/iv-history")

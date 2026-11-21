@@ -14,18 +14,18 @@ from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from . import context as ctx
 from .symbol_earnings import next_reaction_date
-from .errors import BadRequest, NotFound
+from .errors import BadRequest, NoChain, NotFound
 
 ALL = "all"
 OSI_RE = re.compile(r"^([A-Z0-9.]+?)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$")
 
 
 def require_chain(symbol: str, ensure_fresh: bool = True) -> ChainArrays:
-    """The symbol's ChainArrays or NotFound (symbol known but no listed options stored)."""
+    """The symbol's ChainArrays, or NoChain when the symbol is known but no chain is stored."""
     sym = ctx.refresh(symbol)["symbol"] if ensure_fresh else symbol
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
     if ca is None:
-        raise NotFound(f"no option chain for {sym}")
+        raise NoChain(sym, ctx.optionable(sym))
     return ca
 
 
@@ -140,6 +140,8 @@ def contract(symbol: str, osi: str) -> dict:
         latest = option_row(ca.src[hit[0]], ca.spot) if len(hit) else None
     h = options_repo.eod_for_osi(osi)
     if latest is None and not len(h["date"]):
+        if ca is None:
+            raise NoChain(sym, ctx.optionable(sym))
         raise NotFound(f"no data for contract {osi}")
     bid, ask, last = h["bid"], h["ask"], h["last"]
     both = (bid > 0) & (ask > 0)
