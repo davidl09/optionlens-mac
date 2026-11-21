@@ -156,7 +156,8 @@ exposes it as `delayed: boolean` on `Quote` and `Chain` JSON so the UI can badge
 `GET /api/ingest/wants` → what the server would like the bridge to fetch now (the bridge polls it every
 5 min while connected, and immediately after connecting). The bridge runs one task at a time, always
 within IBKR pacing: on-demand refreshes (user-triggered) first — they even run between the market-data
-batches of a longer task — and every other kind gets a weighted share of TWS time (eod_chains 8,
+batches of a longer task, and a running historical request (IV/HV history, index bars, option bars) is
+aborted and re-queued (no attempt used) so the refresh does not wait behind a long download — and every other kind gets a weighted share of TWS time (eod_chains 8,
 chain_universe 4, underlying_stats 3, index quotes/bars 2, option_bars 1, iv_history 1), so each kind with
 work makes progress in every cycle.
 ```
@@ -206,3 +207,13 @@ market data type 4 (delayed-frozen), so TWS answers with the last values of the 
 (`RefreshResult`, electron/shared/api.ts) is `refreshed` / `fresh` / `no-options` (IBKR lists no options:
 the bridge POSTed `/api/ingest/no-options`) / `unavailable` (bridge off, not connected or paused; asked again
 when the bridge connects while the page is open) / `failed`. After `refreshed` or `no-options` the page reloads.
+
+Chain fetch details (bridge): the first 8 expiries listed by `reqSecDefOptParams` (SMART), strikes within ±25%
+of spot. The option parameters are cached per underlying for the New York day; when TWS does not answer within
+60 s the request is sent once more with a 120 s wait, then the refresh fails with "IB Gateway did not send
+<symbol>'s option expiries … try again in a minute" (never `no-options`). Every listed contract of every picked
+expiry is posted, those TWS sent nothing for with null fields (shown as "no quote"); an expiry whose contract list
+TWS did not deliver is skipped, not fatal. The bridge status names the gaps of the last chain ("Incomplete IBKR
+chain for DELL: 62% of contracts quoted; no quotes for 2026-11-27; no contracts from IBKR for …"). Frozen /
+weekend quotes: an ask ≤ 0 is no quote, a 0 bid counts only against a real ask (−1 is always no quote).
+`contracts[].last_ts` is the time of the last trade (ticks 45 / 88) when TWS sends it.

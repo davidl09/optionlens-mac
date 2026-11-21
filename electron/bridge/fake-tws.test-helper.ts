@@ -1,5 +1,5 @@
 // Scriptable in-memory TwsSession / TwsConnector for unit tests (no TWS needed).
-import { TwsRequestError, type ConnectOptions, type HistBar, type HistoricalRequest, type OptionParams, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import { TwsRequestError, type ConnectOptions, type HistBar, type HistoricalRequest, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
 
 export interface FakeMarket {
   /** Ticks delivered (synchronously) when a contract is streamed, keyed by contractId(). */
@@ -36,7 +36,7 @@ export class FakeSession implements TwsSession {
 
   constructor(readonly market: FakeMarket, readonly accounts: string[] = ["DU123"]) {}
 
-  async historical(contract: TwsContract, req: HistoricalRequest): Promise<HistBar[]> {
+  async historical(contract: TwsContract, req: HistoricalRequest, _signal?: AbortSignal): Promise<HistBar[]> {
     this.historicalCalls.push({ contract, req });
     const invalid = twsValidationError(contract);
     if (invalid) throw invalid;
@@ -49,7 +49,7 @@ export class FakeSession implements TwsSession {
     if (invalid) throw invalid;
     return this.market.details(c);
   }
-  async optionParams(): Promise<OptionParams[]> { return this.market.optionParams; }
+  async optionParams(_u?: { symbol: string; secType: SecType; conId: number }, _signal?: AbortSignal, _timeoutMs?: number): Promise<OptionParams[]> { return this.market.optionParams; }
 
   /** Runs `fn` when the message would reach TWS (immediately without msgRate). */
   private send(fn: () => void): void {

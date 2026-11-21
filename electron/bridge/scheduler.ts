@@ -5,6 +5,7 @@
 //   - every other kind gets a fair share of TWS time by weight (weighted fair queueing on run time), so
 //     a long chain-universe round never starves stats, index data or backfills; ties go to §6 order;
 //   - a task whose gate is closed (historical tasks wait for the pacer) is skipped until it opens;
+//   - a pre-emptible task (historical requests) running when on-demand work arrives is aborted and re-queued;
 //   - FIFO within a kind.
 // Tasks are de-duplicated by key, cancellable by kind / key / group, and may ask to be retried later
 // (RetryLater) up to their attempt limit.
@@ -19,11 +20,21 @@ export interface Task {
   group?: string;
   gate?: Gate;
   maxAttempts?: number;
+  /**
+   * Aborted when an on-demand task is queued, then re-queued without using an attempt (historical requests:
+   * a long download must not hold TWS while the user waits for a chain). Its work must tolerate the abort.
+   */
+  preemptible?: boolean;
   /** `checkpoint` runs any waiting on-demand tasks first; call it only while holding no market-data lines. */
   run(signal: AbortSignal, checkpoint: () => Promise<void>): Promise<void>;
 }
 
 export type Outcome = { ok: true } | { ok: false; cancelled: boolean; error: string };
+
+/** Abort reason of a task pre-empted by on-demand work (it is re-queued). */
+class Preempted extends Error {
+  constructor() { super("pre-empted by on-demand work"); this.name = "Preempted"; }
+}
 
 /** Thrown by a task to be re-queued (its gate decides when it runs again). */
 export class RetryLater extends Error {
@@ -50,7 +61,11 @@ function before(a: readonly number[], b: readonly number[]): boolean {
 }
 
 interface Entry { task: Task; seq: number; attempts: number; resolve: (o: Outcome) => void; promise: Promise<Outcome> }
-interface Running { entry: Entry; ctrl: AbortController; /** Time spent running on-demand tasks at its checkpoints. */ lentMs: number }
+interface Running {
+  entry: Entry; ctrl: AbortController;
+  /** Time spent running on-demand tasks at its checkpoints. */ lentMs: number;
+  /** Cancelled by a caller (also after a pre-emption: then it is not re-queued). */ cancelled: boolean;
+}
 
 export interface SchedulerOptions {
   now?: () => number;
@@ -82,6 +97,7 @@ export class Scheduler {
     let resolve!: (o: Outcome) => void;
     const promise = new Promise<Outcome>((r) => { resolve = r; });
     this.queue.push({ task, seq: this.seq++, attempts: 0, resolve, promise });
+    if (task.kind === URGENT) this.preempt();
     this.changed();
     this.pump();
     return promise;
@@ -98,8 +114,14 @@ export class Scheduler {
     const dropped = this.queue.filter(match);
     this.queue = this.queue.filter((e) => !match(e));
     for (const e of dropped) this.finish(e, { ok: false, cancelled: true, error: "cancelled" });
-    if (!f.queuedOnly) for (const r of this.stack) if (match(r.entry)) r.ctrl.abort(new Error("cancelled"));
+    if (!f.queuedOnly) for (const r of this.stack) if (match(r.entry)) { r.cancelled = true; r.ctrl.abort(new Error("cancelled")); }
     this.changed();
+  }
+
+  /** Aborts running pre-emptible tasks so waiting on-demand work starts now; runEntry re-queues them. */
+  private preempt(): void {
+    if (this.paused) return;
+    for (const r of this.stack) if (r.entry.task.preemptible && !r.ctrl.signal.aborted) r.ctrl.abort(new Preempted());
   }
 
   /** Stops starting new tasks (the running one continues unless cancelled). */
@@ -190,18 +212,20 @@ export class Scheduler {
   private async runEntry(entry: Entry): Promise<void> {
     this.queue = this.queue.filter((e) => e !== entry);
     const ctrl = new AbortController();
-    const running: Running = { entry, ctrl, lentMs: 0 };
+    const running: Running = { entry, ctrl, lentMs: 0, cancelled: false };
     this.stack.push(running);
     entry.attempts += 1;
     this.changed();
     const started = this.now();
     let outcome: Outcome | null;
+    const preempted = () => ctrl.signal.reason instanceof Preempted && !running.cancelled;
     try {
       await entry.task.run(ctrl.signal, () => this.checkpoint());
-      outcome = ctrl.signal.aborted ? { ok: false, cancelled: true, error: "cancelled" } : { ok: true };
+      outcome = ctrl.signal.aborted && !preempted() ? { ok: false, cancelled: true, error: "cancelled" } : { ok: true };   // pre-empted but finished: done
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (ctrl.signal.aborted) outcome = { ok: false, cancelled: true, error: "cancelled" };
+      if (ctrl.signal.aborted && preempted()) { outcome = null; entry.attempts -= 1; }
+      else if (ctrl.signal.aborted) outcome = { ok: false, cancelled: true, error: "cancelled" };
       else if (e instanceof RetryLater && entry.attempts < (entry.task.maxAttempts ?? 5)) outcome = null;
       else outcome = { ok: false, cancelled: false, error: msg };
     }

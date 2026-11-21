@@ -53,7 +53,8 @@ export interface TwsSession {
   readonly accounts: string[];
   historical(contract: TwsContract, req: HistoricalRequest, signal: AbortSignal): Promise<HistBar[]>;
   contractDetails(contract: TwsContract, signal: AbortSignal): Promise<TwsContract[]>;
-  optionParams(underlying: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal): Promise<OptionParams[]>;
+  /** `timeoutMs`: how long to wait for the answer (the adapter's default when omitted). */
+  optionParams(underlying: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal, timeoutMs?: number): Promise<OptionParams[]>;
   /** Streams market data; returns a cancel function. Never throws for bad ticks. */
   stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers): () => void;
   /**

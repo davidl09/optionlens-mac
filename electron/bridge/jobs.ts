@@ -7,7 +7,8 @@ import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import type { LineBudget } from "./line-budget";
 import { bestPrice, changeFromClose, emptySnapshot, livePrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
-import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, TwsTimeoutError, type HistBar, type HistoricalRequest, type TwsContract, type TwsSession } from "./tws";
+import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, TwsTimeoutError, type HistBar, type HistoricalRequest, type OptionParams, type SecType, type TwsContract, type TwsSession } from "./tws";
+import type { OptionParamsCache } from "./option-params";
 import { durationFor } from "./wants";
 
 export interface JobContext {
@@ -22,6 +23,8 @@ export interface JobContext {
   checkpoint: () => Promise<void>;
   /** How long one subscription waits for its data, from the moment its request is sent (or its first tick). */
   batchTimeoutMs?: number;
+  /** Option parameters already fetched today (none: always asks TWS). */
+  optionParams?: OptionParamsCache;
 }
 
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
@@ -126,6 +129,40 @@ async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** The second, longer wait for reqSecDefOptParams (the adapter's default is 60 s). */
+export const OPTION_PARAMS_RETRY_MS = 120_000;
+
+/**
+ * The underlying's option parameters: today's cached answer, else TWS's, asked once more with a longer wait when
+ * TWS does not answer (it answers late while busy, e.g. with historical downloads).
+ */
+async function optionParams(ctx: JobContext, u: { symbol: string; secType: SecType; conId: number }): Promise<OptionParams[]> {
+  const cached = ctx.optionParams?.get(u.conId, ctx.now());
+  if (cached) return cached;
+  let params: OptionParams[];
+  try {
+    params = await ctx.session.optionParams(u, ctx.signal);
+  } catch (e) {
+    if (!(e instanceof TwsTimeoutError)) throw e;
+    try {
+      params = await ctx.session.optionParams(u, ctx.signal, OPTION_PARAMS_RETRY_MS);
+    } catch (e2) {
+      if (!(e2 instanceof TwsTimeoutError)) throw e2;
+      throw new OptionParamsTimeout(u.symbol);
+    }
+  }
+  ctx.optionParams?.set(u.conId, ctx.now(), params);
+  return params;
+}
+
+/** TWS answered neither option-parameter request: a failure (never "no options"), with what to do about it. */
+export class OptionParamsTimeout extends Error {
+  constructor(symbol: string) {
+    super(`IB Gateway did not send ${symbol}'s option expiries (asked twice, waited ${OPTION_PARAMS_RETRY_MS / 1000} s); it may be busy — try again in a minute`);
+    this.name = "OptionParamsTimeout";
+  }
+}
+
 export interface ResolvedChain {
   underlying: QuoteSnapshot; spot: number; contracts: TwsContract[];
   /** Every picked expiry (YYYYMMDD), in order, including those without contracts (none listed in the band, or
@@ -151,7 +188,7 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
   const quote = await underlyingQuote(ctx, resolved);
   const spot = spotOverride ?? bestPrice(quote);
   if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
-  const params = await ctx.session.optionParams({ symbol: und.symbol, secType: und.secType, conId: details.conId }, ctx.signal);
+  const params = await optionParams(ctx, { symbol: und.symbol, secType: und.secType, conId: details.conId });
   const expiries = pickExpiries(params, und.symbol, ctx.now(), shape.expiries);
   if (!expiries.length) throw new NoListedOptions(symbol);
   const all: TwsContract[] = [];

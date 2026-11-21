@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { emptyMarket, FakeSession, contractId, type FakeMarket } from "./fake-tws.test-helper";
 import type { IngestApi } from "./ingest";
-import { collectQuotes, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { OptionParamsCache } from "./option-params";
+import { collectQuotes, OPTION_PARAMS_RETRY_MS, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
 import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -177,12 +178,42 @@ describe("pushChain", () => {
     expect(ctx.ingest.calls.noOptions).toHaveLength(2);
   });
 
-  it("an unanswered option-parameter request is a failure, never 'no options'", async () => {
+  it("an unanswered option-parameter request is asked once more with a longer wait, then fails clearly (never 'no options')", async () => {
     const s = new FakeSession(aaplMarket());
-    s.optionParams = async () => { throw new TwsTimeoutError("AAPL option parameters", 10_000); };
+    const waits: (number | undefined)[] = [];
+    s.optionParams = async (_u, _signal, timeoutMs) => { waits.push(timeoutMs); throw new TwsTimeoutError("AAPL option parameters", timeoutMs ?? 60_000); };
     const ctx = ctxFor(s);
-    await expect(pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null })).rejects.toThrow(TwsTimeoutError);
+    await expect(pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))
+      .rejects.toThrow(/IB Gateway did not send AAPL's option expiries \(asked twice, waited 120 s\); it may be busy/);
+    expect(waits).toEqual([undefined, OPTION_PARAMS_RETRY_MS]);
     expect(ctx.ingest.calls.noOptions).toBeUndefined();
+  });
+
+  it("a late answer to the second option-parameter request still builds the chain", async () => {
+    const m = aaplMarket();
+    const s = new FakeSession(m);
+    let n = 0;
+    s.optionParams = async () => { n += 1; if (n === 1) throw new TwsTimeoutError("AAPL option parameters", 60_000); return m.optionParams; };
+    expect((await pushChain(ctxFor(s), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))?.contracts).toBe(10);
+  });
+
+  it("caches option parameters per underlying for the New York day (an empty answer is not cached)", async () => {
+    const m = aaplMarket();
+    const s = new FakeSession(m);
+    let asked = 0;
+    s.optionParams = async () => { asked += 1; return m.optionParams; };
+    const cache = new OptionParamsCache();
+    let now = new Date("2026-11-21T15:00:00Z");                 // Saturday
+    const ctx = ctxFor(s, { optionParams: cache, now: () => now });
+    const req = { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null };
+    await pushChain(ctx, req);
+    await pushChain(ctx, req);
+    expect(asked).toBe(1);
+    now = new Date("2026-11-22T05:30:00Z");                     // 00:30 New York: a new day
+    await pushChain(ctx, req);
+    expect(asked).toBe(2);
+    cache.set(265598, now, []);
+    expect(cache.get(265598, now)).toBeNull();
   });
 
   it("fails clearly when TWS sends no underlying price", async () => {

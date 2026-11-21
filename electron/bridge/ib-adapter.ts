@@ -182,11 +182,11 @@ class IbSession implements TwsSession {
     });
   }
 
-  optionParams(u: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal): Promise<OptionParams[]> {
+  optionParams(u: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal, timeoutMs = DETAILS_TIMEOUT_MS): Promise<OptionParams[]> {
     const out: OptionParams[] = [];
     let onParam: ((...a: unknown[]) => void) | null = null;
     let onEnd: ((id: number) => void) | null = null;
-    const p = this.request<OptionParams[]>(`${u.symbol} option parameters`, signal, DETAILS_TIMEOUT_MS, (reqId, done) => {
+    const p = this.request<OptionParams[]>(`${u.symbol} option parameters`, signal, timeoutMs, (reqId, done) => {
       onParam = (id, exchange, _conId, tradingClass, multiplier, expirations, strikes) => {
         if (id !== reqId) return;
         out.push({ exchange: String(exchange), tradingClass: String(tradingClass), multiplier: String(multiplier),

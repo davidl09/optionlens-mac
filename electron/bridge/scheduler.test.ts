@@ -73,6 +73,51 @@ describe("Scheduler", () => {
     expect(order).toEqual(["long:batch1", "od", "long:batch2", "idx"]);
   });
 
+  it("an on-demand task pre-empts a running historical (pre-emptible) task, which is re-queued without losing an attempt", async () => {
+    const s = new Scheduler();
+    const order: string[] = [];
+    let runs = 0;
+    const hist = s.enqueue(task("iv-history", "iv:AAPL", (signal) => new Promise<void>((resolve, reject) => {
+      runs += 1;
+      order.push(`iv:start${runs}`);
+      if (runs > 1) { order.push("iv:done"); resolve(); return; }
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });   // a long download, cut short
+    }), { preemptible: true, maxAttempts: 1 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.current()?.kind).toBe("iv-history");
+    const od = s.enqueue(task("on-demand", "ondemand:DELL", async () => { order.push("od"); }));
+    await vi.runAllTimersAsync();
+    expect(await od).toEqual({ ok: true });
+    expect(await hist).toEqual({ ok: true });                 // maxAttempts 1: the pre-emption did not count
+    expect(order).toEqual(["iv:start1", "od", "iv:start2", "iv:done"]);
+  });
+
+  it("does not pre-empt a task that is not pre-emptible, and a cancelled pre-empted task stays cancelled", async () => {
+    const s = new Scheduler();
+    let release!: () => void;
+    const chain = s.enqueue(task("chain-universe", "u:MSFT", () => new Promise<void>((r) => { release = r; })));
+    await vi.advanceTimersByTimeAsync(0);
+    const od = s.enqueue(task("on-demand", "ondemand:DELL"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(s.current()?.label).toBe("u:MSFT");
+    release();
+    await vi.runAllTimersAsync();
+    expect(await chain).toEqual({ ok: true });
+    expect(await od).toEqual({ ok: true });
+    const hist = s.enqueue(task("iv-history", "iv:KO", (signal) => new Promise<void>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }), { preemptible: true }));
+    await vi.advanceTimersByTimeAsync(0);
+    s.pause();                                                   // the on-demand task waits; the download is pre-empted…
+    s.resume();
+    const od2 = s.enqueue(task("on-demand", "ondemand:KO"));
+    s.cancel({ kind: "iv-history" });                            // …and then cancelled by the user
+    await vi.runAllTimersAsync();
+    expect(await hist).toMatchObject({ ok: false, cancelled: true });
+    expect(await od2).toEqual({ ok: true });
+    expect(s.counts()["iv-history"]).toBe(0);
+  });
+
   it("cancels by key, including a task waiting in the queue", async () => {
     const s = new Scheduler();
     s.pause();

@@ -117,6 +117,30 @@ describe("Bridge", () => {
     h.bridge.stop();
   });
 
+  it("an on-demand refresh pre-empts a running IV-history download, which resumes afterwards", async () => {
+    const h = harness({ iv_history: [{ symbol: "MDLN", from: "2016-01-01" }], chains_on_demand_max_age_s: 0 });
+    const order: string[] = [];
+    let downloads = 0;
+    const real = h.session.historical.bind(h.session);
+    h.session.historical = (c, r, signal) => {
+      downloads += 1;
+      order.push(`hist:${c.symbol}:${downloads}`);
+      if (downloads > 1) return real(c, r, signal);
+      return new Promise((_, reject) => signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }));   // a slow 10-year download
+    };
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.bridge.status().current?.kind).toBe("iv-history");
+    const p = h.bridge.refreshSymbol("DELL");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await p).toEqual({ status: "refreshed" });
+    expect(h.calls.indexOf("chain:DELL")).toBeLessThan(h.calls.indexOf("vol:MDLN"));
+    expect(order[0]).toBe("hist:MDLN:1");
+    expect(h.calls.filter((c) => c === "vol:MDLN")).toHaveLength(2);   // IV and HV both done after the refresh
+    expect(h.bridge.status().lastError).toBeNull();
+    h.bridge.stop();
+  });
+
   it("reports unavailable when not connected", async () => {
     const h = harness({});
     expect(await h.bridge.refreshSymbol("AAPL")).toMatchObject({ status: "unavailable" });

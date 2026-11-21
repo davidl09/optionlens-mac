@@ -11,6 +11,7 @@ import { FINAL_MIN_COVERAGE, pushChain, type ChainPushed, pushIndexBars, pushInd
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
+import { OptionParamsCache } from "./option-params";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater, Scheduler, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
@@ -64,6 +65,7 @@ export class Bridge {
   private readonly supervisor: TwsSupervisor;
   private readonly pacer: HistoricalPacer;
   private readonly lines: LineBudget;
+  private readonly optionParams = new OptionParamsCache();
   private readonly now: () => number;
   private session: TwsSession | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
@@ -299,7 +301,7 @@ export class Bridge {
   private context(signal: AbortSignal, checkpoint: () => Promise<void>): JobContext {
     const session = this.session;
     if (!session) throw new Error("not connected to IB Gateway / TWS");
-    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs };
+    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs, optionParams: this.optionParams };
   }
 
   /** Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. */
@@ -307,6 +309,8 @@ export class Bridge {
     o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group } = {}): Task {
     return {
       key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id,
+      // Historical requests (the pacer-gated tasks) give way to an on-demand refresh at once: aborted, re-queued.
+      preemptible: o.gate !== undefined,
       run: async (signal, checkpoint) => {
         try {
           await work(this.context(signal, checkpoint));
