@@ -37,7 +37,7 @@ def _opt_int(name: str) -> int | None:
 
 # numeric settings that schedules/limiters divide by or loop on: must be > 0
 _POSITIVE = ("sweep_interval_min", "option_eod_retention_days", "cboe_concurrency", "cboe_rps",
-             "nasdaq_rps", "smtp_port")
+             "nasdaq_rps", "smtp_port", "questrade_expiries", "questrade_moneyness")
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,12 @@ class Settings:
     cors_origins: tuple[str, ...] = ("app://optionlens",)
     parent_pid: int | None = None          # exit when this process (the app) disappears
     chain_universe_size: int = 150         # most-liquid symbols in the chain universe (besides watchlists)
-    chain_source: str = "none"             # server-side vendor ChainSource; "none": chains come from ingest
+    # Chain sources in preference order (ties of equal quality go to the earlier one; jobs/precedence.py):
+    # "ibkr-bridge" = chains pushed by the app's IBKR bridge, any other name = a server-side ChainSource
+    # (sources/chain_source.py REGISTRY) the engine sweeps itself once it is connected.
+    chain_sources: tuple[str, ...] = ("ibkr-bridge", "questrade")
+    questrade_expiries: int = 8            # Questrade sweeps: first N expiries ...
+    questrade_moneyness: float = 0.25      # ... strikes within ±this fraction of the underlying price
     tz: str = "America/New_York"
 
     def __post_init__(self) -> None:
@@ -78,6 +83,10 @@ class Settings:
             bad.append(f"OPTIONLENS_UNIVERSE_STOCKS={self.universe_stocks} must be >= 0")
         if self.chain_universe_size < 0:
             bad.append(f"OPTIONLENS_CHAIN_UNIVERSE_SIZE={self.chain_universe_size} must be >= 0")
+        if not self.chain_sources or len(set(self.chain_sources)) != len(self.chain_sources):
+            bad.append(f"OPTIONLENS_CHAIN_SOURCES={','.join(self.chain_sources)} must list distinct sources")
+        if self.questrade_moneyness >= 1:
+            bad.append(f"OPTIONLENS_QUESTRADE_MONEYNESS={self.questrade_moneyness} must be < 1")
         if self.api_token is not None and len(self.api_token) < MIN_TOKEN_LEN:
             bad.append(f"OPTIONLENS_API_TOKEN must be at least {MIN_TOKEN_LEN} characters")
         if self.parent_pid is not None and self.parent_pid <= 0:
@@ -119,7 +128,10 @@ def load_settings() -> Settings:
         cors_origins=tuple(o.strip() for o in _env("CORS_ORIGINS", "app://optionlens").split(",") if o.strip()),
         parent_pid=_opt_int("PARENT_PID"),
         chain_universe_size=_num("CHAIN_UNIVERSE_SIZE", "150", int),
-        chain_source=_env("CHAIN_SOURCE", "none").lower(),
+        chain_sources=tuple(x.strip().lower() for x in _env("CHAIN_SOURCES", "ibkr-bridge,questrade").split(",")
+                            if x.strip()),
+        questrade_expiries=_num("QUESTRADE_EXPIRIES", "8", int),
+        questrade_moneyness=_num("QUESTRADE_MONEYNESS", "0.25", float),
     )
 
 

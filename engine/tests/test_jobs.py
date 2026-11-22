@@ -72,32 +72,37 @@ def test_eod_and_daily_schedules():
 
 def test_all_spec_jobs_defined():
     spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
-            "dividends", "dividends_history", "vix", "rates", "sweep", "eod", "prune", "splits"}
+            "dividends", "dividends_history", "vix", "rates", "sweep", "sweep_final", "sweep_fill", "eod", "prune",
+            "splits"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests
     assert set(scheduler.JOBS) - {"digest_morning"} == spec
-    # no vendor ChainSource (default): no chain sweeps, no CBOE collection, eod after the bridge's pushes
+    # no CBOE collection; eod after the bridge's pushes
     assert scheduler.next_run_at("eod", ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 20, 5)
-    for name in ("sweep", "vix"):
-        assert scheduler.next_run_at(name, ny(2026, 11, 19, 12, 0)) is None
-        assert not scheduler.JOBS[name].catch_up
+    assert scheduler.next_run_at("vix", ny(2026, 11, 19, 12, 0)) is None and not scheduler.JOBS["vix"].catch_up
 
 
-def test_vendor_source_schedules_sweeps(monkeypatch):
-    monkeypatch.setattr(chain_source, "configured", lambda: object())
-    jobs = scheduler.build_jobs()
+def test_server_source_schedules_sweeps(monkeypatch):
+    jobs = scheduler.build_jobs()                                  # default: Questrade configured
     assert jobs["sweep"].catch_up and jobs["sweep"].schedule.next_after(ny(2026, 11, 19, 9, 0)) == ny(2026, 11, 19, 9, 45)
-    assert jobs["eod"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
+    assert jobs["sweep_final"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
+    assert jobs["sweep_fill"].schedule.next_after(ny(2026, 11, 21, 12, 0)) == ny(2026, 11, 21, 12, 35)
+    assert jobs["eod"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 20, 5)
+    from optionlens import config
+    monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("ibkr-bridge",)})())
+    jobs = scheduler.build_jobs()                                  # bridge only: sweeps are manual
+    for name in ("sweep", "sweep_final", "sweep_fill"):
+        assert jobs[name].schedule.next_after(ny(2026, 11, 19, 12, 0)) is None and not jobs[name].catch_up
+    assert config  # noqa
 
 
 def test_chain_source_registry(monkeypatch):
-    assert chain_source.configured() is None                       # default "none"
-    from optionlens import config
-    monkeypatch.setattr(config, "get_settings", lambda: type("S", (), {"chain_source": "acme"})())
-    monkeypatch.setattr(chain_source, "get_settings", config.get_settings)
+    assert chain_source.server_source_names() == ["questrade"]     # default: ibkr-bridge, questrade
+    assert chain_source.preference() == ("ibkr", "questrade") and chain_source.tag("ibkr-bridge") == "ibkr"
+    monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("acme", "ibkr-bridge")})())
     with pytest.raises(ValueError, match="acme"):
-        chain_source.configured()
+        chain_source.server_sources()
     monkeypatch.setitem(chain_source.REGISTRY, "acme", lambda: "SRC")
-    assert chain_source.configured() == "SRC"
+    assert chain_source.server_sources() == ["SRC"] and chain_source.preference() == ("acme", "ibkr")
 
 
 # ----------------------------------------------------------------------------- run_job
@@ -130,14 +135,23 @@ FETCHED = ny(2026, 11, 19, 16, 25)
 
 class FakeVendor:
     """A ChainSource serving the recorded AAPL chain (CBOE fixture parsed offline)."""
-    name = "fake"
+    name = "vendor"
 
     def __init__(self):
         self.payload = json.loads((FIX / "cboe_chain_AAPL.json").read_text())
         self.calls: list[str] = []
         self.delay = 0.0
 
-    async def fetch_chain(self, symbol):
+    def unavailable(self):
+        return None
+
+    async def keepalive(self):
+        return None
+
+    def status(self):
+        return {}
+
+    async def fetch_chain(self, symbol, final=False):
         self.calls.append(symbol)
         await asyncio.sleep(self.delay)
         if symbol == "AAPL":
@@ -145,13 +159,15 @@ class FakeVendor:
         if symbol == "EMPTY":
             p = {**self.payload, "data": {**self.payload["data"], "options": []}}
             return cboe.parse_chain(p, "EMPTY", fetched_at=FETCHED)
+        if symbol in ("SPX", "NDX", "RUT", "XSP"):
+            raise chain_source.NotListed(symbol)
         raise FetchError("u", 403 if symbol == "NOPE" else 503)
 
 
 @pytest.fixture
 def mocked_vendor(monkeypatch):
     v = FakeVendor()
-    monkeypatch.setattr(chain_source, "configured", lambda: v)
+    monkeypatch.setitem(chain_source.REGISTRY, "questrade", lambda: v)
     monkeypatch.setattr(chains, "now_ny", lambda: FETCHED)
     return v
 
@@ -163,7 +179,9 @@ def _seed_symbols_and_bars():
     bars_repo.upsert_bars(hist)          # through 2026-11-18
 
 
-async def test_sweep_needs_a_chain_source(tmpdb):
+async def test_sweep_needs_a_chain_source(tmpdb, monkeypatch):
+    assert await chains.sweep(["AAPL"]) == "questrade: not connected"              # configured, not connected
+    monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("ibkr-bridge",)})())
     with pytest.raises(RuntimeError, match="no server-side chain source"):
         await chains.sweep(["AAPL"])
 
@@ -177,7 +195,7 @@ async def test_sweep_pipeline(tmpdb, mocked_vendor, monkeypatch):
         detail = await chains.sweep()
     finally:
         hooks.on_sweep_complete.clear()
-    assert detail.startswith("1 chains, 1 not optionable, 2 failed")
+    assert detail.startswith("vendor: 1 chains, 1 not optionable, 4 not listed/skipped, 2 failed")   # indices: not listed
     assert seen == [(date(2026, 11, 19), ["AAPL"])]
     assert status_repo.row_counts()["option_latest"] == 3386
     assert symbols_repo.get_symbol("AAPL")["optionable"] is True
@@ -206,6 +224,8 @@ async def test_eod_writes_archive_and_bars(tmpdb, mocked_vendor, monkeypatch):
         raise RuntimeError("hooks must not break eod")
     hooks.on_eod.append(async_hook)
     try:
+        assert (await chains.sweep_final()).startswith("vendor: 1 chains")          # closing snapshot, archived
+        assert options_repo.eod_sources([date(2026, 11, 19)]) == {date(2026, 11, 19): {"AAPL": "vendor"}}
         detail = await chains.eod()
     finally:
         hooks.on_eod.clear()

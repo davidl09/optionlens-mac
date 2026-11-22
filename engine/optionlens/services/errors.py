@@ -7,7 +7,11 @@ class NotFound(LookupError):
 
 
 class BadRequest(ValueError):
-    """Request parameters are invalid -> 422."""
+    """Request parameters are invalid -> 422 (with a machine-readable `code` where the UI acts on it)."""
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
 
 
 class NoChain(NotFound):

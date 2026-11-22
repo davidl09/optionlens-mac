@@ -47,7 +47,16 @@ def test_loopback_settings(monkeypatch, tmp_path, host):
     s = config.load_settings()
     assert s.port == 0 and s.parent_pid == 4242 and not s.auth_enabled
     assert s.cors_origins == ("app://optionlens", "http://localhost:5173")
-    assert s.chain_universe_size == 150 and s.chain_source == "none"
+    assert s.chain_universe_size == 150 and s.chain_sources == ("ibkr-bridge", "questrade")
+    assert (s.questrade_expiries, s.questrade_moneyness) == (8, 0.25)
+    monkeypatch.setenv("OPTIONLENS_CHAIN_SOURCES", " Questrade , ibkr-bridge")
+    monkeypatch.setenv("OPTIONLENS_QUESTRADE_EXPIRIES", "4")
+    s = config.load_settings()
+    assert s.chain_sources == ("questrade", "ibkr-bridge") and s.questrade_expiries == 4
+    for bad in ("questrade,questrade", ","):
+        monkeypatch.setenv("OPTIONLENS_CHAIN_SOURCES", bad)
+        with pytest.raises(ValueError, match="CHAIN_SOURCES"):
+            config.load_settings()
 
 
 @POSIX_ONLY

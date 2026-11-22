@@ -11,7 +11,8 @@
   metrics row for it, chains for chain-universe symbols without a chain fetched since its open. So a first
   launch on a weekend or in the evening populates the last session from IBKR's frozen data
   (docs/INTEGRATION.md §6 "After-hours fills"), watchlists first, then recently opened, then most liquid.
-- eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR.
+- eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR (nor a
+  real-time one from a server-side source such as Questrade, which a delayed IBKR chain could not replace).
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
   each (session, symbol) is offered until the bridge has accepted it MAX_OFFERS times (POST
   /api/ingest/ack-wants, record_offers), and again only REOFFER_AFTER after an accepted offer.
@@ -102,13 +103,17 @@ def underlying_stats_want(now: datetime | None = None) -> dict:
 
 
 def eod_chains_want(now: datetime | None = None) -> dict:
-    """Closing chains of the current session not yet received from IBKR (chain universe + indices),
-    wanted from final_since (close + 20 min) until eod_deadline (20:00 ET)."""
+    """Closing chains of the current session (chain universe + indices) whose archive is neither from IBKR nor
+    real-time data from another source, wanted from final_since (close + 20 min) until eod_deadline (20:00 ET)."""
     now = now or now_ny()
     day = session_date(now)
-    have = options_repo.eod_sources([day])[day]
+    have = options_repo.eod_quality(day)
+
+    def settled(s: str) -> bool:
+        a = have.get(s)
+        return a is not None and (a["source"] == options_repo.IBKR or a["delayed"] is False)
     return {"session_date": day,
-            "symbols": [s for s in _unique(chain_universe(now), EOD_INDICES) if have.get(s) != options_repo.IBKR],
+            "symbols": [s for s in _unique(chain_universe(now), EOD_INDICES) if not settled(s)],
             "not_before": final_since(day), "deadline": eod_deadline(day)}
 
 

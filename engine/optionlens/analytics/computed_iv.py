@@ -8,12 +8,16 @@ A contract without a source IV gets one by Black-Scholes inversion (analytics.bs
 A price outside the no-arbitrage bounds stays without IV (None). A contract without a source delta gets delta,
 gamma, theta and vega from its IV (source or computed) via analytics.bs ("computed"). Source values are never
 replaced; `theo` is never computed. Every value says where it came from (`iv_source`, `greeks_source`).
+
+Before computing, `borrow_source_iv` gives a contract without a source IV the IV (and greeks) another chain source
+sent for the same contract in the same session, labelled with that source: the engine computes only where no
+source has an IV.
 """
 from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from . import bs
 from .calendar import NY, year_fraction_to_expiry
@@ -46,16 +50,36 @@ def model_price(c: OptionContract, session_start: datetime) -> tuple[float | Non
     return None, None
 
 
+GREEKS = ("delta", "gamma", "theta", "vega")
+
+
+def borrow_source_iv(contracts: Iterable[OptionContract], stored: Mapping[str, Mapping],
+                     source: str | None) -> list[OptionContract]:
+    """Contracts without a source IV take it from `stored` ({osi: {iv, delta, gamma, theta, vega, iv_source,
+    greeks_source, source}}: another source's source-given values of the same session), and its greeks when they
+    have none, keeping that source's labels. Rows of `source` itself are not borrowed."""
+    out = []
+    for c in contracts:
+        s = stored.get(c.osi)
+        if c.iv or s is None or s.get("source") == source or not s.get("iv"):
+            out.append(c)
+            continue
+        greeks = {k: s[k] for k in GREEKS} if c.delta is None and s.get("delta") is not None else {}
+        out.append(replace(c, iv=s["iv"], iv_source=s["iv_source"],
+                           **({**greeks, "greeks_source": s["greeks_source"]} if greeks else {})))
+    return out
+
+
 def fill_iv_greeks(contracts: Iterable[OptionContract], *, spot: float | None, asof: datetime, r: float, q: float,
                    session_start: datetime, source: str | None) -> list[OptionContract]:
     """`contracts` with source values labelled `source` and missing IV / greeks computed (see module doc).
     `asof`: when the prices were current (the session's close for an after-hours or weekend snapshot); `spot`:
-    the underlying price at that time."""
+    the underlying price at that time. Values already labelled (borrow_source_iv) keep their label."""
     asof_day = asof.astimezone(NY).date()
     out = []
     for c in contracts:
-        iv, iv_src = (c.iv, source) if c.iv else (None, None)
-        greeks_src = source if c.delta is not None else None
+        iv, iv_src = (c.iv, c.iv_source or source) if c.iv else (None, None)
+        greeks_src = (c.greeks_source or source) if c.delta is not None else None
         live = spot is not None and spot > 0 and c.expiry >= asof_day
         t = year_fraction_to_expiry(c.expiry, asof) if live else None
         if iv is None and live:

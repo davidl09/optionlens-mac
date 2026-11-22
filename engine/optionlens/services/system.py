@@ -17,13 +17,13 @@ from ..repo import jobs as jobs_repo
 from ..repo import options as options_repo
 from ..repo import status as status_repo
 from ..repo import symbols as symbols_repo
+from . import sources as data_sources
 
 SEARCH_LIMIT = 20
 JOB_FIELDS = ("job", "started_at", "finished_at", "ok", "detail")
-# Status.sources: each server-side data source and the scheduler jobs that collect from it ("vendor":
-# the optional server-side ChainSource, listed only when OPTIONLENS_CHAIN_SOURCE is configured).
+# Status.sources: each server-side data source and the scheduler jobs that collect from it (chain sources such as
+# Questrade report their own state: services.sources).
 SOURCE_JOBS = {
-    "vendor": ("sweep", "eod"),
     "nasdaq": ("universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill", "dividends",
                "dividends_history"),
     "treasury": ("rates",),
@@ -103,11 +103,10 @@ def bridge(now: datetime | None = None) -> dict:
 
 
 def sources(latest: dict[str, dict], br: dict) -> list[dict]:
-    """nasdaq, treasury, ibkr-bridge (heartbeat / last push) and vendor (only when configured)."""
+    """nasdaq, treasury, ibkr-bridge (heartbeat / last push) and the enabled server-side chain sources."""
     ibkr = {"name": "ibkr-bridge", "ok": br["connected"] if br["client"] else None,
             "last_success_at": br["last_push_at"], "detail": br["client"]}
-    vendor = [_source("vendor", latest)] if get_settings().chain_source != "none" else []
-    return [_source("nasdaq", latest), _source("treasury", latest), ibkr, *vendor]
+    return [_source("nasdaq", latest), _source("treasury", latest), ibkr, *data_sources.status_entry()]
 
 
 def _sessions_back(d, n: int):

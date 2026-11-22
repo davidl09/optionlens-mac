@@ -14,11 +14,16 @@ import logging
 from datetime import date
 from typing import Any, Callable
 
+from ..models import ChainSnapshot
+
 log = logging.getLogger("optionlens.jobs.hooks")
 
 Hook = Callable[[date, list[str]], Any]
 on_sweep_complete: list[Hook] = []   # after every sweep (incl. the EOD final sweep): symbols refreshed
 on_eod: list[Hook] = []              # after option_eod + daily_bars were written for `day`
+# Applied in order to a server-side source's chain (sync, in a worker thread) before it is stored: the
+# services layer completes IV and greeks the same way as for pushed chains (services.ingest.complete_chain).
+chain_preparers: list[Callable[[ChainSnapshot, str], ChainSnapshot]] = []
 
 
 async def fire(hooks: list[Hook], day: date, symbols: list[str]) -> int:

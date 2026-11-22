@@ -1,5 +1,6 @@
 """option_latest (current chain per symbol) and option_eod (daily end-of-day archive), both tagged with
-their `source`. Archive precedence per (date, symbol): see `outranks`."""
+their `source` and `delayed`. Which real chain becomes a session's archive is decided by the caller
+(jobs/precedence.py); here only: a reconstructed archive never replaces a real one."""
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -21,20 +22,11 @@ _LATEST_COLS = ('o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o
 _EOD_COLS = ('date, symbol, osi, expiry, strike, "right", bid, ask, last, volume, oi, iv, delta, '
              'gamma, theta, vega, underlying, iv_source, greeks_source')
 _EOD_FIELDS = ("date", "symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "volume", "oi",
-               "iv", "delta", "gamma", "theta", "vega", "underlying", "iv_source", "greeks_source", "source")
+               "iv", "delta", "gamma", "theta", "vega", "underlying", "iv_source", "greeks_source", "source",
+               "delayed")
 
 IBKR = "ibkr"
 RECONSTRUCTED = "reconstructed"
-
-
-def _rank(source: str | None) -> int:
-    return 2 if source == IBKR else 0 if source == RECONSTRUCTED else 1
-
-
-def outranks(existing: str | None, new: str | None) -> bool:
-    """Whether session data from `existing` must not be replaced by data from `new` for the same
-    session: IBKR (real OPRA quotes) beats every other source; any real chain beats a reconstruction."""
-    return _rank(existing) > _rank(new)
 
 
 def _syms(symbols: Sequence[str] | None) -> list[str] | None:
@@ -61,6 +53,20 @@ def replace_option_latest(snap: ChainSnapshot, source: str | None = None) -> int
 def latest_fetched_at(symbol: str) -> datetime | None:
     """Fetch time (aware UTC) of the stored chain, or None if none stored."""
     return aware(scalar("SELECT max(ts) FROM option_latest WHERE symbol = ?", [symbol]))
+
+
+def latest_source_iv(symbol: str, since: datetime) -> dict[str, dict]:
+    """{osi: {iv, delta, gamma, theta, vega, iv_source, greeks_source, source}} of the stored chain's rows with an IV
+    its chain source sent (not engine-computed), when that chain was fetched at/after `since`."""
+    rows = query("""SELECT osi, iv, delta, gamma, theta, vega, iv_source, greeks_source, source FROM option_latest
+                    WHERE symbol = ? AND ts >= ? AND iv > 0 AND iv_source IS NOT NULL
+                      AND NOT starts_with(iv_source, 'computed')""", [symbol, utc_naive(since)])
+    return {r["osi"]: r for r in rows}
+
+
+def last_fetched_by(source: str) -> datetime | None:
+    """Fetch time (aware UTC) of the newest stored chain from `source`, or None."""
+    return aware(scalar("SELECT max(ts) FROM option_latest WHERE source = ?", [source]))
 
 
 def latest_source(symbol: str) -> str | None:
@@ -155,15 +161,17 @@ def near_atm_by_symbol(expiry_min: date, expiry_max: date, band: float,
 
 
 # ----------------------------------------------------------------------------- option_eod
-def _archivable(cur, day: date, new: Mapping[str, str | None]) -> list[str]:
-    """Symbols of `new` ({symbol: source}) whose archive of `day` may be (re)written: no stored rows,
-    or none from a source that outranks the new one."""
+def _open_archives(cur, day: date, new: Mapping[str, str | None]) -> list[str]:
+    """Symbols of `new` ({symbol: source}) whose archive of `day` may be written: none stored, or one from the
+    same source, or a reconstructed one when the new one is real (a reconstruction never replaces a real
+    archive). Which of two real sources wins is the caller's decision (jobs/precedence.py)."""
     if not new:
         return []
     have: dict[str, list] = dict(cur.execute(
         """SELECT symbol, list(DISTINCT source) FROM option_eod WHERE date = ?
            AND symbol IN (SELECT unnest(?::VARCHAR[])) GROUP BY symbol""", [day, list(new)]).fetchall())
-    return [s for s, src in new.items() if not any(outranks(e, src) for e in have.get(s, []))]
+    return [s for s, src in new.items()
+            if all(e == src or (e == RECONSTRUCTED and src != RECONSTRUCTED) for e in have.get(s, []))]
 
 
 def _clear_eod(cur, day: date, symbols: list[str]) -> None:
@@ -171,14 +179,15 @@ def _clear_eod(cur, day: date, symbols: list[str]) -> None:
                 [day, symbols])
 
 
-def _keep(c: OptionContract) -> bool:
+def archivable(c: OptionContract) -> bool:
+    """Whether the archive keeps a contract: not (bid, OI and volume all 0 / unknown)."""
     return not ((c.bid or 0) == 0 and (c.oi or 0) == 0 and (c.volume or 0) == 0)
 
 
 def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | None = None) -> int:
-    """Archive option_latest rows fetched at/after fresh_since as EOD rows for day, with their source
-    (skipping rows with bid=0 AND oi=0 AND volume=0). Replaces the (day, symbol) archive unless it came
-    from a source that outranks the stored chain's (see `outranks`). Returns rows written."""
+    """Archive option_latest rows fetched at/after fresh_since as EOD rows for day, with their source and delayed
+    flag (skipping rows with bid=0 AND oi=0 AND volume=0), replacing an archive of `day` only when it came from
+    the same source or was reconstructed (_open_archives). Returns rows written."""
     syms = _syms(symbols)
     since = utc_naive(fresh_since)
     with db.write() as cur:
@@ -186,14 +195,15 @@ def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | 
             """SELECT symbol, any_value(source) FROM option_latest WHERE ts >= ?
                AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[]))) GROUP BY symbol""",
             [since, syms, syms]).fetchall())
-        ok = _archivable(cur, day, cand)
+        ok = _open_archives(cur, day, cand)
         if not ok:
             return 0
         _clear_eod(cur, day, ok)
         cur.execute(f"""
-            INSERT INTO option_eod ({_EOD_COLS}, source)
+            INSERT INTO option_eod ({_EOD_COLS}, source, delayed)
             SELECT ?::DATE, o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.volume,
-                   o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price, o.iv_source, o.greeks_source, o.source
+                   o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price, o.iv_source, o.greeks_source, o.source,
+                   o.delayed
             FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
             WHERE o.ts >= ? AND o.symbol IN (SELECT unnest(?::VARCHAR[]))
               AND NOT (COALESCE(o.bid, 0) = 0 AND COALESCE(o.oi, 0) = 0 AND COALESCE(o.volume, 0) = 0)
@@ -202,18 +212,28 @@ def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | 
 
 
 def write_eod_chain(day: date, snap: ChainSnapshot, source: str | None) -> int:
-    """Archive a closing chain snapshot as the (day, symbol) EOD rows tagged `source` (same skip and
-    precedence rules as write_option_eod). Returns rows written (0 when outranked)."""
+    """Archive a closing chain snapshot as the (day, symbol) EOD rows tagged `source` and snap.delayed, replacing
+    the stored archive (same skip rule as write_option_eod; the caller decided precedence). Returns rows written."""
     symbol = snap.quote.symbol
-    uniq = [c for c in {c.osi: c for c in snap.contracts}.values() if _keep(c)]
+    uniq = [c for c in {c.osi: c for c in snap.contracts}.values() if archivable(c)]
     data = {f: [getattr(c, f) for c in uniq] for f in _EOD_FIELDS[2:16] + ("iv_source", "greeks_source")}
     n = len(uniq)
-    data.update(date=[day] * n, symbol=[symbol] * n, underlying=[snap.quote.price] * n, source=[source] * n)
+    data.update(date=[day] * n, symbol=[symbol] * n, underlying=[snap.quote.price] * n, source=[source] * n,
+                delayed=[snap.delayed] * n)
     with db.write() as cur:
-        if not _archivable(cur, day, {symbol: source}):
-            return 0
         _clear_eod(cur, day, [symbol])
         return insert_arrow(cur, "option_eod", {f: data[f] for f in _EOD_FIELDS})
+
+
+def eod_quality(day: date, symbols: Sequence[str] | None = None) -> dict[str, dict]:
+    """{symbol: {source, delayed, quoted}} of the real (not reconstructed) archives of `day`: `delayed` true when
+    any row is delayed (None when unknown), `quoted` the rows with an ask > 0 (jobs/precedence.py)."""
+    rows = query("""SELECT symbol, any_value(source) AS source, bool_or(delayed) AS delayed,
+                           count(*) FILTER (WHERE ask > 0) AS quoted
+                    FROM option_eod WHERE date = ? AND source IS DISTINCT FROM ?
+                      AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))
+                    GROUP BY symbol""", [day, RECONSTRUCTED, _syms(symbols), _syms(symbols)])
+    return {r["symbol"]: {"source": r["source"], "delayed": r["delayed"], "quoted": int(r["quoted"])} for r in rows}
 
 
 def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> int:
@@ -226,9 +246,9 @@ def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> 
     n = len(rows)
     data = {f: [r.get(f) for r in rows] for f in _EOD_FIELDS}
     data.update(date=[day] * n, symbol=[symbol] * n, bid=[None] * n, ask=[None] * n, oi=[None] * n,
-                source=[RECONSTRUCTED] * n)
+                source=[RECONSTRUCTED] * n, delayed=[None] * n)
     with db.write() as cur:
-        if not n or not _archivable(cur, day, {symbol: RECONSTRUCTED}):
+        if not n or not _open_archives(cur, day, {symbol: RECONSTRUCTED}):
             return 0
         cur.execute("DELETE FROM option_eod WHERE date = ? AND symbol = ? AND osi IN (SELECT unnest(?::VARCHAR[]))",
                     [day, symbol, data["osi"]])
@@ -236,15 +256,15 @@ def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> 
 
 
 def eod_sources(days: Sequence[date], symbols: Sequence[str] | None = None) -> dict[date, dict[str, str | None]]:
-    """{date: {symbol: source}} of the stored archives on `days` (one source per (date, symbol):
-    the highest-ranking one)."""
+    """{date: {symbol: source}} of the stored archives on `days` (one source per (date, symbol): the real one
+    over a reconstruction)."""
     rows = query("""SELECT date, symbol, list(DISTINCT source) AS src FROM option_eod
                     WHERE date IN (SELECT unnest(?::DATE[]))
                       AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))
                     GROUP BY date, symbol""", [list(days), _syms(symbols), _syms(symbols)])
     out: dict[date, dict[str, str | None]] = {d: {} for d in days}
     for r in rows:
-        out.setdefault(r["date"], {})[r["symbol"]] = max(r["src"], key=_rank)
+        out.setdefault(r["date"], {})[r["symbol"]] = max(r["src"], key=lambda x: x != RECONSTRUCTED)
     return out
 
 

@@ -80,7 +80,9 @@ def test_status_sources_and_bridge(client):
     client.post("/api/ingest/heartbeat", json={"client": "optionlens-mac 0.1.0", "ibkr_connected": True,
                                                "account_type": "paper"})
     st = client.get("/api/status").json()
-    assert [s["name"] for s in st["sources"]] == ["nasdaq", "treasury", "ibkr-bridge"]   # no vendor configured
+    assert [s["name"] for s in st["sources"]] == ["nasdaq", "treasury", "ibkr-bridge", "questrade"]
+    qt = st["sources"][3]                                                          # configured, not connected
+    assert qt["ok"] is None and qt["detail"].startswith("not connected") and "0/10,500 calls this hour" in qt["detail"]
     assert st["bridge"]["connected"] is True and st["bridge"]["client"] == "optionlens-mac 0.1.0"
     ib = st["sources"][2]
     assert ib["ok"] is True and ib["detail"] == "optionlens-mac 0.1.0"
@@ -248,7 +250,8 @@ def test_a_weekend_snapshot_is_solved_at_the_session_close():
                        delta=None, gamma=None, theta=None, vega=None, rho=None, theo=None)
     quote = Quote(symbol="DELL", ts=saturday, price=120.0, change=None, change_pct=None, open=None, high=None, low=None,
                   prev_close=None, volume=None, bid=None, ask=None, iv30=None)
-    (out,) = ingest._with_computed_iv(quote, [c], saturday, "ibkr")
+    from optionlens.models import ChainSnapshot
+    (out,) = ingest.complete_chain(ChainSnapshot(quote, (c,), saturday), "ibkr").contracts
     assert out.iv_source == "computed_mid" and out.iv == pytest.approx(0.8, abs=0.01)
 
 

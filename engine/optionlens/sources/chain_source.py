@@ -1,8 +1,8 @@
-"""Server-side option-chain sources (vendors). None is configured by default: chains then come only from
-the IBKR bridge through the ingest API, and the scheduler runs no chain sweeps.
-
-A vendor module implements ChainSource and adds a factory to REGISTRY under the name the
-`OPTIONLENS_CHAIN_SOURCE` setting selects. Chains it returns are stored with source tag SOURCE_TAG.
+"""Option-chain sources. `settings.chain_sources` (OPTIONLENS_CHAIN_SOURCES) lists them in preference order:
+- "ibkr-bridge": chains pushed by the app's IBKR bridge through the ingest API (rows tagged "ibkr");
+- any other name: a server-side ChainSource from REGISTRY, which the scheduler sweeps itself while the source is
+  available (rows tagged with its name, e.g. "questrade").
+The order breaks ties between chains of equal quality (jobs/precedence.py).
 """
 from __future__ import annotations
 
@@ -11,29 +11,68 @@ from typing import Callable, Protocol
 from ..config import get_settings
 from ..models import ChainSnapshot
 
-SOURCE_TAG = "vendor"      # `source` of rows stored from any server-side vendor (docs/INTEGRATION.md §5)
-NONE = "none"
+BRIDGE = "ibkr-bridge"
+BRIDGE_TAG = "ibkr"
+
+
+class NotListed(Exception):
+    """The source does not carry this symbol: nothing is stored and the symbol is not marked unoptionable."""
 
 
 class ChainSource(Protocol):
     name: str
 
-    async def fetch_chain(self, symbol: str) -> ChainSnapshot:
-        """Current chain of `symbol` (an empty `contracts` tuple: no listed options). Raises
-        net.FetchError on failure."""
+    def unavailable(self) -> str | None:
+        """Why the source cannot fetch now (e.g. "not connected"), or None."""
+        ...
+
+    def status(self) -> dict:
+        """Status.sources details of the source (never a secret)."""
+        ...
+
+    async def keepalive(self) -> None:
+        """Keep credentials from lapsing while nothing is fetched (called hourly; failures show in status)."""
+        ...
+
+    async def fetch_chain(self, symbol: str, final: bool = False) -> ChainSnapshot:
+        """Current chain of `symbol` (an empty `contracts` tuple: no listed options; `final`: the closing
+        snapshot). Raises NotListed, or net.FetchError on failure."""
         ...
 
 
-REGISTRY: dict[str, Callable[[], ChainSource]] = {}
+def _questrade() -> ChainSource:
+    from .questrade import instance
+    return instance()
 
 
-def configured() -> ChainSource | None:
-    """The ChainSource the settings select, or None ("none", the default). Unknown name -> ValueError."""
-    name = getattr(get_settings(), "chain_source", NONE) or NONE
-    if name == NONE:
-        return None
-    try:
-        return REGISTRY[name]()
-    except KeyError:
-        raise ValueError(f"OPTIONLENS_CHAIN_SOURCE={name!r} is not a known chain source "
-                         f"(known: {', '.join(sorted(REGISTRY)) or 'none'})") from None
+REGISTRY: dict[str, Callable[[], ChainSource]] = {"questrade": _questrade}
+
+
+def tag(name: str) -> str:
+    """The `source` tag rows from chain source `name` are stored with."""
+    return BRIDGE_TAG if name == BRIDGE else name
+
+
+def preference() -> tuple[str, ...]:
+    """Source tags in the configured preference order."""
+    return tuple(tag(n) for n in get_settings().chain_sources)
+
+
+def server_source_names() -> list[str]:
+    """Names of the configured server-side ChainSources, in preference order. Unknown name -> ValueError."""
+    names = [n for n in get_settings().chain_sources if n != BRIDGE]
+    unknown = [n for n in names if n not in REGISTRY]
+    if unknown:
+        raise ValueError(f"OPTIONLENS_CHAIN_SOURCES: {unknown[0]!r} is not a known chain source "
+                         f"(known: {', '.join([BRIDGE, *sorted(REGISTRY)])})")
+    return names
+
+
+def server_sources() -> list[ChainSource]:
+    """The configured server-side ChainSources (available or not), in preference order."""
+    return [REGISTRY[n]() for n in server_source_names()]
+
+
+def available() -> list[ChainSource]:
+    """The server-side ChainSources that can fetch now."""
+    return [s for s in server_sources() if s.unavailable() is None]

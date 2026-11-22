@@ -18,6 +18,7 @@ from .models import normalize_symbol
 from .repo import jobs as jobs_repo
 from .repo import status as status_repo
 from .repo import symbols as symbols_repo
+from .services import ingest
 
 
 def _symbols(v: str | None) -> list[str] | None:
@@ -25,6 +26,7 @@ def _symbols(v: str | None) -> list[str] | None:
 
 
 async def _run(name: str, **kwargs) -> int:
+    ingest.register_hooks()   # sweeps complete IV / greeks as in the server
     try:
         ok, detail = await scheduler.run_job(name, **{k: v for k, v in kwargs.items() if v is not None})
     finally:

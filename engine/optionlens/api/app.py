@@ -17,14 +17,15 @@ from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
-from ..services import alerts
-from ..services.errors import BadRequest, NoChain, NotFound
+from ..services import alerts, ingest
+from ..services.errors import BadRequest, NotFound
 from . import (
     routes_backtest,
     routes_calc,
     routes_ingest,
     routes_market,
     routes_reports,
+    routes_sources,
     routes_symbol,
     routes_system,
     routes_user,
@@ -46,6 +47,7 @@ def scheduler_enabled() -> bool:
 async def lifespan(app: FastAPI):
     db.connect()
     alerts.register_hooks()  # alert evaluation, EOD report snapshots and digests
+    ingest.register_hooks()  # IV / greeks of server-side sources' chains
     if scheduler_enabled():
         await scheduler.start()
     try:
@@ -76,11 +78,11 @@ def _install_errors(app: FastAPI) -> None:
 
     @app.exception_handler(NotFound)
     async def not_found(_: Request, exc: NotFound):
-        return _detail(404, str(exc), exc.code if isinstance(exc, NoChain) else None)
+        return _detail(404, str(exc), getattr(exc, "code", None))
 
     @app.exception_handler(BadRequest)
     async def bad_request(_: Request, exc: BadRequest):
-        return _detail(422, str(exc))
+        return _detail(422, str(exc), exc.code)
 
     @app.exception_handler(RequestValidationError)
     async def invalid(_: Request, exc: RequestValidationError):
@@ -119,7 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = s
     _install_errors(app)
     for module in (routes_system, routes_symbol, routes_calc, routes_backtest,
-                   routes_reports, routes_market, routes_user, routes_ingest):
+                   routes_reports, routes_market, routes_user, routes_ingest, routes_sources):
         app.include_router(module.router)
     app.add_middleware(BodyLimit)
     if s.auth_enabled:

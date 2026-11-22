@@ -217,6 +217,12 @@ def _net() -> _Net:
     return n
 
 
+def client() -> httpx.AsyncClient:
+    """The shared HTTP client of the running event loop (no rate gate or retries: for sources with their own,
+    e.g. sources/questrade)."""
+    return _net().client
+
+
 async def aclose() -> None:
     """Close the client bound to the running loop."""
     n = _nets.pop(asyncio.get_running_loop(), None)

@@ -194,3 +194,9 @@ ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS iv_computed BOOLEAN;
 -- session had no row; a push from inside the window or a closing snapshot replaces it, and it never replaces one.
 -- NULL / false = collected during the session or from its closing snapshot.
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS after_hours BOOLEAN;
+-- Chain precedence (docs/INTEGRATION.md §6 "Chain precedence", jobs/precedence.py): the quality of the chain behind a
+-- metrics_daily row (chain_final: a closing snapshot; chain_quoted: contracts with a real ask) and whether an archive
+-- holds delayed data. NULL = from before these columns (unknown).
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_final BOOLEAN;
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_quoted INTEGER;
+ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS delayed BOOLEAN;

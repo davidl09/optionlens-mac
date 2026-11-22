@@ -1,5 +1,5 @@
-"""On-demand work triggered by API requests: symbol visits (chain freshness when a vendor ChainSource is
-configured), first-visit history, cached Nasdaq fundamentals. Concurrent requests for the same symbol
+"""On-demand work triggered by API requests: symbol visits (chain freshness from an available server-side
+ChainSource, e.g. Questrade), first-visit history, cached Nasdaq fundamentals. Concurrent requests for the same symbol
 share one fetch (per-symbol lock)."""
 from __future__ import annotations
 
@@ -57,8 +57,9 @@ def _record_view(symbol: str, now: datetime) -> None:
 
 async def ensure_fresh(symbol: str, max_age_s: float = 120) -> bool:
     """Make sure the symbol is known (symbols row, price history on first visit) and record the visit.
-    With a server-side ChainSource configured, a stale chain (see is_stale) is refetched once; without
-    one (the default) nothing is fetched: the stored chain (pushed by the IBKR bridge) is served.
+    With an available server-side ChainSource (the first in settings.chain_sources), a stale chain (see is_stale)
+    is refetched once from it; without one nothing is fetched: the stored chain (pushed by the IBKR bridge) is
+    served.
     Returns whether a chain is stored. Raises UnknownSymbol for symbols Nasdaq does not know."""
     symbol = normalize_symbol(symbol)
     async with _lock(f"chain:{symbol}"):
@@ -66,12 +67,12 @@ async def ensure_fresh(symbol: str, max_age_s: float = 120) -> bool:
         await ensure_history(symbol, row)
         await asyncio.to_thread(_record_view, symbol, datetime.now(timezone.utc))
         fetched = await asyncio.to_thread(options_repo.latest_fetched_at, symbol)
-        if (chain_source.configured() is None or row.get("optionable") is False
-                or not is_stale(fetched, now_ny(), max_age_s)):
+        srcs = chain_source.available()
+        if not srcs or row.get("optionable") is False or not is_stale(fetched, now_ny(), max_age_s):
             return fetched is not None
         try:
-            snap = await chains.refresh_chain(symbol)
-        except FetchError:
+            snap = await chains.refresh_chain(srcs[0], symbol)
+        except (FetchError, chain_source.NotListed):
             return fetched is not None  # serve what we have
         return snap is not None or fetched is not None
 

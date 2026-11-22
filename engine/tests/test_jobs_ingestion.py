@@ -52,14 +52,12 @@ def snap_at(payload, fetched: datetime, price: float | None = None):
 def test_final_boundary_is_close_plus_feed_delay_everywhere(monkeypatch):
     assert _util.final_since(FRI) == ny(2026, 11, 20, 16, 20)
     assert _util.final_since(date(2026, 11, 27)) == ny(2026, 11, 27, 13, 20)        # early close
-    eod = scheduler.JOBS["eod"].schedule              # no vendor source: after the bridge's push window
+    eod = scheduler.JOBS["eod"].schedule              # after the bridge's push window
     assert eod.next_after(ny(2026, 11, 20, 12, 0)) == _util.eod_deadline(FRI) + timedelta(minutes=5)
     assert eod.next_after(ny(2026, 11, 20, 21, 0)) == ny(2026, 11, 23, 20, 5)
-    from optionlens.sources import chain_source
-    monkeypatch.setattr(chain_source, "configured", lambda: object())
-    eod = scheduler.build_jobs()["eod"].schedule      # vendor sweeps: eod fires at the boundary
-    assert eod.next_after(ny(2026, 11, 20, 12, 0)) == _util.final_since(FRI)
-    assert eod.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 27))
+    final = scheduler.JOBS["sweep_final"].schedule    # server-side closing snapshot at the boundary
+    assert final.next_after(ny(2026, 11, 20, 12, 0)) == _util.final_since(FRI)
+    assert final.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 27))
 
 
 def test_is_stale_uses_final_boundary():

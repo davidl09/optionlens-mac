@@ -5,6 +5,7 @@ Inputs are validated plain values (the API layer parses JSON); every write is an
 """
 from __future__ import annotations
 
+import dataclasses
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -18,6 +19,7 @@ from ..models import Bar, ChainSnapshot, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
 from ..repo import bridge as bridge_repo
 from ..repo import market as market_repo
+from ..repo import options as options_repo
 from ..repo import quotes as quotes_repo
 from ..repo import symbols as symbols_repo
 from ..repo import user as user_repo
@@ -64,23 +66,35 @@ def _contract(symbol: str, c: dict) -> OptionContract:
         vega=c.get("vega"), rho=None, theo=None, last_ts=c.get("last_ts"))
 
 
-def _with_computed_iv(quote: Quote, contracts: list[OptionContract], fetched: datetime,
-                      source: str) -> list[OptionContract]:
-    """Source IV/greeks labelled with `source`, missing ones computed (analytics.computed_iv) at the time the
-    prices were current: fetched_at during the session, else the session's close (an evening or weekend
-    snapshot holds the closing quotes), with the underlying's regular-session close then when stored."""
+def complete_chain(snap: ChainSnapshot, source: str) -> ChainSnapshot:
+    """`snap` with source IV/greeks labelled `source`, a contract's missing IV taken from another source's chain of
+    the same session when it has one (computed_iv.borrow_source_iv), the rest computed (analytics.computed_iv) at
+    the time the prices were current: fetched_at during the session, else the session's close (an evening or
+    weekend snapshot holds the closing quotes), with the underlying's regular-session close then when stored.
+    Used for pushed chains and, as a jobs.hooks.chain_preparers entry, for server-side sources' chains."""
+    quote, fetched = snap.quote, snap.fetched_at
     day = session_date(fetched)
     close = session_close(day)
     asof = min(fetched, close)
+    session_start = datetime.combine(day, OPEN, NY)
     spot = quote.price
     if fetched >= close:
         b = bars_repo.get_bars(quote.symbol, start=day, end=day)
         if len(b["close"]) and ctx.num(b["close"][-1]):
             spot = float(b["close"][-1])
+    contracts = computed_iv.borrow_source_iv(snap.contracts, options_repo.latest_source_iv(quote.symbol, session_start),
+                                             source)
     r = ctx.risk_free_rate(day)
     q = ctx.dividend_yield(quote.symbol, spot, ChainArrays.from_contracts(contracts, spot, asof, symbol=quote.symbol))
-    return computed_iv.fill_iv_greeks(contracts, spot=spot, asof=asof, r=r, q=q,
-                                      session_start=datetime.combine(day, OPEN, NY), source=source)
+    done = computed_iv.fill_iv_greeks(contracts, spot=spot, asof=asof, r=r, q=q, session_start=session_start,
+                                      source=source)
+    return dataclasses.replace(snap, contracts=tuple(done))
+
+
+def register_hooks() -> None:
+    """Complete server-side sources' chains like pushed ones (idempotent; call once at startup)."""
+    if complete_chain not in hooks.chain_preparers:
+        hooks.chain_preparers.append(complete_chain)
 
 
 def _check_final(day: date | None, fetched_at: datetime) -> date:
@@ -104,11 +118,11 @@ def chain(body: dict, now: datetime | None = None) -> dict:
         raise BadRequest(f"fetched_at {fetched.isoformat()} is in the future")
     day = _check_final(body.get("session_date"), fetched) if body.get("final") else None
     quote = _quote(sym, body["underlying"], fetched, body["delayed"], day is not None)
-    contracts = _with_computed_iv(quote, [_contract(sym, c) for c in body["contracts"]], fetched, source)
     listed = body.get("contracts_listed_at") if body.get("contracts_from_cache") else None
     if body.get("contracts_from_cache") and listed is None:
         raise BadRequest("contracts_listed_at is required when contracts_from_cache is true")
-    snap = ChainSnapshot(quote, tuple(contracts), fetched, body["delayed"], listed)
+    snap = complete_chain(ChainSnapshot(quote, tuple(_contract(sym, c) for c in body["contracts"]), fetched,
+                                        body["delayed"], listed), source)
     chains.store_chain(snap, fetched, final=day is not None, source=source)
     if day is not None:
         ctx.invalidate()

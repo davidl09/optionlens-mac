@@ -58,13 +58,6 @@ def eod_source(day: date = FRI) -> str | None:
 
 
 # ----------------------------------------------------------------------------- precedence
-def test_outranks():
-    assert options_repo.outranks("ibkr", "vendor") and options_repo.outranks("ibkr", None)
-    assert options_repo.outranks("vendor", "reconstructed") and options_repo.outranks("cboe", "reconstructed")
-    assert not options_repo.outranks("vendor", "ibkr") and not options_repo.outranks("vendor", "vendor")
-    assert not options_repo.outranks("reconstructed", "reconstructed")
-
-
 def test_ibkr_session_data_is_not_overwritten_by_a_later_vendor_chain(tmpdb, payload):
     t1, t2 = ny(2026, 11, 20, 16, 5), ny(2026, 11, 20, 16, 25)
     chains.store_chain(snap(payload, t1), t1, final=True, source="ibkr")

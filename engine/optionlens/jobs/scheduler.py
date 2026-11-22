@@ -112,17 +112,24 @@ class Job:
 MON, SAT, SUN = 0, 5, 6
 
 
-# Without a server-side ChainSource, closing chains are pushed by the IBKR bridge until EOD_DEADLINE:
-# the EOD job (archive leftovers, daily bars, report snapshots, digest) runs just after it.
+# Closing chains are pushed by the IBKR bridge until EOD_DEADLINE: the EOD job (archive leftovers, daily bars, report
+# snapshots, digest) runs just after it.
 EOD_AFTER_PUSHES = (datetime.combine(date.min, EOD_DEADLINE) + timedelta(minutes=5)).time()
+FILL_MINUTE = 35   # after-hours fills: every hour at :35 (the job itself skips while the session runs)
+
+
+def hourly(minute: int) -> Schedule:
+    """Every hour at `minute`, every day."""
+    return Schedule(lambda d: [time(h, minute) for h in range(24)], f"hourly at :{minute:02d}")
 
 
 def build_jobs() -> dict[str, Job]:
-    """All jobs (SPEC §5), keyed by name, in bootstrap order. Chain sweeps are scheduled only when a
-    server-side ChainSource is configured (else `sweep` is manual-only and fails without a source).
-    CBOE is not collected: `vix` (CBOE history CSVs) is manual-only."""
+    """All jobs (SPEC §5), keyed by name, in bootstrap order. Server-side chain sweeps (intraday, the closing
+    snapshot at close + 20 min, hourly after-hours fills) are scheduled only when settings.chain_sources lists a
+    server-side ChainSource (default: Questrade; each run skips a source that is not connected); else they are
+    manual-only and fail without a source. CBOE is not collected: `vix` (CBOE history CSVs) is manual-only."""
     s = get_settings()
-    vendor = chain_source.configured() is not None
+    server = bool(chain_source.server_source_names())
     jobs = [
         Job("universe", universe.universe, daily(time(6, 0), {MON})),
         Job("prices_backfill", prices.prices_backfill, daily(time(6, 10))),
@@ -134,9 +141,10 @@ def build_jobs() -> dict[str, Job]:
         Job("dividends_history", calendars.dividends_history, daily(time(6, 30), {SUN})),
         Job("vix", marketdata.vix, manual(), catch_up=False),
         Job("rates", marketdata.rates, daily(time(17, 5))),
-        Job("sweep", chains.sweep, intraday(s.sweep_interval_min) if vendor else manual(), catch_up=vendor),
-        Job("eod", chains.eod, after_close(FINAL_DELAY_MIN) if vendor   # final sweep sees the closing data
-            else daily(EOD_AFTER_PUSHES, trading_only=True)),
+        Job("sweep", chains.sweep, intraday(s.sweep_interval_min) if server else manual(), catch_up=server),
+        Job("sweep_final", chains.sweep_final, after_close(FINAL_DELAY_MIN) if server else manual(), catch_up=server),
+        Job("sweep_fill", chains.sweep_fill, hourly(FILL_MINUTE) if server else manual(), catch_up=server),
+        Job("eod", chains.eod, daily(EOD_AFTER_PUSHES, trading_only=True)),
         Job("prune", maintenance.prune, daily(time(3, 0))),
     ]
     return {j.name: j for j in jobs}
