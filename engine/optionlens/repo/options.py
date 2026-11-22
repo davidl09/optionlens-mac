@@ -52,6 +52,7 @@ def replace_option_latest(snap: ChainSnapshot, source: str | None = None) -> int
     data["ts"] = [utc_naive(snap.fetched_at)] * len(uniq)
     data["source"] = [source] * len(uniq)
     data["delayed"] = [snap.delayed] * len(uniq)
+    data["contracts_listed_at"] = [utc_naive(snap.contracts_listed_at) if snap.contracts_listed_at else None] * len(uniq)
     with db.write() as cur:
         cur.execute("DELETE FROM option_latest WHERE symbol = ?", [symbol])
         return insert_arrow(cur, "option_latest", data)
@@ -70,6 +71,12 @@ def latest_source(symbol: str) -> str | None:
 def latest_delayed(symbol: str) -> bool:
     """Whether the stored chain was pushed from delayed data (False when unknown or none stored)."""
     return bool(scalar("SELECT bool_or(delayed) FROM option_latest WHERE symbol = ?", [symbol]))
+
+
+def latest_contracts_listed_at(symbol: str) -> datetime | None:
+    """When the stored chain's contract list was listed, if the client built it from a saved list (IBKR's contract
+    server unavailable); None when it was listed at fetch time (or unknown / none stored)."""
+    return aware(scalar("SELECT max(contracts_listed_at) FROM option_latest WHERE symbol = ?", [symbol]))
 
 
 def fetched_since(since: datetime, symbols: Sequence[str] | None = None) -> set[str]:

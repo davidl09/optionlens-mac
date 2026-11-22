@@ -1,11 +1,12 @@
 // Scriptable in-memory TwsSession / TwsConnector for unit tests (no TWS needed).
-import { TwsRequestError, type ConnectOptions, type HistBar, type HistoricalRequest, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import type { ContractStore } from "./contract-cache";
+import { TwsRequestError, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
 
 export interface FakeMarket {
   /** Ticks delivered (synchronously) when a contract is streamed, keyed by contractId(). */
   ticks: (id: string) => TickEvent[] | undefined;
-  /** Errors delivered instead of ticks. */
-  streamErrors: (id: string) => TwsRequestError | undefined;
+  /** Errors delivered instead of ticks (`marketDataType`: of the request; undefined = the session default 4). */
+  streamErrors: (id: string, marketDataType?: MarketDataKind) => TwsRequestError | undefined;
   details: (c: TwsContract) => TwsContract[];
   optionParams: OptionParams[];
   historical: (c: TwsContract, r: HistoricalRequest) => HistBar[] | Error;
@@ -22,8 +23,11 @@ export function twsValidationError(c: TwsContract): TwsRequestError | null {
 }
 
 export class FakeSession implements TwsSession {
-  readonly streams: { contract: TwsContract; generic: string; cancelled: boolean }[] = [];
+  readonly streams: { contract: TwsContract; generic: string; cancelled: boolean; marketDataType: MarketDataKind | undefined }[] = [];
   readonly historicalCalls: { contract: TwsContract; req: HistoricalRequest }[] = [];
+  /** Every reqSecDefOptParams (option parameters) and reqContractDetails the bridge sent. */
+  readonly optionParamsCalls: { symbol: string; secType: SecType; conId: number }[] = [];
+  readonly detailsCalls: TwsContract[] = [];
   maxConcurrentStreams = 0;
   /** Outgoing messages per second, like the real API client's queue (null = sent instantly, ticks synchronous). */
   msgRate: number | null = null;
@@ -45,11 +49,15 @@ export class FakeSession implements TwsSession {
     return r;
   }
   async contractDetails(c: TwsContract): Promise<TwsContract[]> {
+    this.detailsCalls.push(c);
     const invalid = twsValidationError(c);
     if (invalid) throw invalid;
     return this.market.details(c);
   }
-  async optionParams(_u?: { symbol: string; secType: SecType; conId: number }, _signal?: AbortSignal, _timeoutMs?: number): Promise<OptionParams[]> { return this.market.optionParams; }
+  async optionParams(u: { symbol: string; secType: SecType; conId: number }, _signal?: AbortSignal, _timeoutMs?: number): Promise<OptionParams[]> {
+    this.optionParamsCalls.push(u);
+    return this.market.optionParams;
+  }
 
   /** Runs `fn` when the message would reach TWS (immediately without msgRate). */
   private send(fn: () => void): void {
@@ -62,8 +70,8 @@ export class FakeSession implements TwsSession {
     return this.msgRate === null ? 0 : Math.max(0, this.queueFreeAt - Date.now());
   }
 
-  stream(contract: TwsContract, generic: string, h: TickHandlers): () => void {
-    const rec = { contract, generic, cancelled: false };
+  stream(contract: TwsContract, generic: string, h: TickHandlers, marketDataType?: MarketDataKind): () => void {
+    const rec = { contract, generic, cancelled: false, marketDataType };
     this.streams.push(rec);
     let live = false;
     this.send(() => {
@@ -73,7 +81,7 @@ export class FakeSession implements TwsSession {
       this.open += 1;
       this.maxConcurrentStreams = Math.max(this.maxConcurrentStreams, this.open);
       const id = contractId(contract);
-      const err = twsValidationError(contract) ?? this.market.streamErrors(id);
+      const err = twsValidationError(contract) ?? this.market.streamErrors(id, marketDataType);
       if (err) h.onError(err);
       else for (const t of this.market.ticks(id) ?? []) h.onTick(t);
     });
@@ -107,4 +115,10 @@ export class FakeConnector implements TwsConnector {
 
 export function emptyMarket(): FakeMarket {
   return { ticks: () => undefined, streamErrors: () => undefined, details: () => [], optionParams: [], historical: () => [] };
+}
+
+/** In-memory ContractStore (what the app keeps in <userData>/contract-cache/<SYMBOL>.json), JSON round-tripped. */
+export function memoryContractStore(): ContractStore & { files: Map<string, string> } {
+  const files = new Map<string, string>();
+  return { files, read: (sym) => (files.has(sym) ? JSON.parse(files.get(sym)!) as unknown : null), write: (sym, v) => { files.set(sym, JSON.stringify(v)); } };
 }

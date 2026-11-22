@@ -8,7 +8,7 @@ import { StatGrid } from "../components/StatGrid";
 import { Card, ErrorBox, InfoBox, PathText, Progress, Spinner } from "../components/ui";
 import { UpdatesCard } from "../components/UpdatesCard";
 import { desktop } from "../desktop";
-import { populateText } from "../lib/status";
+import { farmsSummary, optionsSubscriptionText, populateText } from "../lib/status";
 import { useBridgeStatus, useEngineStatus, useUpdateStatus } from "../state/desktop";
 
 const PORTS: { value: string; label: string }[] = [
@@ -65,6 +65,10 @@ function BridgeStatusCard({ b }: { b: BridgeStatus }) {
         { label: "Last push", value: b.lastPushAt, fmt: "datetime", hint: "Nothing pushed yet." },
         { label: "Working on", node: <span>{b.current ? b.current.label : "idle"}</span> },
         { label: "Queued", node: <span>{queued || "nothing"}</span> },
+        ...(b.tws === "connected" ? [
+          { label: "IBKR servers", node: <span title="As IB Gateway / TWS reports IBKR's server farms (messages 2103–2158)">{farmsSummary({ marketData: b.farms.marketData.state, historical: b.farms.historical.state, secDef: b.farms.secDef.state })}</span> },
+          { label: "US options", node: <span>{optionsSubscriptionText(b.optionsSubscription)}</span> },
+        ] : []),
         ...(b.populate ? [{ label: "Last session", node: <Progress value={b.populate.total ? b.populate.done / b.populate.total : 0} label={populateText(b) ?? ""} title={`The last session (${b.populate.sessionDate}) had no data yet: the bridge collects its closing values from IBKR (frozen data) — underlying stats for every symbol, then chains`} /> }] : []),
         { label: "Backfill", node: b.backfill.total
           ? <Progress value={done / b.backfill.total} label={`${done.toLocaleString()} / ${b.backfill.total.toLocaleString()}${b.backfill.failed ? ` (${b.backfill.failed.toLocaleString()} failed)` : ""}`} title="IV/HV history and option-bar catch-up: symbols up to date / all symbols the app keeps history for" />

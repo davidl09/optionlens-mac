@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HistoricalPacer } from "./pacer";
-import { RetryLater, Scheduler, type Task } from "./scheduler";
+import { Parked, RetryLater, Scheduler, type Task } from "./scheduler";
 import type { JobKind } from "../shared/api";
 
 const task = (kind: JobKind, key: string, run: Task["run"] = async () => undefined, extra: Partial<Task> = {}): Task => ({ kind, key, label: key, run, ...extra });
@@ -191,5 +191,24 @@ describe("Scheduler", () => {
     await vi.runAllTimersAsync();
     expect(await bad).toEqual({ ok: false, cancelled: false, error: "boom" });
     expect(await good).toEqual({ ok: true });
+  });
+
+  it("a parked task uses no attempt, is not run again before its gate opens, and other work goes on meanwhile", async () => {
+    const s = new Scheduler();
+    let open = false;
+    const gate = { readyAt: () => (open ? 0 : Infinity) };
+    let runs = 0;
+    const parked = s.enqueue(task("chain-universe", "cu", async () => { runs += 1; if (!open) throw new Parked(gate, "waiting"); }, { maxAttempts: 1 }));
+    let other = false;
+    void s.enqueue(task("underlying-stats", "st", async () => { other = true; }));
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runs).toBe(1);
+    expect(other).toBe(true);
+    expect(s.parked()).toBe(1);
+    open = true;
+    s.recheck();
+    expect(await parked).toEqual({ ok: true });                  // maxAttempts 1: parking did not use it up
+    expect(runs).toBe(2);
+    expect(s.parked()).toBe(0);
   });
 });

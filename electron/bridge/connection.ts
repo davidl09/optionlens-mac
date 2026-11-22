@@ -5,6 +5,7 @@
 import type { BridgeSettings, TwsState } from "../shared/api";
 import type { Logger } from "../main/log";
 import { portLabel, portsToTry } from "../main/settings";
+import { FarmMonitor, type FarmsStatus } from "./farms";
 import { CODE, TwsRequestError, type TwsConnector, type TwsSession, type TwsSystemMessage } from "./tws";
 
 export const COMPETING_MESSAGE = "IBKR session in use elsewhere — market data paused";
@@ -24,6 +25,8 @@ export interface ConnectionState {
   accountType: "live" | "paper" | null;
   paused: string | null;
   lastError: string | null;
+  /** IBKR's server farms as the Gateway reported them in this session. */
+  farms: FarmsStatus;
 }
 
 export interface SupervisorOptions {
@@ -34,6 +37,7 @@ export interface SupervisorOptions {
   onChange: () => void;
   host?: string;
   connectTimeoutMs?: number;
+  now?: () => number;
 }
 
 /** Paper accounts are the "D…" (DU…/DF…) ones. */
@@ -54,11 +58,14 @@ export class TwsSupervisor {
   private pauseTimer: ReturnType<typeof setTimeout> | null = null;
   private failedRounds = 0;
   private generation = 0;
-  private s: ConnectionState = { tws: "disabled", port: null, endpoint: null, accountType: null, paused: null, lastError: null };
+  private s: Omit<ConnectionState, "farms"> = { tws: "disabled", port: null, endpoint: null, accountType: null, paused: null, lastError: null };
+  private readonly farms: FarmMonitor;
 
-  constructor(private readonly o: SupervisorOptions) {}
+  constructor(private readonly o: SupervisorOptions) {
+    this.farms = new FarmMonitor(o.now);
+  }
 
-  state(): ConnectionState { return { ...this.s }; }
+  state(): ConnectionState { return { ...this.s, farms: this.farms.snapshot() }; }
 
   start(): void {
     if (this.running) return;
@@ -74,6 +81,7 @@ export class TwsSupervisor {
     this.clearPause();
     const s = this.session;
     this.session = null;
+    this.farms.reset();
     if (s) { this.o.onSession(null); s.close(); }
     this.update({ tws: "disabled", port: null, endpoint: null, accountType: null, paused: null });
   }
@@ -99,7 +107,7 @@ export class TwsSupervisor {
     if (this.pauseTimer) { clearTimeout(this.pauseTimer); this.pauseTimer = null; }
   }
 
-  private update(p: Partial<ConnectionState>): void {
+  private update(p: Partial<Omit<ConnectionState, "farms">>): void {
     this.s = { ...this.s, ...p };
     this.o.onChange();
   }
@@ -139,6 +147,7 @@ export class TwsSupervisor {
     const gen = this.generation;
     this.session = session;
     this.failedRounds = 0;
+    this.farms.reset();
     const endpoint = portLabel(port);
     this.o.log.info(`bridge: connected to ${endpoint} on port ${port} (client id ${clientId}, accounts ${session.accounts.join(",") || "?"})`);
     session.onSystemMessage((m) => this.onSystemMessage(m));
@@ -147,6 +156,7 @@ export class TwsSupervisor {
       this.o.log.info(`bridge: disconnected (${reason})`);
       this.session = null;
       this.clearPause();
+      this.farms.reset();
       this.o.onSession(null);
       this.update({ tws: "disconnected", port: null, endpoint: null, accountType: null, paused: null, lastError: `disconnected: ${reason}` });
       this.timer = setTimeout(() => { this.timer = null; if (this.running) void this.connectRound(); }, reconnectDelayMs(1));
@@ -156,6 +166,12 @@ export class TwsSupervisor {
   }
 
   private onSystemMessage(m: TwsSystemMessage): void {
+    const farm = this.farms.apply(m);
+    if (farm) {
+      const f = this.farms.status(farm);
+      this.o.log.info(`bridge: IBKR ${farm} farm ${f.state}${f.server ? ` (${f.server})` : ""}: ${m.code} ${m.message}`);
+      this.o.onChange();
+    }
     switch (m.code) {
       case CODE.COMPETING_SESSION:
         this.pause(COMPETING_MESSAGE, COMPETING_PAUSE_MS);

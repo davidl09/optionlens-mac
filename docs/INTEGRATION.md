@@ -57,7 +57,12 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
 - `ReportResult`, `Chain`, `Quote`, `ExpiryInfo` and per-row data may carry `source` where known:
   `"vendor" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed"`.
 - `Status` gains `sources: { name: string; ok: boolean | null; last_success_at: string | null; detail: string | null }[]`
-  and `bridge: { connected: boolean; last_push_at: string | null; client: string | null }`.
+  and `bridge: { connected: boolean; last_push_at: string | null; client: string | null; farms: {...} | null;
+  options_subscription: string | null }` (`farms` and `options_subscription` as the last heartbeat sent them, §6;
+  `farms` null while the bridge is not connected).
+- `Chain.contracts_from_cache` / `Chain.contracts_listed_at`: the bridge built the stored chain from a contract list it
+  saved earlier (IBKR's contract server was unavailable, §7), listed at that time; quotes are current, expiries listed
+  since then are missing. The UI notes "contract list from <date> (IBKR contract server unavailable)".
 - Errors are `{"detail": "<message>"}`; where the UI acts on an error the body adds a machine-readable `code`.
   Every endpoint that needs a stored chain (chain, activity, open-interest, contract, skew, implied-moves,
   straddle, ideas, `POST /api/calc/strategy`) answers a known symbol without one with
@@ -83,6 +88,8 @@ POST /api/ingest/chain
 { "source": "ibkr", "symbol": "AAPL", "fetched_at": "...",
   "final": false,                       // true = closing snapshot for session `session_date`
   "session_date": "2026-11-20",         // required when final
+  "contracts_from_cache": false,        // optional (default false): the contract list is a saved one (§7)
+  "contracts_listed_at": null,          // required when contracts_from_cache: when that list was listed
   "underlying": { "price": 349.1, "bid": 349.0, "ask": 349.2, "open": ..., "high": ..., "low": ...,
                   "prev_close": ..., "volume": 123, "ts": "...",
                   "rth_close": 348.7 },             // final chains: regular-session close of session_date
@@ -148,7 +155,10 @@ POST /api/ingest/quotes
   "bid": .., "ask": .., "open": .., "high": .., "low": .., "prev_close": .., "volume": .. } ] }   // optional
 → 200 {"stored": n}   // field-wise upsert: fields sent replace the stored quote's, others are kept
 POST /api/ingest/heartbeat
-{ "client": "optionlens-mac 0.1.0", "ibkr_connected": true, "account_type": "live"|"paper"|null }
+{ "client": "optionlens-mac 0.1.0", "ibkr_connected": true, "account_type": "live"|"paper"|null,
+  "farms": { "market_data": "ok", "historical": "ok", "sec_def": "down" } | null,   // optional; per farm
+                       // "ok" | "inactive" | "connecting" | "down" | "unknown", as the Gateway reports them (§7)
+  "options_subscription": "unknown" | "realtime" | "delayed_only" }               // optional (§7 "No OPRA")
 → 200 {"server_time": "..."}
 ```
 
@@ -282,12 +292,44 @@ market data type 4 (delayed-frozen), so TWS answers with the last values of the 
 the bridge POSTed `/api/ingest/no-options`) / `unavailable` (bridge off, not connected or paused; asked again
 when the bridge connects while the page is open) / `failed`. After `refreshed` or `no-options` the page reloads.
 
-Chain fetch details (bridge): the first 8 expiries listed by `reqSecDefOptParams` (SMART), strikes within ±25%
-of spot. The option parameters are cached per underlying for the New York day; when TWS does not answer within
-60 s the request is sent once more with a 120 s wait, then the refresh fails with "IB Gateway did not send
-<symbol>'s option expiries … try again in a minute" (never `no-options`). Every listed contract of every picked
-expiry is posted, those TWS sent nothing for with null fields (shown as "no quote"); an expiry whose contract list
-TWS did not deliver is skipped, not fatal. The bridge status names the gaps of the last chain ("Incomplete IBKR
-chain for DELL: 62% of contracts quoted; no quotes for 2026-11-27; no contracts from IBKR for …"). Frozen /
-weekend quotes: an ask ≤ 0 is no quote, a 0 bid counts only against a real ask (−1 is always no quote).
+Chain fetch details (bridge): the first 8 expiries listed by `reqSecDefOptParams` (underlying symbol, futFopExchange
+"", secType STK/IND, the underlying's conId; SMART rows), strikes within ±25% of spot. The option parameters are kept
+per underlying for the New York day; an answer without rows (the end message alone) means IBKR lists no options
+(`no-options`, at once). When TWS does not answer within 60 s the request is sent once more with a 120 s wait. Every
+listed contract of every picked expiry is posted, those TWS sent nothing for with null fields (shown as "no quote"); an
+expiry whose contract list TWS did not deliver is skipped, not fatal. The bridge status names the gaps of the last chain
+("Incomplete IBKR chain for DELL: 62% of contracts quoted; no quotes for 2026-11-27; no contracts from IBKR for …").
+Frozen / weekend quotes: an ask ≤ 0 is no quote, a 0 bid counts only against a real ask (−1 is always no quote).
 `contracts[].last_ts` is the time of the last trade (ticks 45 / 88) when TWS sends it.
+
+**IBKR server farms.** IB Gateway reports its connections to IBKR's server farms as connection-level messages
+(reqId −1; @stoqey/ib emits them as `info` events): 2104/2103 market data OK/broken, 2108 market data inactive,
+2119 connecting, 2106/2105 HMDS (historical) OK/broken, 2107 HMDS inactive, 2158/2157 sec-def OK/broken (the farm
+is taken from the message text where it names one). The bridge keeps each farm's state (worst of its servers) in its
+status (`farms`, Settings / Status: "IBKR servers") and the heartbeat. The sec-def farm answers contract details and
+option parameters; on weekends IBKR often takes it down for maintenance while market data and HMDS keep working.
+
+**Saved contract lists.** After each resolution the bridge saves, per underlying (in the app's data dir,
+`contract-cache/<SYMBOL>.json`): the underlying's conId, the option parameters (expiries, trading classes, multipliers,
+strikes) and, per expiry, the resolved option contracts (conId, expiry, strike, right, trading class) with when they
+were fetched. While the sec-def farm is reported broken or connecting, or for 15 min after a contract request went
+unanswered (then the next request is the one probe), the bridge asks IBKR for no contract definitions: a chain is built
+from the saved list when it is at most 7 days old (expired expiries dropped; expiries listed since then are missing)
+and its quotes are requested by conId on SMART (the market-data farm serves them). Such a push carries
+`contracts_from_cache: true`. Without a usable saved list, chain work (universe, closing chains, option-bar catch-up)
+is parked — not failed, not retried — until the Gateway reports the sec-def farm OK (2158) or the 15 min probe time;
+an on-demand refresh answers `unavailable` with `waitingFor: "contract-server"` ("IBKR's contract server is
+unavailable; will fetch automatically when it's back") and the page asks again once the bridge reports
+`contractsAvailable`. Settings / Status: "IBKR sec-def server: unavailable since 18:42 (often weekend maintenance) —
+chains use saved contract lists".
+
+**No OPRA (US options delayed only).** Without an OPRA subscription TWS sends delayed option quotes during the regular
+session but refuses delayed-frozen option data outside it (354 on a weekend). After a 354 / 10089 / 10090 / 10168 on
+option quotes the bridge records `options_subscription: "delayed_only"` (persisted, `bridge-options-feed.json`). Then,
+outside 09:30–16:00 ET (and on a day even delayed option data was refused, e.g. a holiday), no option market data is
+requested: closing and universe chains are not queued, and an on-demand refresh answers `unavailable` with
+`waitingFor: "market-hours"` ("Option quotes update during market hours (no real-time options subscription); showing
+the last stored chain"; a neutral chip, not a failure). During the session option quotes are requested as delayed data
+(market data type 3); the day's first option request is a probe with type 4, and real-time option quotes end the mode
+(`realtime`). Stock-side work (underlying stats, quotes, IV/HV history, index bars) is unaffected. Settings / Status:
+"US options: delayed only (no OPRA subscription)".

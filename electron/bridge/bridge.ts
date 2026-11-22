@@ -4,16 +4,18 @@
 import type { BridgeSettings, BridgeStatus, JobKind, RefreshResult } from "../shared/api";
 import type { Logger } from "../main/log";
 import { batchLines } from "../main/settings";
-import { FULL_CHAIN, type ChainShape } from "./chain";
+import { FULL_CHAIN, underlyingContract, type ChainShape } from "./chain";
 import { COMPETING_MESSAGE, COMPETING_PAUSE_MS, TwsSupervisor } from "./connection";
+import { ContractCache, type ContractStore } from "./contract-cache";
+import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import type { IngestApi } from "./ingest";
-import { FINAL_MIN_COVERAGE, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
-import { OptionParamsCache } from "./option-params";
+import { OptionsFeed, type OptionsFeedStore } from "./options-feed";
 import { HistoricalPacer } from "./pacer";
-import { RetryLater, Scheduler, type Outcome, type Task } from "./scheduler";
+import { Parked, RetryLater, Scheduler, URGENT, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
 import { HIST_RETRY_MS, ledgerKey, parseWants, planWants, type Wants } from "./wants";
 
@@ -30,6 +32,10 @@ export interface BridgeDeps {
   heartbeatMs?: number;
   wantsMs?: number;
   batchTimeoutMs?: number;
+  /** Where saved contract definitions live (one entry per symbol; none: kept nowhere). */
+  contractStore?: ContractStore | null;
+  /** Where the account's options-feed state lives (none: re-learned each launch). */
+  optionsFeedStore?: OptionsFeedStore | null;
 }
 
 const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
@@ -52,6 +58,15 @@ function chainGaps(symbol: string, r: ChainPushed): ChainGaps | null {
   return { symbol, coverage: r.coverage, noQuotes, noContracts };
 }
 
+/** Local wall-clock time "18:42" (the status is read on this computer). */
+function hhmm(t: number | string | null): string {
+  if (t === null) return "?";
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+const unusable = (s: FarmState) => s === "down" || s === "connecting";
+
 function chainGapsText(g: ChainGaps): string {
   const parts = [`${Math.round(g.coverage * 100)}% of contracts quoted`];
   if (g.noQuotes.length) parts.push(`no quotes for ${g.noQuotes.join(", ")}`);
@@ -64,8 +79,12 @@ export class Bridge {
   private readonly supervisor: TwsSupervisor;
   private readonly pacer: HistoricalPacer;
   private readonly lines: LineBudget;
-  private readonly optionParams = new OptionParamsCache();
+  private readonly contracts: ContractCache;
+  private readonly contractServer: ContractServer;
+  private readonly optionsFeed: OptionsFeed;
   private readonly now: () => number;
+  /** The sec-def farm state last seen (its return to OK resumes parked chains). */
+  private secDefState: FarmState = "unknown";
   private session: TwsSession | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private readonly lastChainPush = new Map<string, number>();
@@ -100,8 +119,11 @@ export class Bridge {
     this.pacer = d.pacer ?? new HistoricalPacer({ now: this.now });
     this.lines = new LineBudget(() => batchLines(d.settings()));
     this.scheduler = new Scheduler({ now: this.now, onChange: () => this.emit() });
+    this.contracts = new ContractCache(d.contractStore ?? null);
+    this.contractServer = new ContractServer(() => this.supervisor.state().farms.secDef.state, this.now);
+    this.optionsFeed = new OptionsFeed(d.optionsFeedStore ?? null);
     this.supervisor = new TwsSupervisor({
-      connector: d.connector, settings: d.settings, log: d.log,
+      connector: d.connector, settings: d.settings, log: d.log, now: this.now,
       onSession: (s) => this.onSession(s),
       onChange: () => this.onConnectionChange(),
     });
@@ -148,6 +170,7 @@ export class Bridge {
       lastError: c.lastError ?? this.lastError, notes: this.notes(), lastPushAt: this.lastPushAt,
       current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: this.backfill(),
       populate: this.populate ? { ...this.populate } : null,
+      farms: c.farms, contractsAvailable: this.contractServer.available(), optionsSubscription: this.optionsFeed.mode,
     };
   }
 
@@ -167,8 +190,9 @@ export class Bridge {
   }
 
   private notes(): string[] {
-    const out: string[] = [];
-    if (this.feed.optionsDelayed) out.push("IBKR delayed (no OPRA subscription)");
+    const out: string[] = [...this.serverNotes()];
+    if (this.optionsFeed.mode === "delayed_only") out.push("US options: delayed only (no OPRA subscription) — option quotes are collected during market hours (09:30–16:00 ET)");
+    else if (this.feed.optionsDelayed) out.push("IBKR delayed (no OPRA subscription)");
     if (this.feed.stocksDelayed) out.push("IBKR delayed stock quotes (no real-time US stock subscription)");
     if (this.feed.optionTicksMissing) out.push("IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown");
     const reduced = this.lines.reduced;
@@ -176,6 +200,26 @@ export class Bridge {
     const denied = [...this.denied.values()].map((d) => d.label);
     if (denied.length) out.push(`No IBKR market-data permission (skipped): ${denied.slice(0, 3).join(", ")}${denied.length > 3 ? ` and ${denied.length - 3} more` : ""}`);
     if (this.chainGaps) out.push(chainGapsText(this.chainGaps));
+    return out;
+  }
+
+  /** IBKR servers the Gateway reports unavailable (or that do not answer), and what the bridge does meanwhile. */
+  private serverNotes(): string[] {
+    const f = this.supervisor.state().farms;
+    const out: string[] = [];
+    const parked = this.scheduler.parked();
+    const waiting = parked ? `; ${parked} chain task${parked === 1 ? "" : "s"} without one wait${parked === 1 ? "s" : ""} until it is back` : "";
+    const unanswered = this.contractServer.unansweredSince();
+    if (unusable(f.secDef.state)) {
+      out.push(`IBKR sec-def server: unavailable since ${hhmm(f.secDef.since)} (often weekend maintenance) — chains use saved contract lists${waiting}`);
+    } else if (unanswered !== null) {
+      const head = f.secDef.state === "unknown"
+        ? `IBKR sec-def server: not answering since ${hhmm(unanswered)} (IB Gateway reported no status; often weekend maintenance)`
+        : `IBKR sec-def server: reported connected but not answering contract requests since ${hhmm(unanswered)}`;
+      out.push(`${head} — chains use saved contract lists${waiting}; asking again at ${hhmm(unanswered + SECDEF_PROBE_MS)}`);
+    }
+    if (f.marketData.state === "down") out.push(`IBKR market-data server: unavailable since ${hhmm(f.marketData.since)}`);
+    if (f.historical.state === "down") out.push(`IBKR historical-data server (HMDS): unavailable since ${hhmm(f.historical.since)}`);
     return out;
   }
 
@@ -187,9 +231,16 @@ export class Bridge {
     if (c.paused) return { status: "unavailable", message: c.paused };
     const last = this.lastChainPush.get(sym);
     if (last !== undefined && this.now() - last < (this.wants?.onDemandMaxAgeS ?? 120) * 1000) return { status: "fresh" };
+    const marketHours = { status: "unavailable", message: OPTION_QUOTES_CLOSED, waitingFor: "market-hours" } as const;
+    const contractServer = { status: "unavailable", message: CONTRACTS_UNAVAILABLE, waitingFor: "contract-server" } as const;
+    if (!this.optionsFeed.canQuote(new Date(this.now()))) return marketHours;
+    if (!this.contractServer.available() && !this.contracts.saved(underlyingContract(sym).symbol, new Date(this.now()))) return contractServer;
     const outcome = await this.scheduler.enqueue(this.chainTask("on-demand", onDemandKey(sym), sym, FULL_CHAIN, null));
     if (outcome.ok) return this.noOptions.has(sym) ? { status: "no-options" } : { status: "refreshed" };
-    return outcome.cancelled ? { status: "unavailable", message: "Refresh cancelled." } : { status: "failed", message: outcome.error };
+    if (outcome.cancelled) return { status: "unavailable", message: "Refresh cancelled." };
+    if (outcome.error === OPTION_QUOTES_CLOSED) return marketHours;
+    if (outcome.error === CONTRACTS_UNAVAILABLE) return contractServer;
+    return { status: "failed", message: outcome.error };
   }
 
   // ---------------- connection ----------------
@@ -198,6 +249,7 @@ export class Bridge {
     this.session = s;
     this.lines.reset();
     if (!s) { this.resetFill(); this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
+    this.contractServer.answered();   // a new Gateway session: contract requests are tried afresh
     this.onConnectionChange();
     void this.heartbeat();
     void this.pollWants();
@@ -205,6 +257,17 @@ export class Bridge {
 
   private onConnectionChange(): void {
     const c = this.supervisor.state();
+    const secDef = c.farms.secDef.state;
+    if (secDef !== this.secDefState) {
+      const was = this.secDefState;
+      this.secDefState = secDef;
+      if (secDef === "ok") {
+        // 2158: contract definitions can be asked for again; parked chains resume.
+        this.contractServer.answered();
+        if (unusable(was)) this.d.log.info("bridge: IBKR sec-def server is back; resuming chains waiting for contract definitions");
+        this.scheduler.recheck();
+      } else if (unusable(secDef)) this.d.log.warn(`bridge: IBKR sec-def server ${secDef}; chains use saved contract lists`);
+    }
     const runnable = this.session !== null && c.paused === null;
     if (runnable && this.scheduler.isPaused) { this.scheduler.resume(); void this.pollWants(); }
     else if (!runnable && !this.scheduler.isPaused) this.scheduler.pause();
@@ -218,7 +281,12 @@ export class Bridge {
   private async heartbeat(): Promise<void> {
     const c = this.supervisor.state();
     try {
-      await this.d.ingest.heartbeat({ client: this.d.clientName, ibkr_connected: c.tws === "connected", account_type: c.accountType });
+      const f = c.farms;
+      await this.d.ingest.heartbeat({
+        client: this.d.clientName, ibkr_connected: c.tws === "connected", account_type: c.accountType,
+        farms: c.tws === "connected" ? { market_data: f.marketData.state, historical: f.historical.state, sec_def: f.secDef.state } : null,
+        options_subscription: this.optionsFeed.mode,
+      });
     } catch { /* engine not up yet: next beat */ }
   }
 
@@ -247,16 +315,19 @@ export class Bridge {
       lastStatsPush: (s) => this.lastStatsPush.get(s),
       attemptedWithin: (k, ms) => this.d.ledger.attemptedWithin(k, ms),
     });
-    if (plan.eod) {
+    // Option quotes the account cannot get now (no OPRA subscription, outside market hours) are not asked for.
+    const optionQuotes = this.optionsFeed.canQuote(new Date(now));
+    if (plan.eod && optionQuotes) {
       const day = plan.eod.sessionDate;
       for (const s of plan.eod.symbols) this.enqueue(this.chainTask("eod-chains", `eod:${day}:${s}`, s, FULL_CHAIN, day));
     }
     const queueStats = plan.stats.length > 0 && this.idle("underlying-stats");
     // An after-hours fill collects the stats first (fast, and they rank the chain universe by liquidity): its chains
     // are asked for again once no stats work is left.
-    this.chainFillDeferred = plan.universe.asOfSession !== null && plan.universe.symbols.length > 0 && (queueStats || !this.idle("underlying-stats"));
+    const universe = optionQuotes ? plan.universe.symbols : [];
+    this.chainFillDeferred = plan.universe.asOfSession !== null && universe.length > 0 && (queueStats || !this.idle("underlying-stats"));
     if (!this.chainFillDeferred) {
-      for (const s of plan.universe.symbols) this.fillTask(plan.universe.asOfSession, this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null), 1);
+      for (const s of universe) this.fillTask(plan.universe.asOfSession, this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null), 1);
     }
     if (queueStats) {
       const fill = plan.statsAsOfSession;
@@ -355,10 +426,17 @@ export class Bridge {
   private context(signal: AbortSignal, checkpoint: () => Promise<void>): JobContext {
     const session = this.session;
     if (!session) throw new Error("not connected to IB Gateway / TWS");
-    return { session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs, optionParams: this.optionParams };
+    return {
+      session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs,
+      contracts: this.contracts, contractServer: this.contractServer, optionsFeed: this.optionsFeed,
+    };
   }
 
-  /** Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. */
+  /**
+   * Wraps a job: context, ledger marking (not on retry/cancel), competing-session detection, logging. Work that needs
+   * IBKR's contract server while it is unavailable (and no saved contract list) is parked until it is back; option
+   * quotes the account cannot get now are skipped. An on-demand refresh reports both instead (refreshSymbol).
+   */
   private task(kind: JobKind, key: string, label: string, work: (ctx: JobContext) => Promise<void>,
     o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group } = {}): Task {
     return {
@@ -371,7 +449,10 @@ export class Bridge {
           if (o.ledgerKey) this.d.ledger.mark(o.ledgerKey);
         } catch (e) {
           if (signal.aborted || e instanceof RetryLater) throw e;
+          if (e instanceof ContractsUnavailable && kind !== URGENT) throw new Parked(this.contractServer, e.message);
+          if (e instanceof ContractsUnavailable || (e instanceof OptionQuotesClosed && kind === URGENT)) throw e;
           if (o.ledgerKey) this.d.ledger.mark(o.ledgerKey);
+          if (e instanceof OptionQuotesClosed) return;
           if (isCompetingSession(e)) this.supervisor.pause(COMPETING_MESSAGE, COMPETING_PAUSE_MS);
           if (o.group && isPermissionError(e)) this.deny(o.group.id, o.group.label, e);
           this.lastError = `${label}: ${(e as Error).message}`;
@@ -433,7 +514,7 @@ export class Bridge {
         });
       } catch (e) {
         this.obarsInFlight.delete(planKey);
-        if (!ctx.signal.aborted && !(e instanceof RetryLater)) this.planDone(planKey);
+        if (!ctx.signal.aborted && !(e instanceof RetryLater) && !(e instanceof ContractsUnavailable)) this.planDone(planKey);
         throw e;
       }
     }, { group: group.optionBars(symbol) });

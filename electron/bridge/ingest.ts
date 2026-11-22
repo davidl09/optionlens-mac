@@ -21,6 +21,9 @@ export interface IngestChain {
   source: "ibkr"; symbol: string; fetched_at: string; final: boolean; session_date?: string;
   /** True when any quote in the push came from IBKR delayed data (no real-time subscription). */
   delayed: boolean;
+  /** The contract list is a saved one (IBKR's contract server was unavailable), fetched at contracts_listed_at. */
+  contracts_from_cache: boolean;
+  contracts_listed_at: string | null;
   underlying: IngestUnderlying; contracts: IngestContract[];
 }
 export interface VolBars { source: "ibkr"; symbol: string; kind: "iv30" | "hv30"; bars: { date: string; value: number }[] }
@@ -42,7 +45,14 @@ export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] 
 export interface NoOptions { source: "ibkr"; symbol: string }
 /** The bridge accepted (queued) these wants; the engine counts only accepted option_bars offers. */
 export interface AckWants { kind: "option_bars"; items: { symbol: string; sessions: string[] }[] }
-export interface Heartbeat { client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null }
+export type FarmStateName = "ok" | "inactive" | "connecting" | "down" | "unknown";
+export interface Heartbeat {
+  client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null;
+  /** IBKR server farms as the Gateway reports them (null while not connected). */
+  farms: { market_data: FarmStateName; historical: FarmStateName; sec_def: FarmStateName } | null;
+  /** What the account's US options market data allows ("delayed_only": no OPRA; option quotes in market hours only). */
+  options_subscription: "unknown" | "realtime" | "delayed_only";
+}
 
 export interface IngestApi {
   wants(): Promise<unknown>;

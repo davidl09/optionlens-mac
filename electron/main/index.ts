@@ -142,10 +142,14 @@ async function main(): Promise<void> {
   const http = createEngineHttp(() => engine.status().connection);
 
   // ---- bridge ----
+  const contractFile = (symbol: string) => jsonFile(join(userData, "contract-cache", `${symbol.toUpperCase().replace(/[^A-Z0-9.-]/g, "_")}.json`));
   const bridge: Bridge = new Bridge({
     connector: ibConnector,
     ingest: ingestApi(http),
     ledger: new Ledger(jsonFile(join(userData, "bridge-ledger.json"))),
+    // Saved IBKR contract definitions (option chains while IBKR's contract server is down), one file per symbol.
+    contractStore: { read: (symbol) => contractFile(symbol).read(), write: (symbol, v) => contractFile(symbol).write(v) },
+    optionsFeedStore: jsonFile(join(userData, "bridge-options-feed.json")),
     settings: () => settings.bridge,
     clientName: `optionlens-mac ${app.getVersion()}`,
     log,

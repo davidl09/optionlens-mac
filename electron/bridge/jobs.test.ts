@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { emptyMarket, FakeSession, contractId, type FakeMarket } from "./fake-tws.test-helper";
+import { emptyMarket, FakeSession, contractId, memoryContractStore, type FakeMarket } from "./fake-tws.test-helper";
 import type { IngestApi } from "./ingest";
-import { OptionParamsCache } from "./option-params";
-import { collectQuotes, OPTION_PARAMS_RETRY_MS, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { ContractCache } from "./contract-cache";
+import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
+import { OptionsFeed } from "./options-feed";
+import { collectQuotes, ContractsUnavailable, OPTION_PARAMS_RETRY_MS, OptionQuotesClosed, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
 import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -178,13 +180,13 @@ describe("pushChain", () => {
     expect(ctx.ingest.calls.noOptions).toHaveLength(2);
   });
 
-  it("an unanswered option-parameter request is asked once more with a longer wait, then fails clearly (never 'no options')", async () => {
+  it("an unanswered option-parameter request is asked once more with a longer wait; without a saved list the chain waits for the contract server (never 'no options')", async () => {
     const s = new FakeSession(aaplMarket());
     const waits: (number | undefined)[] = [];
     s.optionParams = async (_u, _signal, timeoutMs) => { waits.push(timeoutMs); throw new TwsTimeoutError("AAPL option parameters", timeoutMs ?? 60_000); };
     const ctx = ctxFor(s);
     await expect(pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))
-      .rejects.toThrow(/IB Gateway did not send AAPL's option expiries \(asked twice, waited 120 s\); it may be busy/);
+      .rejects.toThrow(ContractsUnavailable);
     expect(waits).toEqual([undefined, OPTION_PARAMS_RETRY_MS]);
     expect(ctx.ingest.calls.noOptions).toBeUndefined();
   });
@@ -197,23 +199,24 @@ describe("pushChain", () => {
     expect((await pushChain(ctxFor(s), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))?.contracts).toBe(10);
   });
 
-  it("caches option parameters per underlying for the New York day (an empty answer is not cached)", async () => {
+  it("re-uses option parameters per underlying for the New York day, also after a restart (an empty answer forgets the symbol)", async () => {
     const m = aaplMarket();
     const s = new FakeSession(m);
-    let asked = 0;
-    s.optionParams = async () => { asked += 1; return m.optionParams; };
-    const cache = new OptionParamsCache();
+    const store = memoryContractStore();
     let now = new Date("2026-11-21T15:00:00Z");                 // Saturday
-    const ctx = ctxFor(s, { optionParams: cache, now: () => now });
+    const ctx = ctxFor(s, { contracts: new ContractCache(store), now: () => now });
     const req = { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null };
     await pushChain(ctx, req);
-    await pushChain(ctx, req);
-    expect(asked).toBe(1);
+    await pushChain({ ...ctx, contracts: new ContractCache(store) }, req);     // a new launch reads the saved answer
+    expect(s.optionParamsCalls).toHaveLength(1);
     now = new Date("2026-11-22T05:30:00Z");                     // 00:30 New York: a new day
     await pushChain(ctx, req);
-    expect(asked).toBe(2);
-    cache.set(265598, now, []);
-    expect(cache.get(265598, now)).toBeNull();
+    expect(s.optionParamsCalls).toHaveLength(2);
+    m.optionParams = [];
+    now = new Date("2026-11-23T15:00:00Z");
+    expect(await pushChain(ctx, req)).toBeNull();               // IBKR lists no options now
+    expect(store.read("AAPL")).toBeNull();
+    expect(s.optionParamsCalls).toHaveLength(3);
   });
 
   it("fails clearly when TWS sends no underlying price", async () => {
@@ -341,6 +344,162 @@ describe("historical", () => {
     expect(await pushVolHistory(okCtx, "AAPL", "2016-01-01", "iv30")).toBe(1);   // the 2015 bar is before `from`
     expect(okCtx.ingest.calls.volHistory[0]).toEqual({ source: "ibkr", symbol: "AAPL", kind: "iv30", bars: [{ date: "2026-11-19", value: 0.243 }] });
     expect((okCtx.session as FakeSession).historicalCalls[0].req).toEqual({ duration: "10 Y", whatToShow: "OPTION_IMPLIED_VOLATILITY", useRth: true });
+  });
+});
+
+describe("IBKR contract (sec-def) server unavailable", () => {
+  const req = { symbol: "AAPL", shape: { expiries: 2, moneyness: 0.25 }, final: false, sessionDate: null };
+  type Body = { contracts_from_cache: boolean; contracts_listed_at: string | null; contracts: { expiry: string }[] };
+
+  function setup() {
+    const m = aaplMarket();
+    const s = new FakeSession(m);
+    const store = memoryContractStore();
+    const clock = { farm: "ok" as FarmState, now: new Date("2026-11-23T15:00:00Z") };   // Monday
+    const server = new ContractServer(() => clock.farm, () => clock.now.getTime());
+    const ctx = ctxFor(s, { contracts: new ContractCache(store), contractServer: server, now: () => clock.now });
+    const definitionRequests = () => s.optionParamsCalls.length + s.detailsCalls.length;
+    return { m, s, store, server, ctx, clock, definitionRequests };
+  }
+
+  it("normal path: asks IBKR, posts a chain listed now and saves its contract list", async () => {
+    const { s, store, ctx } = setup();
+    await pushChain(ctx, req);
+    const body = ctx.ingest.calls.chain[0] as Body;
+    expect(body).toMatchObject({ contracts_from_cache: false, contracts_listed_at: null });
+    expect(s.optionParamsCalls).toEqual([{ symbol: "AAPL", secType: "STK", conId: 265598 }]);
+    expect(s.detailsCalls.map((c) => c.secType)).toEqual(["STK", "OPT", "OPT"]);
+    const saved = store.read("AAPL") as { conId: number; expiries: Record<string, { contracts: unknown[]; fetchedAt: string }> };
+    expect(saved.conId).toBe(265598);
+    expect(Object.keys(saved.expiries)).toEqual(["20261127", "20261204"]);
+    expect(saved.expiries["20261127"].contracts).toHaveLength(42);   // every listed contract, not only the strike band
+  });
+
+  it("farm reported down: builds the chain from the saved list (expired expiries dropped) and asks IBKR only for quotes", async () => {
+    const { s, ctx, clock, definitionRequests } = setup();
+    await pushChain(ctx, req);
+    clock.farm = "down";
+    clock.now = new Date("2026-11-28T15:00:00Z");              // Saturday: 2026-11-27 has expired
+    const asked = definitionRequests();
+    const streamed = s.streams.length;
+    const r = await pushChain(ctx, req);
+    expect(definitionRequests()).toBe(asked);
+    const body = ctx.ingest.calls.chain[1] as Body;
+    expect(body).toMatchObject({ contracts_from_cache: true, contracts_listed_at: "2026-11-23T15:00:00.000Z" });
+    expect(new Set(body.contracts.map((c) => c.expiry))).toEqual(new Set(["2026-12-04"]));
+    expect(r?.listedAt).toBe("2026-11-23T15:00:00.000Z");
+    // Quotes by conId (+ SMART): the market-data farm serves them without contract definitions.
+    expect(s.streams.slice(streamed).every((x) => x.contract.conId !== undefined)).toBe(true);
+  });
+
+  it("farm down and nothing saved: ContractsUnavailable at once, nothing asked of IBKR", async () => {
+    const { s, ctx, clock, definitionRequests } = setup();
+    clock.farm = "down";
+    await expect(pushChain(ctx, req)).rejects.toBeInstanceOf(ContractsUnavailable);
+    expect(definitionRequests()).toBe(0);
+    expect(s.streams).toHaveLength(0);
+  });
+
+  it("unanswered requests without a farm status: uses the saved list, then asks again only after 15 min (one probe)", async () => {
+    const { s, m, ctx, clock, server } = setup();
+    clock.farm = "unknown";
+    await pushChain(ctx, req);
+    clock.now = new Date("2026-11-24T15:00:00Z");              // a new day: the parameters are asked for again
+    let answer = false;
+    s.optionParams = async (u, _signal, timeoutMs) => {
+      s.optionParamsCalls.push(u);
+      if (answer) return m.optionParams;
+      throw new TwsTimeoutError("AAPL option parameters", timeoutMs ?? 60_000);
+    };
+    await pushChain(ctx, req);
+    expect(s.optionParamsCalls).toHaveLength(3);               // the day before, then two unanswered tries
+    expect((ctx.ingest.calls.chain[1] as Body).contracts_from_cache).toBe(true);
+    expect(server.available()).toBe(false);
+    await pushChain(ctx, req);                                 // within 15 min: the saved list, nothing asked
+    expect(s.optionParamsCalls).toHaveLength(3);
+    clock.now = new Date(clock.now.getTime() + SECDEF_PROBE_MS);
+    answer = true;
+    await pushChain(ctx, req);                                 // the probe is answered: listed now again
+    expect(s.optionParamsCalls).toHaveLength(4);
+    expect((ctx.ingest.calls.chain[3] as Body).contracts_from_cache).toBe(false);
+    expect(server.available()).toBe(true);
+  });
+
+  it("zero option parameters (end without rows) is 'no options' at once: one request, no timeout, contract server still fine", async () => {
+    const { s, m, ctx, server } = setup();
+    m.optionParams = [];
+    expect(await pushChain(ctx, req)).toBeNull();
+    expect(s.optionParamsCalls).toHaveLength(1);
+    expect(ctx.ingest.calls.noOptions).toEqual([{ source: "ibkr", symbol: "AAPL" }]);
+    expect(server.available()).toBe(true);
+  });
+});
+
+describe("no OPRA subscription (US options delayed only)", () => {
+  const req = { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null };
+  const SATURDAY = new Date("2026-11-21T17:00:00Z");
+  const MONDAY_10AM = new Date("2026-11-23T15:00:00Z");      // 10:00 ET
+  const isOption = (id: string) => id.split(":").length === 4;
+  function memoryStore() {
+    let v: unknown = null;
+    return { read: () => v, write: (x: unknown) => { v = JSON.parse(JSON.stringify(x)); } };
+  }
+  /** Delayed ticks only (no real-time options), like an account without OPRA during the session. */
+  function delayedMarket(): FakeMarket {
+    const m = aaplMarket();
+    m.ticks = (id) => isOption(id)
+      ? [{ kind: "price", field: TICK.DELAYED_BID, value: 1 }, { kind: "price", field: TICK.DELAYED_ASK, value: 1.2 }]
+      : [{ kind: "price", field: TICK.LAST, value: 100 }, { kind: "price", field: TICK.CLOSE, value: 98 }];
+    return m;
+  }
+
+  it("a 354 on option quotes outside market hours switches to delayed-only (persisted); option quotes are then not requested", async () => {
+    const m = aaplMarket();
+    m.streamErrors = (id) => (isOption(id) ? new TwsRequestError(354, "Requested market data is not subscribed.") : undefined);
+    const s = new FakeSession(m);
+    const store = memoryStore();
+    const feed = new OptionsFeed(store);
+    const ctx = ctxFor(s, { optionsFeed: feed, now: () => SATURDAY });
+    await expect(pushChain(ctx, req)).rejects.toBeInstanceOf(OptionQuotesClosed);
+    expect(feed.mode).toBe("delayed_only");
+    expect(new OptionsFeed(store).mode).toBe("delayed_only");
+    const streamed = s.streams.length;
+    await expect(pushChain(ctx, req)).rejects.toBeInstanceOf(OptionQuotesClosed);
+    expect(s.streams).toHaveLength(streamed);                  // nothing requested at all
+    expect(ctx.ingest.calls.chain).toBeUndefined();
+    // Stock-side work is unaffected.
+    expect((await pushUnderlyingStats(ctx, ["AAPL"], "2026-11-20")).symbols).toEqual(["AAPL"]);
+  });
+
+  it("in market hours the day's first option request is the probe (session default), later ones ask for delayed data (type 3)", async () => {
+    const store = memoryStore();
+    store.write({ mode: "delayed_only", since: "2026-11-21T17:00:00.000Z", probedDay: null, refusedDay: null });
+    const s = new FakeSession(delayedMarket());
+    const ctx = ctxFor(s, { optionsFeed: new OptionsFeed(store), now: () => MONDAY_10AM });
+    const optionTypes = (from: number) => [...new Set(s.streams.slice(from).filter((x) => x.contract.secType === "OPT").map((x) => x.marketDataType))];
+    await pushChain(ctx, req);
+    expect(optionTypes(0)).toEqual([undefined]);
+    const n = s.streams.length;
+    await pushChain(ctx, req);
+    expect(optionTypes(n)).toEqual([3]);
+    expect(s.streams.filter((x) => x.contract.secType === "STK").every((x) => x.marketDataType === undefined)).toBe(true);
+    expect(ctx.ingest.calls.chain).toHaveLength(2);
+  });
+
+  it("a refused probe in market hours is retried at once as delayed data; real-time option quotes end the mode", async () => {
+    const store = memoryStore();
+    store.write({ mode: "delayed_only", since: null, probedDay: null, refusedDay: null });
+    const m = delayedMarket();
+    m.streamErrors = (id, type) => (isOption(id) && type !== 3 ? new TwsRequestError(354, "Requested market data is not subscribed.") : undefined);
+    const feed = new OptionsFeed(store);
+    let now = MONDAY_10AM;
+    const ctx = ctxFor(new FakeSession(m), { optionsFeed: feed, now: () => now });
+    expect((await pushChain(ctx, req))?.coverage).toBe(1);
+    expect(feed.mode).toBe("delayed_only");
+    now = new Date("2026-11-24T15:00:00Z");                     // next day's probe gets real-time quotes (OPRA added)
+    const ctx2 = ctxFor(new FakeSession(aaplMarket()), { optionsFeed: feed, now: () => now });
+    await pushChain(ctx2, req);
+    expect(feed.mode).toBe("realtime");
   });
 });
 

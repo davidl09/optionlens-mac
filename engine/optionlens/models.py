@@ -65,6 +65,8 @@ class ChainSnapshot:
     contracts: tuple[OptionContract, ...]
     fetched_at: datetime
     delayed: bool | None = None  # see Quote.delayed
+    # When the contract list was listed, if it was a saved one (IBKR's contract server unavailable); None = listed now.
+    contracts_listed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

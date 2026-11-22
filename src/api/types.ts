@@ -43,8 +43,16 @@ export interface Status {
   jobs: JobRun[];                     // latest run of each job + last 50 runs
   db_size_bytes: number;
   sources: { name: string; ok: boolean | null; last_success_at: ISODateTime | null; detail: string | null }[];
-  bridge: { connected: boolean; last_push_at: ISODateTime | null; client: string | null };
+  bridge: {
+    connected: boolean; last_push_at: ISODateTime | null; client: string | null;
+    /** IBKR server farms as the bridge's last heartbeat reported them (null: not reported / not connected). */
+    farms?: { market_data: FarmState; historical: FarmState; sec_def: FarmState } | null;
+    /** US options market data of the account ("delayed_only": no OPRA subscription). */
+    options_subscription?: "unknown" | "realtime" | "delayed_only" | null;
+  };
 }
+
+export type FarmState = "ok" | "inactive" | "connecting" | "down" | "unknown";
 
 // ---------------- market overview ----------------
 export interface IndexCard { symbol: string; name: string; price: number | null; change_pct: number | null; iv30: number | null; spark: number[] }
@@ -131,6 +139,10 @@ export interface Chain {
   source?: DataSource; delayed?: boolean;
   /** Fetched after its session's close (IBKR frozen data: the session's closing quotes). */
   after_hours?: boolean;
+  /** The contract list was a saved one (IBKR's contract server was unavailable), fetched at contracts_listed_at:
+   * expiries listed since then are missing. Quotes are current. */
+  contracts_from_cache?: boolean;
+  contracts_listed_at?: ISODateTime | null;
 }
 
 // ---------------- activity / OI ----------------

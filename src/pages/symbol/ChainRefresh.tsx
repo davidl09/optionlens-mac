@@ -38,7 +38,8 @@ function useIbkrRefresh(sym: string): SymbolRefresh {
   }, [sym, attempt]);
 
   const bridge = useBridgeStatus();
-  const runnable = bridge !== null && bridge.tws === "connected" && bridge.paused === null;
+  // Connected, not paused, and IBKR's contract server reachable (a refresh that waited for it is asked again).
+  const runnable = bridge !== null && bridge.tws === "connected" && bridge.paused === null && bridge.contractsAvailable;
   const wasRunnable = useRef(runnable);
   useEffect(() => {
     const became = runnable && !wasRunnable.current;
@@ -66,7 +67,10 @@ export function RefreshChip() {
     case "refreshed": return <span className="refresh-chip pos" title="Chain fetched from IBKR just now">IBKR ✓</span>;
     case "fresh": return <span className="refresh-chip pos" title="Chain from IBKR is recent">IBKR ✓</span>;
     case "no-options": return <span className="refresh-chip" title="IBKR lists no options for this symbol">IBKR: no options</span>;
-    case "unavailable": return <span className="refresh-chip" title={state.message}>IBKR off</span>;
+    case "unavailable":
+      if (state.waitingFor === "market-hours") return <span className="refresh-chip" title={state.message}>IBKR: market hours only</span>;
+      if (state.waitingFor === "contract-server") return <span className="refresh-chip" title={state.message}>IBKR: waiting for contract server</span>;
+      return <span className="refresh-chip" title={state.message}>IBKR off</span>;
     case "failed": return <RefreshFailed message={state.message} />;
   }
 }
@@ -114,6 +118,12 @@ export function NoChainNotice({ noOptions = false, onReload }: { noOptions?: boo
   }
   if (state?.status === "no-options") return <div className="info-box chain-notice">IBKR lists no options for {sym}.</div>;
   if (noOptions) return <div className="info-box chain-notice">No listed options for {sym}.</div>;
+  if (state?.status === "unavailable" && state.waitingFor === "market-hours") {
+    return <div className="info-box chain-notice">No option chain stored for {sym} yet. Option quotes update during market hours (no real-time options subscription).</div>;
+  }
+  if (state?.status === "unavailable" && state.waitingFor === "contract-server") {
+    return <div className="info-box chain-notice">No option chain stored for {sym} yet. IBKR’s contract server is unavailable; the chain is fetched automatically when it’s back.</div>;
+  }
   if (state?.status === "unavailable") {
     return <div className="info-box chain-notice" title={state.message}>No option chain stored for {sym} yet. Connect IB Gateway to fetch it.</div>;
   }

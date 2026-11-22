@@ -111,7 +111,11 @@ export function expiryCoverage(expiries: string[], quotes: { contract: TwsContra
   return [...by.values()];
 }
 
-export interface ChainMeta { symbol: string; fetchedAt: string; final: boolean; sessionDate: string | null; underlyingDelayed: boolean }
+export interface ChainMeta {
+  symbol: string; fetchedAt: string; final: boolean; sessionDate: string | null; underlyingDelayed: boolean;
+  /** When the saved contract list the chain was built from was fetched (IBKR's contract server unavailable); null: listed now. */
+  listedAt?: string | null;
+}
 
 export function assembleChain(meta: ChainMeta, underlying: IngestUnderlying, quotes: { contract: TwsContract; quote: QuoteSnapshot }[]): IngestChain {
   if (meta.final && !meta.sessionDate) throw new Error("a final chain needs its session date");
@@ -120,6 +124,7 @@ export function assembleChain(meta: ChainMeta, underlying: IngestUnderlying, quo
     source: "ibkr", symbol: meta.symbol, fetched_at: meta.fetchedAt, final: meta.final,
     ...(meta.final && meta.sessionDate ? { session_date: meta.sessionDate } : {}),
     delayed: meta.underlyingDelayed || quotes.some((x) => x.quote.delayed),
+    contracts_from_cache: (meta.listedAt ?? null) !== null, contracts_listed_at: meta.listedAt ?? null,
     underlying, contracts,
   };
 }

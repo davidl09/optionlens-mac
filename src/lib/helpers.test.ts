@@ -5,7 +5,7 @@ import type { ColumnDef, SymbolRef } from "../api/types";
 import { fundamentalText, shortSector } from "./format";
 import { sellSplit } from "./insiders";
 import { rankSymbols } from "./search";
-import { bridgePillLabel, jobState, nextCollectionWindow, populateText, readableDetail } from "./status";
+import { bridgePillLabel, farmsSummary, jobState, nextCollectionWindow, optionsSubscriptionText, populateText, readableDetail } from "./status";
 import { templateUsesWidth } from "./strategy";
 import { emptyColumnKeys, humanize } from "./table";
 
@@ -79,7 +79,8 @@ describe("bridgePillLabel", () => {
   const base: BridgeStatus = {
     enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
     notes: [], lastPushAt: null, current: null, queued: {} as BridgeStatus["queued"], backfill: { total: 0, done: 0, failed: 0 },
-    populate: null,
+    populate: null, contractsAvailable: true, optionsSubscription: "unknown",
+    farms: { marketData: { state: "ok", since: null, server: "usfarm" }, historical: { state: "ok", since: null, server: "ushmds" }, secDef: { state: "ok", since: null, server: "secdefil" } },
   };
   it("reads in plain words", () => {
     expect(bridgePillLabel(base)).toBe("IBKR connected");
@@ -87,6 +88,14 @@ describe("bridgePillLabel", () => {
     expect(bridgePillLabel({ ...base, tws: "disconnected" as BridgeStatus["tws"] })).toBe("IBKR not connected");
     expect(bridgePillLabel({ ...base, enabled: false })).toBe("IBKR off");
     expect(bridgePillLabel({ ...base, paused: "competing session" })).toBe("IBKR connected · paused");
+  });
+});
+
+describe("IBKR server and options-feed wording", () => {
+  it("names each farm's state and the options subscription", () => {
+    expect(farmsSummary({ marketData: "ok", historical: "inactive", secDef: "down" })).toBe("market data OK · historical idle (available) · sec-def (contracts) unavailable");
+    expect(optionsSubscriptionText("delayed_only")).toBe("delayed only (no OPRA subscription)");
+    expect(optionsSubscriptionText(undefined)).toBe("not known yet");
   });
 });
 

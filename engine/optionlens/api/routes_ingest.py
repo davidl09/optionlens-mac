@@ -63,6 +63,9 @@ class ChainIn(_In):
     fetched_at: AwareDatetime
     final: bool = False
     session_date: date | None = None
+    # The contract list is a saved one (IBKR's contract server was unavailable), listed at contracts_listed_at.
+    contracts_from_cache: bool = False
+    contracts_listed_at: AwareDatetime | None = None
     underlying: UnderlyingIn
     contracts: list[ContractIn] = Field(max_length=ingest.MAX_CONTRACTS)
 
@@ -127,10 +130,21 @@ class QuotesIn(_In):
     quotes: list[QuoteIn] = Field(max_length=ingest.MAX_QUOTES)
 
 
+FarmState = Literal["ok", "inactive", "connecting", "down", "unknown"]
+
+
+class FarmsIn(_In):
+    market_data: FarmState = "unknown"
+    historical: FarmState = "unknown"
+    sec_def: FarmState = "unknown"
+
+
 class HeartbeatIn(_In):
     client: Annotated[str, Field(min_length=1, max_length=200)]
     ibkr_connected: bool
     account_type: Literal["live", "paper"] | None = None
+    farms: FarmsIn | None = None                      # IBKR server farms as the Gateway reports them
+    options_subscription: Literal["unknown", "realtime", "delayed_only"] | None = None
 
 
 class StatIn(_In):

@@ -3,8 +3,11 @@ import { silentLogger } from "../main/log";
 import { DEFAULT_BRIDGE } from "../main/settings";
 import type { BridgeStatus } from "../shared/api";
 import { Bridge } from "./bridge";
-import { emptyMarket, FakeConnector, FakeSession } from "./fake-tws.test-helper";
-import type { IngestApi, UnderlyingStats } from "./ingest";
+import { emptyMarket, FakeConnector, FakeSession, memoryContractStore } from "./fake-tws.test-helper";
+import type { ContractStore } from "./contract-cache";
+import type { Heartbeat, IngestApi, IngestChain, UnderlyingStats } from "./ingest";
+import { CONTRACTS_UNAVAILABLE, OPTION_QUOTES_CLOSED } from "./jobs";
+import type { OptionsFeedStore } from "./options-feed";
 import { Ledger } from "./ledger";
 import { HistoricalPacer } from "./pacer";
 import { TICK } from "./ticks";
@@ -23,20 +26,23 @@ function market() {
   return m;
 }
 
-function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer; batchTimeoutMs?: number } = {}) {
+function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer; batchTimeoutMs?: number; contractStore?: ContractStore; optionsFeedStore?: OptionsFeedStore } = {}) {
   const calls: string[] = [];
   const statsBodies: UnderlyingStats[] = [];
+  const chains: IngestChain[] = [];
+  const heartbeats: Heartbeat[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
-  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: rec("chain"), noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
-    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async () => { calls.push("heartbeat"); return {}; } };
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
+    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
   const bridge = new Bridge({
     connector: new FakeConnector(new Map([[4001, session]])), ingest, ledger: new Ledger(null, () => NOW), settings: () => DEFAULT_BRIDGE,
     clientName: "optionlens-mac test", log: silentLogger, onStatus: (s) => statuses.push(s), now: () => Date.now(),
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
+    contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
   });
-  return { bridge, calls, session, statuses, statsBodies };
+  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats };
 }
 
 const WANTS = {
@@ -271,5 +277,125 @@ describe("Bridge", () => {
     expect(h.session.streams.length).toBe(1);   // TSLA was not attempted while paused
     expect(await h.bridge.refreshSymbol("AAPL")).toEqual({ status: "unavailable", message: st.paused });
     h.bridge.stop();
+  });
+
+  describe("IBKR sec-def (contract) server outages", () => {
+    const SECDEF_DOWN = { code: 2157, message: "Sec-def data farm connection is broken:secdefil" };
+    const SECDEF_OK = { code: 2158, message: "Sec-def data farm connection is OK:secdefil" };
+    const UNIVERSE = { chain_universe: { symbols: ["MSFT"], max_age_s: 3600, expiries: 1, moneyness: 0.2 }, chains_on_demand_max_age_s: 120 };
+
+    it("parks chains that need contract definitions while the farm is down (no failures, no retries) and resumes them on 2158", async () => {
+      let wants: unknown = { chains_on_demand_max_age_s: 120 };
+      const h = harness(() => wants);
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+      h.session.emitSystem(SECDEF_DOWN);
+      wants = UNIVERSE;
+      await h.bridge.pollWants();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      const st = h.bridge.status();
+      expect(h.calls).not.toContain("chain:MSFT");
+      expect(h.session.optionParamsCalls.length + h.session.detailsCalls.length).toBe(0);
+      expect(st.queued["chain-universe"]).toBe(1);
+      expect(st.lastError).toBeNull();
+      expect(st.contractsAvailable).toBe(false);
+      expect(st.farms.secDef).toMatchObject({ state: "down", server: "secdefil" });
+      const note = st.notes.find((n) => n.startsWith("IBKR sec-def server: unavailable since"));
+      expect(note).toMatch(/^IBKR sec-def server: unavailable since \d\d:\d\d \(often weekend maintenance\) — chains use saved contract lists; 1 chain task without one waits until it is back$/);
+      // An on-demand refresh without a saved list says why and does not queue anything.
+      expect(await h.bridge.refreshSymbol("AAPL")).toEqual({ status: "unavailable", message: CONTRACTS_UNAVAILABLE, waitingFor: "contract-server" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.heartbeats.at(-1)).toMatchObject({ farms: { sec_def: "down", market_data: "unknown", historical: "unknown" } });
+      h.session.emitSystem(SECDEF_OK);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.calls).toContain("chain:MSFT");
+      expect(h.bridge.status()).toMatchObject({ contractsAvailable: true, queued: { "chain-universe": 0 } });
+      expect(h.bridge.status().notes.some((n) => n.includes("sec-def"))).toBe(false);
+      h.bridge.stop();
+    });
+
+    it("an on-demand refresh while the farm is down is built from the saved contract list and marked as such", async () => {
+      const h = harness({ chains_on_demand_max_age_s: 120 }, market(), { contractStore: memoryContractStore() });
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const first = h.bridge.refreshSymbol("AAPL");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await first).toEqual({ status: "refreshed" });
+      h.session.emitSystem(SECDEF_DOWN);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      const asked = h.session.optionParamsCalls.length + h.session.detailsCalls.length;
+      const again = h.bridge.refreshSymbol("AAPL");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await again).toEqual({ status: "refreshed" });
+      expect(h.session.optionParamsCalls.length + h.session.detailsCalls.length).toBe(asked);
+      expect(h.chains.map((c) => c.contracts_from_cache)).toEqual([false, true]);
+      const listedAt = Date.parse(h.chains[1].contracts_listed_at ?? "");
+      expect(listedAt).toBeGreaterThanOrEqual(NOW);
+      expect(listedAt).toBeLessThanOrEqual(Date.parse(h.chains[0].fetched_at));   // saved by the first refresh
+      expect(h.chains[1].contracts).toHaveLength(h.chains[0].contracts.length);
+      h.bridge.stop();
+    });
+
+    it("the day's option parameters are asked for once, also when an on-demand refresh and a universe chain want the same symbol", async () => {
+      const h = harness({ chain_universe: { symbols: ["AAPL"], max_age_s: 3600, expiries: 1, moneyness: 0.2 }, chains_on_demand_max_age_s: 0 });
+      h.session.msgRate = 50;                                     // the universe chain is still running when the refresh arrives
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(h.bridge.status().current?.label).toBe("AAPL chain");
+      const p = h.bridge.refreshSymbol("AAPL");                   // runs at the universe chain's next checkpoint
+      await vi.advanceTimersByTimeAsync(10_000);
+      await p;
+      expect(h.calls.filter((c) => c === "chain:AAPL")).toHaveLength(2);
+      expect(h.session.optionParamsCalls).toHaveLength(1);
+      h.bridge.stop();
+    });
+  });
+
+  describe("no OPRA subscription (US options delayed only)", () => {
+    const SAT = Date.parse("2026-11-21T17:00:00Z");
+    const memoryStore = (v: unknown = null): OptionsFeedStore & { v: unknown } => ({ v, read() { return this.v; }, write(x) { this.v = JSON.parse(JSON.stringify(x)); } });
+    const optionStreams = (s: FakeSession) => s.streams.filter((x) => x.contract.secType === "OPT").length;
+
+    it("a weekend 354 on option quotes: the refresh says option quotes update in market hours (not 'failed'), and the mode is kept", async () => {
+      vi.setSystemTime(SAT);
+      const m = market();
+      m.streamErrors = (id) => (id.split(":").length === 4 ? new TwsRequestError(354, "Requested market data is not subscribed.") : undefined);
+      const store = memoryStore();
+      const h = harness({ chains_on_demand_max_age_s: 120 }, m, { optionsFeedStore: store });
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const p = h.bridge.refreshSymbol("DELL");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await p).toEqual({ status: "unavailable", message: OPTION_QUOTES_CLOSED, waitingFor: "market-hours" });
+      const st = h.bridge.status();
+      expect(st.lastError).toBeNull();
+      expect(st.optionsSubscription).toBe("delayed_only");
+      expect(st.notes).toContain("US options: delayed only (no OPRA subscription) — option quotes are collected during market hours (09:30–16:00 ET)");
+      expect(store.v).toMatchObject({ mode: "delayed_only" });
+      const n = optionStreams(h.session);
+      expect(await h.bridge.refreshSymbol("DELL")).toMatchObject({ status: "unavailable", waitingFor: "market-hours" });
+      expect(optionStreams(h.session)).toBe(n);                 // asked nothing of TWS
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.heartbeats.at(-1)).toMatchObject({ options_subscription: "delayed_only" });
+      h.bridge.stop();
+    });
+
+    it("on a weekend option chains are not requested at all, while stock-side work continues", async () => {
+      vi.setSystemTime(SAT);
+      const store = memoryStore({ mode: "delayed_only", since: "2026-11-20T21:00:00.000Z", probedDay: null, refusedDay: null });
+      const h = harness({
+        underlying_stats: { symbols: ["AAPL", "KO"], max_age_s: 21600, as_of_session: "2026-11-20" },
+        chain_universe: { symbols: ["MSFT"], max_age_s: 21600, expiries: 1, moneyness: 0.2, as_of_session: "2026-11-20" },
+        index_bars: [{ symbol: "SPX", from: "2026-11-19" }], iv_history: [{ symbol: "AAPL", from: "2026-01-02" }],
+        chains_on_demand_max_age_s: 120,
+      }, market(), { optionsFeedStore: store });
+      h.bridge.start();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.calls).toEqual(expect.arrayContaining(["stats", "quotes", "bars:SPX", "vol:AAPL"]));
+      expect(h.calls.some((c) => c.startsWith("chain:"))).toBe(false);
+      expect(optionStreams(h.session)).toBe(0);
+      expect(h.bridge.status().populate).toBeNull();
+      h.bridge.stop();
+    });
   });
 });

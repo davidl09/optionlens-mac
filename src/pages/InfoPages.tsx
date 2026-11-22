@@ -10,7 +10,7 @@ import { CHAIN_COLLECTION_TEXT, nextCollection } from "../components/Collection"
 import { AsOf, Async, Card, Progress } from "../components/ui";
 import { useBridgeStatus } from "../state/desktop";
 import { fmt } from "../lib/format";
-import { jobState, readableDetail } from "../lib/status";
+import { farmsSummary, jobState, optionsSubscriptionText, readableDetail } from "../lib/status";
 
 const JOB_COLUMNS: ColumnDef[] = [
   { key: "job", label: "Job", fmt: "text" },
@@ -40,6 +40,8 @@ function BridgeCard({ s }: { s: Status }) {
         { label: "Engine sees bridge", node: <span className={`badge ${s.bridge.connected ? "pos" : "neutral"}`}>{s.bridge.connected ? "connected" : "not connected"}</span> },
         { label: "Last push", value: s.bridge.last_push_at, fmt: "datetime", hint: "The bridge has not pushed data yet." },
         { label: "Client", value: s.bridge.client, fmt: "text", hint: "No bridge has connected to this engine yet." },
+        ...(s.bridge.connected && s.bridge.farms ? [{ label: "IBKR servers", node: <span>{farmsSummary({ marketData: s.bridge.farms.market_data, historical: s.bridge.farms.historical, secDef: s.bridge.farms.sec_def })}</span> }] : []),
+        ...(s.bridge.connected ? [{ label: "US options", node: <span>{optionsSubscriptionText(s.bridge.options_subscription)}</span> }] : []),
       ]} />
       {local && <p className="small bridge-summary">This Mac: {bridgeSummary(local)}</p>}
     </Card>

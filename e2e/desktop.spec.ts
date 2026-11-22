@@ -10,8 +10,16 @@ const BASE = "http://127.0.0.1:59999";
 const TOKEN = "per-launch-token-abcdefghijklmnop";
 
 /** `refresh`: what refreshSymbol answers; "manual" = it stays pending until __finishRefresh(result). */
-async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string; update?: Record<string, unknown>; populate?: unknown } = {}) {
-  await page.addInitScript(({ base, token, state, refresh, tws, update, populate }) => {
+/** An idle, connected bridge (what the main process sends once a round of work is done). */
+const BRIDGE_IDLE = {
+  enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null, notes: [] as string[], lastPushAt: null,
+  current: null, queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 0, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 0 },
+  backfill: { total: 0, done: 0, failed: 0 }, populate: null,
+  farms: { marketData: { state: "ok", since: null, server: "usfarm" }, historical: { state: "ok", since: null, server: "ushmds" }, secDef: { state: "ok", since: null, server: "secdefil" } }, contractsAvailable: true, optionsSubscription: "unknown",
+};
+
+async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starting"; refresh?: unknown; tws?: string; update?: Record<string, unknown>; populate?: unknown; bridge?: Record<string, unknown> } = {}) {
+  await page.addInitScript(({ base, token, state, refresh, tws, update, populate, bridgeOverrides }) => {
     const listeners: Record<string, ((v: unknown) => void)[]> = {};
     const on = (ch: string) => (cb: (v: unknown) => void) => { (listeners[ch] ??= []).push(cb); return () => undefined; };
     const engine = {
@@ -23,6 +31,8 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       notes: ["IBKR delayed (no OPRA subscription)"], lastPushAt: "2026-11-19T15:41:00-05:00", current: { kind: "iv-history", label: "AAPL IV history" },
       queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 3, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 12 },
       backfill: { total: 40, done: 12, failed: 1 }, populate,
+      farms: { marketData: { state: "ok", since: null, server: "usfarm" }, historical: { state: "ok", since: null, server: "ushmds" }, secDef: { state: "ok", since: null, server: "secdefil" } }, contractsAvailable: true, optionsSubscription: "unknown",
+      ...bridgeOverrides,
     };
     const w = window as unknown as Record<string, unknown>;
     w.__refreshCalls = [] as string[];
@@ -58,7 +68,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"), onUpdateStatus: on("update"),
     };
   }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running", refresh: opts.refresh ?? { status: "refreshed" }, tws: opts.tws ?? "connected",
-    update: { ...UP_TO_DATE, ...opts.update }, populate: opts.populate ?? null });
+    update: { ...UP_TO_DATE, ...opts.update }, populate: opts.populate ?? null, bridgeOverrides: opts.bridge ?? {} });
 }
 
 const UP_TO_DATE = {
@@ -159,11 +169,7 @@ test("no stored chain and IB Gateway not connected: says how to get it, and fetc
   await mockEngine(page);
   await page.goto("/s/DELL/open-interest");
   await expect(page.locator(".chain-notice")).toHaveText("No option chain stored for DELL yet. Connect IB Gateway to fetch it.");
-  await page.evaluate(() => (window as unknown as { __emit: (c: string, v: unknown) => void }).__emit("bridge", {
-    enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null, notes: [], lastPushAt: null,
-    current: null, queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 0, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 0 },
-    backfill: { total: 0, done: 0, failed: 0 }, populate: null,
-  }));
+  await emit(page, "bridge", BRIDGE_IDLE);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: string[] }).__refreshCalls)).toEqual(["DELL", "DELL"]);
 });
 
@@ -174,6 +180,51 @@ test("IBKR lists no options: options tabs and the header say so", async ({ page 
   await expect(page.locator(".chain-notice")).toHaveText("IBKR lists no options for XNOP.");
   await expect(page.locator(".qh-name .badge.warn")).toHaveText("no options");
   await expect(page.locator(".refresh-chip")).toHaveText("IBKR: no options");
+});
+
+test("IBKR's contract server down and nothing saved: says so (not an error), and fetches once it is back", async ({ page }) => {
+  const message = "IBKR's contract server is unavailable; will fetch automatically when it's back";
+  await fakeDesktop(page, { refresh: { status: "unavailable", message, waitingFor: "contract-server" }, bridge: { contractsAvailable: false } });
+  await mockEngine(page);
+  await page.goto("/s/DELL/open-interest");
+  await expect(page.locator(".chain-notice")).toHaveText("No option chain stored for DELL yet. IBKR’s contract server is unavailable; the chain is fetched automatically when it’s back.");
+  await expect(page.locator(".refresh-chip")).toHaveText("IBKR: waiting for contract server");
+  await emit(page, "bridge", BRIDGE_IDLE);                                  // 2158: the sec-def server is back
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __refreshCalls: string[] }).__refreshCalls)).toEqual(["DELL", "DELL"]);
+});
+
+test("no OPRA subscription outside market hours: the stored chain is shown with a neutral note, no 'refresh failed'", async ({ page }) => {
+  await fakeDesktop(page, { refresh: { status: "unavailable", message: "Option quotes update during market hours (no real-time options subscription); showing the last stored chain", waitingFor: "market-hours" } });
+  await mockEngine(page);
+  await page.goto("/s/AAPL/chain");
+  await expect(page.locator(".refresh-chip")).toHaveText("IBKR: market hours only");
+  await expect(page.locator(".refresh-chip")).not.toHaveClass(/warn/);
+  await expect(page.getByText("IBKR refresh failed")).toHaveCount(0);
+});
+
+test("a chain built from the saved contract list says so", async ({ page }) => {
+  await fakeDesktop(page);
+  await mockEngine(page);
+  await page.route("**/api/symbol/AAPL/chain*", async (route) => {
+    const c = handle("GET", new URL(route.request().url()), null)!.body as Record<string, unknown>;
+    await route.fulfill({ json: { ...c, contracts_from_cache: true, contracts_listed_at: "2026-11-20T15:00:00Z" }, headers: { "Access-Control-Allow-Origin": "*" } });
+  });
+  await page.goto("/s/AAPL/chain");
+  await expect(page.getByText("contract list from 2026-11-20 (IBKR contract server unavailable)")).toBeVisible();
+});
+
+test("settings shows IBKR's server farms and the options subscription", async ({ page }) => {
+  await fakeDesktop(page, { bridge: {
+    optionsSubscription: "delayed_only", contractsAvailable: false,
+    farms: { marketData: { state: "ok", since: null, server: "usfarm" }, historical: { state: "ok", since: null, server: "ushmds" }, secDef: { state: "down", since: "2026-11-21T23:42:00Z", server: "secdefil" } },
+    notes: ["IBKR sec-def server: unavailable since 18:42 (often weekend maintenance) — chains use saved contract lists", "US options: delayed only (no OPRA subscription) — option quotes are collected during market hours (09:30–16:00 ET)"],
+  } });
+  await mockEngine(page);
+  await page.goto("/settings");
+  await expect(page.getByText("market data OK · historical OK · sec-def (contracts) unavailable")).toBeVisible();
+  await expect(page.getByText("delayed only (no OPRA subscription)", { exact: true })).toBeVisible();
+  await expect(page.locator(".warn-box", { hasText: "IBKR sec-def server: unavailable since 18:42" })).toBeVisible();
+  await expect(page.locator(".info-box", { hasText: "US options: delayed only" })).toBeVisible();
 });
 
 test("settings page shows engine, bridge status and saves bridge settings", async ({ page }) => {
@@ -209,9 +260,7 @@ test("populating the last session after hours: progress in Settings and Status, 
   await expect(page.locator(".panel-notice")).toContainText("No option volume collected yet. Populating last session's data: 340/1,145.");
   await page.goto("/reports/oi-changes");                                  // an empty report
   await expect(page.locator(".dt-empty")).toContainText("Populating last session's data: 340/1,145.");
-  await emit(page, "bridge", { enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
-    notes: [], lastPushAt: null, current: null, queued: { "on-demand": 0, "eod-chains": 0, "chain-universe": 0, "underlying-stats": 0, index: 0, "option-bars": 0, "iv-history": 0 },
-    backfill: { total: 0, done: 0, failed: 0 }, populate: null });            // done: the note goes away
+  await emit(page, "bridge", BRIDGE_IDLE);            // done: the note goes away
   await expect(page.locator(".dt-empty")).not.toContainText("Populating");
 });
 

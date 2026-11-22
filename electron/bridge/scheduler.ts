@@ -8,7 +8,8 @@
 //   - a pre-emptible task (historical requests) running when on-demand work arrives is aborted and re-queued;
 //   - FIFO within a kind.
 // Tasks are de-duplicated by key, cancellable by kind / key / group, and may ask to be retried later
-// (RetryLater) up to their attempt limit.
+// (RetryLater) up to their attempt limit, or be parked behind a gate (Parked: no attempt used, not run again
+// before that gate opens; recheck() when a gate opens without a known time).
 import { JOB_KINDS, type JobKind } from "../shared/api";
 import type { Gate } from "./pacer";
 
@@ -41,6 +42,14 @@ export class RetryLater extends Error {
   constructor(message: string) { super(message); this.name = "RetryLater"; }
 }
 
+/**
+ * Thrown by a task that cannot do its work until `gate` opens (e.g. IBKR's contract server is down): re-queued
+ * without using an attempt, and skipped until the gate's readyAt() has passed (Infinity: until recheck()).
+ */
+export class Parked extends Error {
+  constructor(readonly gate: Gate, message: string) { super(message); this.name = "Parked"; }
+}
+
 /** Tie-break order (lower first), per INTEGRATION.md §6. */
 export const PRIORITY: Record<JobKind, number> = Object.fromEntries(JOB_KINDS.map((k, i) => [k, i])) as Record<JobKind, number>;
 
@@ -60,7 +69,7 @@ function before(a: readonly number[], b: readonly number[]): boolean {
   return false;
 }
 
-interface Entry { task: Task; seq: number; attempts: number; resolve: (o: Outcome) => void; promise: Promise<Outcome> }
+interface Entry { task: Task; seq: number; attempts: number; resolve: (o: Outcome) => void; promise: Promise<Outcome>; parkedOn?: Gate }
 interface Running {
   entry: Entry; ctrl: AbortController;
   /** Time spent running on-demand tasks at its checkpoints. */ lentMs: number;
@@ -134,6 +143,12 @@ export class Scheduler {
     return top ? { kind: top.entry.task.kind, label: top.entry.task.label } : null;
   }
 
+  /** Queued tasks parked behind a gate (they count in counts() too). */
+  parked(): number { return this.queue.filter((e) => e.parkedOn !== undefined).length; }
+
+  /** A gate opened without a known time (readyAt was Infinity): look for runnable tasks again. */
+  recheck(): void { this.pump(); }
+
   counts(): Record<JobKind, number> {
     const out = Object.fromEntries(JOB_KINDS.map((k) => [k, 0])) as Record<JobKind, number>;
     for (const e of this.queue) out[e.task.kind] += 1;
@@ -177,7 +192,7 @@ export class Scheduler {
     let earliest = Infinity;
     for (const e of this.queue) {
       if (urgentOnly && e.task.kind !== URGENT) continue;
-      const at = e.task.gate ? e.task.gate.readyAt() : now;
+      const at = Math.max(e.task.gate ? e.task.gate.readyAt() : now, e.parkedOn ? e.parkedOn.readyAt() : now);
       if (at > now) { earliest = Math.min(earliest, at); continue; }
       const r = this.rank(e);
       if (!best || before(r, bestRank)) { best = e; bestRank = r; }
@@ -211,6 +226,7 @@ export class Scheduler {
   /** Runs one entry on top of the stack; finishes it or re-queues it (RetryLater). */
   private async runEntry(entry: Entry): Promise<void> {
     this.queue = this.queue.filter((e) => e !== entry);
+    entry.parkedOn = undefined;
     const ctrl = new AbortController();
     const running: Running = { entry, ctrl, lentMs: 0, cancelled: false };
     this.stack.push(running);
@@ -226,6 +242,7 @@ export class Scheduler {
       const msg = e instanceof Error ? e.message : String(e);
       if (ctrl.signal.aborted && preempted()) { outcome = null; entry.attempts -= 1; }
       else if (ctrl.signal.aborted) outcome = { ok: false, cancelled: true, error: "cancelled" };
+      else if (e instanceof Parked) { outcome = null; entry.attempts -= 1; entry.parkedOn = e.gate; }
       else if (e instanceof RetryLater && entry.attempts < (entry.task.maxAttempts ?? 5)) outcome = null;
       else outcome = { ok: false, cancelled: false, error: msg };
     }

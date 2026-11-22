@@ -102,6 +102,22 @@ describe("TwsSupervisor", () => {
     sup.stop();
   });
 
+  it("tracks IBKR's server farms from the Gateway's messages, per session", async () => {
+    const s = new FakeSession(emptyMarket());
+    const { sup } = setup(new FakeConnector(new Map([[4001, s]])));
+    sup.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sup.state().farms.secDef.state).toBe("unknown");
+    s.emitSystem({ code: 2104, message: "Market data farm connection is OK:usfarm" });
+    s.emitSystem({ code: 2106, message: "HMDS data farm connection is OK:ushmds" });
+    s.emitSystem({ code: 2157, message: "Sec-def data farm connection is broken:secdefil" });
+    expect(sup.state().farms).toMatchObject({ marketData: { state: "ok" }, historical: { state: "ok" }, secDef: { state: "down", server: "secdefil" } });
+    expect(sup.state().paused).toBeNull();                         // a farm being down does not pause the bridge
+    s.emitClose("connection closed");
+    expect(sup.state().farms.secDef.state).toBe("unknown");
+    sup.stop();
+  });
+
   it("does nothing when the bridge is disabled", () => {
     const c = new FakeConnector(new Map());
     const { sup } = setup(c, { enabled: false });

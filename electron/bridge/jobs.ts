@@ -1,14 +1,16 @@
 // Bridge task bodies: talk to TWS through the TwsSession contract, assemble ingest bodies and push them.
 // Market-data work is done in batches no larger than the line budget; every historical
 // request goes through the pacer (begin → request → success | violation → RetryLater).
-import { assembleChain, assembleUnderlying, expiryCoverage, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract, type ChainShape, type ExpiryCoverage } from "./chain";
+import { assembleChain, assembleUnderlying, expiryCoverage, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract, type ChainShape, type ExpiryCoverage, type ExpiryPick } from "./chain";
 import type { IngestApi, IngestChain, IngestQuote, OptionBar, UnderlyingStat } from "./ingest";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import type { LineBudget } from "./line-budget";
 import { bestPrice, changeFromClose, emptySnapshot, livePrice, TickAccumulator, type QuoteSnapshot } from "./ticks";
-import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, TwsTimeoutError, type HistBar, type HistoricalRequest, type OptionParams, type SecType, type TwsContract, type TwsSession } from "./tws";
-import type { OptionParamsCache } from "./option-params";
+import { CODE, isCompetingSession, isNoDataError, isPacingError, NOT_SUBSCRIBED_CODES, TwsRequestError, TwsTimeoutError, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TwsContract, type TwsSession } from "./tws";
+import type { ContractCache, SavedContracts } from "./contract-cache";
+import type { ContractServer } from "./farms";
+import type { OptionDataType, OptionsFeed } from "./options-feed";
 import { durationFor } from "./wants";
 
 export interface JobContext {
@@ -23,8 +25,12 @@ export interface JobContext {
   checkpoint: () => Promise<void>;
   /** How long one subscription waits for its data, from the moment its request is sent (or its first tick). */
   batchTimeoutMs?: number;
-  /** Option parameters already fetched today (none: always asks TWS). */
-  optionParams?: OptionParamsCache;
+  /** Saved contract definitions (none: always asks TWS, saves nothing). */
+  contracts?: ContractCache;
+  /** Whether IBKR's contract (sec-def) server may be asked now (none: always). */
+  contractServer?: ContractServer;
+  /** What the account's options market data allows (none: option quotes always requested, session default type). */
+  optionsFeed?: OptionsFeed;
 }
 
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
@@ -38,7 +44,11 @@ function throwIfAborted(signal: AbortSignal): void {
 
 // ---------------- market data ----------------
 
-export interface CollectOptions { genericTicks: string; complete: (a: TickAccumulator) => boolean; minDwellMs?: number }
+export interface CollectOptions {
+  genericTicks: string; complete: (a: TickAccumulator) => boolean; minDwellMs?: number;
+  /** IBKR market data type of the requests (session default when omitted). */
+  marketDataType?: MarketDataKind;
+}
 
 interface BatchResult { snaps: QuoteSnapshot[]; lineLimited: boolean[]; notSubscribed: number }
 
@@ -65,7 +75,7 @@ async function streamBatch(ctx: JobContext, batch: TwsContract[], o: CollectOpti
         else if (NOT_SUBSCRIBED_CODES.has(err.code)) notSubscribed += 1;
         if (isCompetingSession(err)) fatal = err;
       },
-    });
+    }, o.marketDataType);
     sentAt[j] = Date.now() + ctx.session.sendBacklogMs();
     return cancel;
   });
@@ -132,34 +142,58 @@ async function retryOnTimeout<T>(fn: () => Promise<T>): Promise<T> {
 /** The second, longer wait for reqSecDefOptParams (the adapter's default is 60 s). */
 export const OPTION_PARAMS_RETRY_MS = 120_000;
 
-/**
- * The underlying's option parameters: today's cached answer, else TWS's, asked once more with a longer wait when
- * TWS does not answer (it answers late while busy, e.g. with historical downloads).
- */
-async function optionParams(ctx: JobContext, u: { symbol: string; secType: SecType; conId: number }): Promise<OptionParams[]> {
-  const cached = ctx.optionParams?.get(u.conId, ctx.now());
-  if (cached) return cached;
-  let params: OptionParams[];
+/** TWS answered no contract-definition (sec-def) request in time: IBKR's contract server is probably unavailable. */
+class DefinitionsUnanswered extends Error {
+  constructor(what: string) { super(`IB Gateway did not answer ${what}`); this.name = "DefinitionsUnanswered"; }
+}
+
+/** What an on-demand refresh reports when it needs contract definitions IBKR cannot send now and none are saved. */
+export const CONTRACTS_UNAVAILABLE = "IBKR's contract server is unavailable; will fetch automatically when it's back";
+
+/** The chain needs fresh contract definitions, IBKR's contract server cannot send them now, and none are saved. */
+export class ContractsUnavailable extends Error {
+  constructor(readonly symbol: string) { super(CONTRACTS_UNAVAILABLE); this.name = "ContractsUnavailable"; }
+}
+
+/** What a refresh reports when option quotes cannot be requested now (no OPRA subscription, outside market hours). */
+export const OPTION_QUOTES_CLOSED = "Option quotes update during market hours (no real-time options subscription); showing the last stored chain";
+
+/** Option market data would be refused now (no real-time options subscription, outside regular hours): skipped. */
+export class OptionQuotesClosed extends Error {
+  constructor(readonly symbol: string) { super(OPTION_QUOTES_CLOSED); this.name = "OptionQuotesClosed"; }
+}
+
+/** The underlying's conId from contract details (a sec-def request). */
+async function underlyingConId(ctx: JobContext, und: TwsContract): Promise<number> {
+  let details: TwsContract[];
   try {
-    params = await ctx.session.optionParams(u, ctx.signal);
+    details = await ctx.session.contractDetails(und, ctx.signal);
+  } catch (e) {
+    if (e instanceof TwsTimeoutError) throw new DefinitionsUnanswered(`${und.symbol}'s contract details`);
+    throw e;
+  }
+  const conId = details[0]?.conId;
+  if (!conId) throw new Error(`${und.symbol}: not found at IBKR`);
+  return conId;
+}
+
+/**
+ * The underlying's option parameters: today's saved answer, else TWS's, asked once more with a longer wait when
+ * TWS does not answer (it answers late while busy). `fresh`: asked TWS just now.
+ */
+async function optionParams(ctx: JobContext, u: { symbol: string; secType: SecType; conId: number }): Promise<{ params: OptionParams[]; fresh: boolean }> {
+  const cached = ctx.contracts?.todaysParams(u.symbol, u.conId, ctx.now());
+  if (cached) return { params: cached, fresh: false };
+  try {
+    return { params: await ctx.session.optionParams(u, ctx.signal), fresh: true };
   } catch (e) {
     if (!(e instanceof TwsTimeoutError)) throw e;
     try {
-      params = await ctx.session.optionParams(u, ctx.signal, OPTION_PARAMS_RETRY_MS);
+      return { params: await ctx.session.optionParams(u, ctx.signal, OPTION_PARAMS_RETRY_MS), fresh: true };
     } catch (e2) {
       if (!(e2 instanceof TwsTimeoutError)) throw e2;
-      throw new OptionParamsTimeout(u.symbol);
+      throw new DefinitionsUnanswered(`${u.symbol}'s option expiries (asked twice, waited ${OPTION_PARAMS_RETRY_MS / 1000} s)`);
     }
-  }
-  ctx.optionParams?.set(u.conId, ctx.now(), params);
-  return params;
-}
-
-/** TWS answered neither option-parameter request: a failure (never "no options"), with what to do about it. */
-export class OptionParamsTimeout extends Error {
-  constructor(symbol: string) {
-    super(`IB Gateway did not send ${symbol}'s option expiries (asked twice, waited ${OPTION_PARAMS_RETRY_MS / 1000} s); it may be busy — try again in a minute`);
-    this.name = "OptionParamsTimeout";
   }
 }
 
@@ -168,6 +202,8 @@ export interface ResolvedChain {
   /** Every picked expiry (YYYYMMDD), in order, including those without contracts (none listed in the band, or
    * TWS did not deliver the contract list: two timeouts, reported per expiry rather than failing the chain). */
   expiries: string[];
+  /** When the saved contract list used was fetched (oldest expiry used), null when IBKR sent every list now. */
+  listedAt: string | null;
 }
 
 /** TWS answered the option-parameter request with no listed (future) expiries: the symbol has no options. */
@@ -175,41 +211,80 @@ export class NoListedOptions extends Error {
   constructor(symbol: string) { super(`${symbol}: IBKR lists no options`); this.name = "NoListedOptions"; }
 }
 
+const oldest = (times: string[]): string | null => (times.length ? [...times].sort()[0] : null);
+
 /**
- * Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. An expiry
- * whose contract details TWS does not deliver (two timeouts) is kept without contracts; only when no expiry
- * delivered does the resolution fail.
+ * The picked expiries' contracts as IBKR lists them now (option parameters, then contract details per expiry), saved
+ * for later. An expiry whose list TWS does not deliver (two timeouts) uses its saved list if there is one, else stays
+ * without contracts; when no expiry was delivered the definitions went unanswered.
  */
-export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape, spotOverride: number | null = null): Promise<ResolvedChain> {
-  const und = underlyingContract(symbol);
-  const [details] = await ctx.session.contractDetails(und, ctx.signal);
-  if (!details?.conId) throw new Error(`${symbol}: not found at IBKR`);
-  const resolved: TwsContract = { ...und, conId: details.conId };
-  const quote = await underlyingQuote(ctx, resolved);
-  const spot = spotOverride ?? bestPrice(quote);
-  if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
-  const params = await optionParams(ctx, { symbol: und.symbol, secType: und.secType, conId: details.conId });
-  const expiries = pickExpiries(params, und.symbol, ctx.now(), shape.expiries);
-  if (!expiries.length) throw new NoListedOptions(symbol);
+async function listedContracts(ctx: JobContext, und: TwsContract, conId: number, shape: ChainShape, saved: () => SavedContracts | null): Promise<{ contracts: TwsContract[]; expiries: string[]; listedAt: string | null }> {
+  const asked = await optionParams(ctx, { symbol: und.symbol, secType: und.secType, conId });
+  const picks = pickExpiries(asked.params, und.symbol, ctx.now(), shape.expiries);
+  if (!picks.length) {
+    if (asked.fresh) ctx.contracts?.forget(und.symbol);
+    throw new NoListedOptions(und.symbol);
+  }
   const all: TwsContract[] = [];
-  let timeouts = 0;
-  let lastError: unknown = null;
-  for (const e of expiries) {
+  const delivered: { pick: ExpiryPick; contracts: TwsContract[] }[] = [];
+  const savedAt: string[] = [];
+  for (const e of picks) {
     throwIfAborted(ctx.signal);
     const req: TwsContract = {
       symbol: und.symbol, secType: "OPT", exchange: "SMART", currency: "USD",
       lastTradeDateOrContractMonth: e.expiry, tradingClass: e.tradingClass, multiplier: e.multiplier,
     };
     try {
-      all.push(...await retryOnTimeout(() => ctx.session.contractDetails(req, ctx.signal)));
+      const list = await retryOnTimeout(() => ctx.session.contractDetails(req, ctx.signal));
+      delivered.push({ pick: e, contracts: list });
+      all.push(...list);
     } catch (err) {
       if (!(err instanceof TwsTimeoutError)) throw err;
-      timeouts += 1;
-      lastError = err;
+      const s = saved()?.expiries.find((x) => x.pick.expiry === e.expiry);
+      if (s) { all.push(...s.contracts); savedAt.push(s.fetchedAt); }
     }
   }
-  if (timeouts === expiries.length) throw lastError;
-  return { underlying: quote, spot, contracts: selectContracts(all, spot, shape.moneyness), expiries: expiries.map((e) => e.expiry) };
+  if (!delivered.length && !savedAt.length) throw new DefinitionsUnanswered(`${und.symbol}'s option contract details`);
+  ctx.contracts?.remember(und.symbol, und.secType, conId, asked.fresh ? asked.params : null, delivered, ctx.now());
+  return { contracts: all, expiries: picks.map((e) => e.expiry), listedAt: oldest(savedAt) };
+}
+
+/**
+ * Contracts of `shape` around `spotOverride` (e.g. the session close), else around the current price. Asks IBKR's
+ * contract (sec-def) server while it is available; when it is not, or does not answer, the saved contract list
+ * (≤ 7 days old, unexpired expiries) is used — quotes still come from the market-data server, by conId. Without a
+ * saved list: ContractsUnavailable.
+ */
+export async function resolveOptionContracts(ctx: JobContext, symbol: string, shape: ChainShape, spotOverride: number | null = null): Promise<ResolvedChain> {
+  const und = underlyingContract(symbol);
+  const server = ctx.contractServer;
+  let savedList: SavedContracts | null | undefined;
+  const saved = () => (savedList === undefined ? (savedList = ctx.contracts?.saved(und.symbol, ctx.now()) ?? null) : savedList);
+  const unanswered = (e: unknown) => { if (!(e instanceof DefinitionsUnanswered)) throw e; server?.unanswered(); live = false; };
+  let live = server?.available() ?? true;
+
+  let conId: number | undefined;
+  if (live) { try { conId = await underlyingConId(ctx, und); } catch (e) { unanswered(e); } }
+  conId ??= saved()?.conId;
+  if (conId === undefined) throw new ContractsUnavailable(symbol);
+  const quote = await underlyingQuote(ctx, { ...und, conId });
+  const spot = spotOverride ?? bestPrice(quote);
+  if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
+
+  if (live && (server?.available() ?? true)) {
+    try {
+      const r = await listedContracts(ctx, und, conId, shape, saved);
+      server?.answered();
+      return { underlying: quote, spot, contracts: selectContracts(r.contracts, spot, shape.moneyness), expiries: r.expiries, listedAt: r.listedAt };
+    } catch (e) { unanswered(e); }
+  }
+  const s = saved();
+  if (!s) throw new ContractsUnavailable(symbol);
+  const picks = s.expiries.slice(0, shape.expiries);
+  return {
+    underlying: quote, spot, contracts: selectContracts(picks.flatMap((p) => p.contracts), spot, shape.moneyness),
+    expiries: picks.map((p) => p.pick.expiry), listedAt: oldest(picks.map((p) => p.fetchedAt)),
+  };
 }
 
 export interface ChainRequest { symbol: string; shape: ChainShape; final: boolean; sessionDate: string | null }
@@ -222,6 +297,8 @@ export interface ChainPushed {
   expiries: ExpiryCoverage[];
   optionsDelayed: boolean;
   underlyingDelayed: boolean;
+  /** When the saved contract list the chain was built from was fetched (IBKR's contract server unavailable), else null. */
+  listedAt: string | null;
 }
 
 /** A closing chain is archived only with at least this share of its requested contracts quoted. */
@@ -230,13 +307,40 @@ export const FINAL_MIN_COVERAGE = 0.95;
 const OPTION_TICKS: CollectOptions = { genericTicks: "101", complete: (a) => a.optionComplete() };
 
 /** Option quotes for `contracts`; contracts that got no usable data are asked for once more. */
-async function optionQuotes(ctx: JobContext, contracts: TwsContract[]): Promise<QuoteSnapshot[]> {
-  const quotes = await collectQuotes(ctx, contracts, OPTION_TICKS);
+async function collectOptionQuotes(ctx: JobContext, contracts: TwsContract[], marketDataType: OptionDataType): Promise<QuoteSnapshot[]> {
+  const o: CollectOptions = { ...OPTION_TICKS, marketDataType };
+  const quotes = await collectQuotes(ctx, contracts, o);
   const missing = contracts.flatMap((_, i) => (isQuoted(quotes[i]) ? [] : [i]));
   if (missing.length > contracts.length * (1 - FINAL_MIN_COVERAGE)) {
-    const again = await collectQuotes(ctx, missing.map((i) => contracts[i]), OPTION_TICKS);
+    const again = await collectQuotes(ctx, missing.map((i) => contracts[i]), o);
     missing.forEach((i, k) => { quotes[i] = again[k]; });
   }
+  return quotes;
+}
+
+const isSubscriptionRefusal = (e: unknown) => e instanceof TwsRequestError && NOT_SUBSCRIBED_CODES.has(e.code);
+
+/**
+ * Option quotes with the market data type the account's options feed allows now. A refusal for lack of a subscription
+ * switches the feed to delayed-only: retried at once as delayed data where that applies (regular hours), else the
+ * quotes are skipped (OptionQuotesClosed).
+ */
+async function optionQuotes(ctx: JobContext, symbol: string, contracts: TwsContract[]): Promise<QuoteSnapshot[]> {
+  const feed = ctx.optionsFeed;
+  let type = feed?.dataType(ctx.now());
+  let quotes: QuoteSnapshot[];
+  try {
+    quotes = await collectOptionQuotes(ctx, contracts, type);
+  } catch (e) {
+    if (!feed || !isSubscriptionRefusal(e)) throw e;
+    feed.refused(ctx.now(), type);
+    if (!feed.canQuote(ctx.now())) throw new OptionQuotesClosed(symbol);
+    const next = feed.dataType(ctx.now());
+    if (next === type) throw e;
+    type = next;
+    quotes = await collectOptionQuotes(ctx, contracts, type);
+  }
+  if (quotes.some(isQuoted)) feed?.quoted(ctx.now(), quotes.some((q) => q.delayed), type);
   return quotes;
 }
 
@@ -267,6 +371,7 @@ export async function sessionClose(ctx: JobContext, symbol: string, sessionDate:
  * instead (POST /api/ingest/no-options) and returns null.
  */
 export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<ChainPushed | null> {
+  if (ctx.optionsFeed && !ctx.optionsFeed.canQuote(ctx.now())) throw new OptionQuotesClosed(req.symbol);
   const rthClose = req.final && req.sessionDate ? await sessionClose(ctx, req.symbol, req.sessionDate) : null;
   let r: ResolvedChain;
   try {
@@ -276,14 +381,14 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
     await ctx.ingest.noOptions({ source: "ibkr", symbol: req.symbol });
     return null;
   }
-  const quotes = await optionQuotes(ctx, r.contracts);
+  const quotes = await optionQuotes(ctx, req.symbol, r.contracts);
   const fetchedAt = ctx.now().toISOString();
   const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
   const rows = r.contracts.map((contract, i) => ({ contract, quote: quotes[i] }));
   const quoted = quotes.filter(isQuoted).length;
   if (!quoted) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
-  const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed };
+  const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed, listedAt: r.listedAt };
   const coverage = quoted / r.contracts.length;
   const incompleteFinal = req.final && coverage < FINAL_MIN_COVERAGE;
   const body: IngestChain = incompleteFinal
@@ -294,7 +399,7 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
     throw new Error(`${req.symbol}: closing chain incomplete (${quoted} of ${r.contracts.length} contracts quoted); posted as a live chain, not archived — will retry`);
   }
   return {
-    contracts: body.contracts.length, coverage, expiries: expiryCoverage(r.expiries, rows),
+    contracts: body.contracts.length, coverage, expiries: expiryCoverage(r.expiries, rows), listedAt: r.listedAt,
     optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed,
   };
 }

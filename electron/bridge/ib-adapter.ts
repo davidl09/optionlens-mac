@@ -2,7 +2,7 @@
 // that knows the library; it maps request ids to promises/handlers, applies per-request timeouts and
 // shields the bridge from listener exceptions (a bad tick never crashes the process).
 import { BarSizeSetting, EventName, IBApi, isNonFatalError, MarketDataType, type Contract, type ContractDetails, type SecType as IbSecType } from "@stoqey/ib";
-import { CODE, TwsRequestError, TwsTimeoutError, type ConnectOptions, type HistBar, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import { CODE, TwsRequestError, TwsTimeoutError, type ConnectOptions, type HistBar, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
 
 /** Outgoing messages per second: @stoqey/ib queues every request and cancel and sends at this rate. */
 const MSG_RATE = 40;
@@ -69,9 +69,15 @@ class IbSession implements TwsSession {
   private closed = false;
   /** When the client's outgoing queue (paced at MSG_RATE) is estimated to be empty. */
   private queueFreeAt = 0;
+  /** The market data type last sent (reqMarketDataType applies to the requests after it). */
+  private dataType: MarketDataKind = 4;   // set at connect (MarketDataType.DELAYED_FROZEN)
 
-  constructor(private readonly ib: IBApi, readonly accounts: string[]) {
+  /** `early`: connection-level messages received during the handshake (farm status), replayed to each listener. */
+  constructor(private readonly ib: IBApi, readonly accounts: string[], private readonly early: TwsSystemMessage[] = []) {
     ib.on(EventName.error, (err: Error, code: number, reqId: number) => this.safe(() => this.onError(err, code, reqId)));
+    // @stoqey/ib 1.6.13 emits every TWS message with reqId -1 (farm status 21xx, 1100/1101/1102 connectivity) as
+    // `info`, not `error`.
+    ib.on(EventName.info, (message: string, code: number) => this.safe(() => this.onSystem({ code, message: String(message) })));
     ib.on(EventName.disconnected, () => this.safe(() => this.onDisconnected("connection closed")));
     const tick = (reqId: number, e: TickEvent) => {
       const h = this.ticks.get(reqId);
@@ -103,16 +109,17 @@ class IbSession implements TwsSession {
 
   private onError(err: Error, code: number, reqId: number): void {
     const message = err?.message ?? String(err);
-    if (reqId === undefined || reqId < 0) {
-      for (const l of this.systemListeners) this.safe(() => l({ code, message }));
-      if (code === CODE.NOT_CONNECTED) this.onDisconnected("not connected");
-      return;
-    }
+    if (reqId === undefined || reqId < 0) { this.onSystem({ code, message }); return; }
     if (code === CODE.COMPETING_SESSION) for (const l of this.systemListeners) this.safe(() => l({ code, message }));
     if (isNonFatalError(code, err)) return;
     const e = new TwsRequestError(code, message);
     this.pending.get(reqId)?.onError(e);
     this.ticks.get(reqId)?.onError(e);
+  }
+
+  private onSystem(m: TwsSystemMessage): void {
+    for (const l of this.systemListeners) this.safe(() => l(m));
+    if (m.code === CODE.NOT_CONNECTED) this.onDisconnected("not connected");
   }
 
   private onDisconnected(reason: string): void {
@@ -203,11 +210,15 @@ class IbSession implements TwsSession {
     });
   }
 
-  stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers): () => void {
+  stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers, marketDataType: MarketDataKind = 4): () => void {
     if (this.closed) { handlers.onError(new TwsRequestError(CODE.NOT_CONNECTED, "not connected")); return () => undefined; }
     const ibc = toIb(contract);
     const reqId = this.nextId++;
     this.ticks.set(reqId, handlers);
+    if (marketDataType !== this.dataType) {
+      this.dataType = marketDataType;
+      this.send(() => this.ib.reqMarketDataType(marketDataType as MarketDataType));
+    }
     this.send(() => this.ib.reqMktData(reqId, ibc, genericTicks, false, false));
     return () => {
       if (!this.ticks.delete(reqId) || this.closed) return;
@@ -215,7 +226,10 @@ class IbSession implements TwsSession {
     };
   }
 
-  onSystemMessage(cb: (m: TwsSystemMessage) => void): void { this.systemListeners.push(cb); }
+  onSystemMessage(cb: (m: TwsSystemMessage) => void): void {
+    this.systemListeners.push(cb);
+    for (const m of this.early) this.safe(() => cb(m));
+  }
   onClose(cb: (reason: string) => void): void { this.closeListeners.push(cb); }
 
   close(): void {
@@ -230,6 +244,7 @@ export const ibConnector: TwsConnector = {
     const ib = new IBApi({ host: o.host, port: o.port, maxReqPerSec: MSG_RATE });
     return new Promise<TwsSession>((resolve, reject) => {
       let accounts: string[] | null = null;
+      const early: TwsSystemMessage[] = [];
       let gotId = false;
       let settled = false;
       let grace: ReturnType<typeof setTimeout> | null = null;
@@ -254,17 +269,22 @@ export const ibConnector: TwsConnector = {
         // class where it does not (e.g. no OPRA). Delayed ticks use their own tick ids, which the
         // accumulator maps and flags, so every push says whether it was delayed.
         ib.reqMarketDataType(MarketDataType.DELAYED_FROZEN);
-        resolve(new IbSession(ib, accounts ?? []));
+        resolve(new IbSession(ib, accounts ?? [], early));
       };
       const timer = setTimeout(() => fail(new Error(`no API handshake on port ${o.port}`)), o.timeoutMs);
       ib.on(EventName.managedAccounts, (list: string) => {
         accounts = String(list).split(",").map((a) => a.trim()).filter(Boolean);
         if (gotId) ready();
       });
+      const onSystem = (code: number, message: string) => {
+        if (settled) return;
+        if (code === CODE.CLIENT_ID_IN_USE || code === 502 || code === CODE.NOT_CONNECTED) fail(new TwsRequestError(code, message));
+        else early.push({ code, message });
+      };
       ib.on(EventName.error, (err: Error, code: number, reqId: number) => {
-        if (settled || (reqId !== undefined && reqId >= 0)) return;
-        if (code === CODE.CLIENT_ID_IN_USE || code === 502 || code === CODE.NOT_CONNECTED) fail(new TwsRequestError(code, err?.message ?? "connect failed"));
+        if (reqId === undefined || reqId < 0) onSystem(code, err?.message ?? "connect failed");
       });
+      ib.on(EventName.info, (message: string, code: number) => onSystem(code, String(message)));
       ib.on(EventName.disconnected, () => fail(new Error(`connection to port ${o.port} closed`)));
       ib.on(EventName.nextValidId, () => {
         if (settled || gotId) return;

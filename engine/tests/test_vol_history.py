@@ -77,7 +77,11 @@ def test_bridge_status_round_trip(tmpdb):
     bridge.record_heartbeat("optionlens-mac 0.1.0", True, "paper", t + timedelta(seconds=5))
     s = bridge.get_status()
     assert s == {"client": "optionlens-mac 0.1.0", "ibkr_connected": True, "account_type": "paper",
-                 "heartbeat_at": t + timedelta(seconds=5), "last_push_at": t}
+                 "heartbeat_at": t + timedelta(seconds=5), "last_push_at": t, "farms": None, "options_subscription": None}
+    bridge.record_heartbeat("optionlens-mac 0.1.7", True, "live", t, farms={"market_data": "ok", "historical": "ok", "sec_def": "down"},
+                            options_subscription="delayed_only")
+    s = bridge.get_status()
+    assert s["farms"] == {"market_data": "ok", "historical": "ok", "sec_def": "down"} and s["options_subscription"] == "delayed_only"
 
 
 def test_current_iv30_falls_back_to_the_merged_history_with_its_date(tmpdb):

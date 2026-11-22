@@ -18,6 +18,9 @@ export interface TwsContract {
   multiplier?: string;
 }
 
+/** IBKR market data types the bridge uses: 3 delayed, 4 delayed-frozen (real-time where subscribed). */
+export type MarketDataKind = 3 | 4;
+
 export interface HistBar { time: string; open: number; high: number; low: number; close: number; volume: number | null }
 
 export interface OptionParams { exchange: string; tradingClass: string; multiplier: string; expirations: string[]; strikes: number[] }
@@ -46,7 +49,10 @@ export class TwsTimeoutError extends Error {
   constructor(what: string, ms: number) { super(`${what}: no answer from TWS within ${Math.round(ms / 1000)} s`); this.name = "TwsTimeoutError"; }
 }
 
-/** A connection-level message (reqId -1): 1100 lost, 1101/1102 restored, 10197 competing session, 21xx farm status. */
+/**
+ * A connection-level message (reqId -1): 1100 lost, 1101/1102 restored, 10197 competing session, 21xx farm status.
+ * @stoqey/ib delivers these as `info` events (not `error`); the adapter forwards both.
+ */
 export interface TwsSystemMessage { code: number; message: string }
 
 export interface TwsSession {
@@ -55,8 +61,11 @@ export interface TwsSession {
   contractDetails(contract: TwsContract, signal: AbortSignal): Promise<TwsContract[]>;
   /** `timeoutMs`: how long to wait for the answer (the adapter's default when omitted). */
   optionParams(underlying: { symbol: string; secType: SecType; conId: number }, signal: AbortSignal, timeoutMs?: number): Promise<OptionParams[]>;
-  /** Streams market data; returns a cancel function. Never throws for bad ticks. */
-  stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers): () => void;
+  /**
+   * Streams market data; returns a cancel function. Never throws for bad ticks. `marketDataType`: IBKR's market data
+   * type for this request (3 delayed, 4 delayed-frozen; the session default 4 when omitted).
+   */
+  stream(contract: TwsContract, genericTicks: string, handlers: TickHandlers, marketDataType?: MarketDataKind): () => void;
   /**
    * Estimated time (ms) until every message issued so far has actually been sent: the API client paces
    * outgoing messages (requests and cancels alike), so a request issued now reaches TWS this much later.

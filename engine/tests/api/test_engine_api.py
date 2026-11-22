@@ -84,6 +84,15 @@ def test_status_sources_and_bridge(client):
     assert st["bridge"]["connected"] is True and st["bridge"]["client"] == "optionlens-mac 0.1.0"
     ib = st["sources"][2]
     assert ib["ok"] is True and ib["detail"] == "optionlens-mac 0.1.0"
+    assert st["bridge"]["farms"] is None and st["bridge"]["options_subscription"] is None   # an older bridge
+    client.post("/api/ingest/heartbeat", json={"client": "optionlens-mac 0.1.7", "ibkr_connected": True,
+                                               "account_type": "live", "options_subscription": "delayed_only",
+                                               "farms": {"market_data": "ok", "historical": "ok", "sec_def": "down"}})
+    br = client.get("/api/status").json()["bridge"]
+    assert br["farms"] == {"market_data": "ok", "historical": "ok", "sec_def": "down"}
+    assert br["options_subscription"] == "delayed_only"
+    assert client.post("/api/ingest/heartbeat", json={"client": "x", "ibkr_connected": True,
+                                                      "farms": {"sec_def": "maintenance"}}).status_code == 422
     hb = client.post("/api/ingest/heartbeat", json={"client": "x", "ibkr_connected": False}).json()
     assert datetime.fromisoformat(hb["server_time"]).tzinfo is not None
     assert client.get("/api/status").json()["bridge"]["connected"] is False
@@ -161,6 +170,20 @@ def test_ingest_delayed_flag_is_required_and_exposed(client):
     assert (c.volume, c.oi) == (None, None)
     assert {k: option_row(c, 120.0)[k] for k in ("volume", "oi")} == {"volume": None, "oi": None}
     client.post("/api/ingest/chain", json=_chain())
+
+
+def test_chain_built_from_a_saved_contract_list_says_so(client):
+    """The bridge built the chain from its saved contract list (IBKR's contract server unavailable): the chain says
+    when that list was listed; a chain listed at fetch time (the default, older bridges) says nothing."""
+    listed = "2026-11-18T15:00:00+00:00"
+    assert client.post("/api/ingest/chain", json=_chain(contracts_from_cache=True, contracts_listed_at=listed)).status_code == 200
+    ch = client.get("/api/symbol/DELL/chain").json()
+    assert ch["contracts_from_cache"] is True
+    assert datetime.fromisoformat(ch["contracts_listed_at"]) == datetime.fromisoformat(listed)
+    assert client.post("/api/ingest/chain", json=_chain(contracts_from_cache=True)).status_code == 422
+    assert client.post("/api/ingest/chain", json=_chain()).status_code == 200
+    ch = client.get("/api/symbol/DELL/chain").json()
+    assert ch["contracts_from_cache"] is False and ch["contracts_listed_at"] is None
 
 
 def test_contracts_with_unknown_oi_or_volume_are_served_in_the_chain(client):

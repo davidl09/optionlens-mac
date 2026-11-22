@@ -105,7 +105,10 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     day = _check_final(body.get("session_date"), fetched) if body.get("final") else None
     quote = _quote(sym, body["underlying"], fetched, body["delayed"], day is not None)
     contracts = _with_computed_iv(quote, [_contract(sym, c) for c in body["contracts"]], fetched, source)
-    snap = ChainSnapshot(quote, tuple(contracts), fetched, body["delayed"])
+    listed = body.get("contracts_listed_at") if body.get("contracts_from_cache") else None
+    if body.get("contracts_from_cache") and listed is None:
+        raise BadRequest("contracts_listed_at is required when contracts_from_cache is true")
+    snap = ChainSnapshot(quote, tuple(contracts), fetched, body["delayed"], listed)
     chains.store_chain(snap, fetched, final=day is not None, source=source)
     if day is not None:
         ctx.invalidate()
@@ -210,7 +213,8 @@ def ack_wants(body: dict, now: datetime | None = None) -> dict:
 
 def heartbeat(body: dict, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
-    bridge_repo.record_heartbeat(body["client"], body["ibkr_connected"], body.get("account_type"), now)
+    bridge_repo.record_heartbeat(body["client"], body["ibkr_connected"], body.get("account_type"), now,
+                                 farms=body.get("farms"), options_subscription=body.get("options_subscription"))
     return {"server_time": now}
 
 

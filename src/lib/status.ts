@@ -34,6 +34,19 @@ export function populateText(b: BridgeStatus | null | undefined): string | null 
   return p ? `Populating last session's data: ${p.done.toLocaleString("en-US")}/${p.total.toLocaleString("en-US")}` : null;
 }
 
+type FarmState = BridgeStatus["farms"]["secDef"]["state"];
+const FARM_WORDS: Record<FarmState, string> = { ok: "OK", inactive: "idle (available)", connecting: "connecting", down: "unavailable", unknown: "not reported" };
+
+/** IBKR's server farms in plain words: "market data OK · historical OK · sec-def (contracts) unavailable". */
+export function farmsSummary(f: { marketData: FarmState; historical: FarmState; secDef: FarmState }): string {
+  return `market data ${FARM_WORDS[f.marketData]} · historical ${FARM_WORDS[f.historical]} · sec-def (contracts) ${FARM_WORDS[f.secDef]}`;
+}
+
+/** The account's US options market data in plain words. */
+export function optionsSubscriptionText(mode: BridgeStatus["optionsSubscription"] | null | undefined): string {
+  return mode === "delayed_only" ? "delayed only (no OPRA subscription)" : mode === "realtime" ? "real-time" : "not known yet";
+}
+
 /** The header pill in plain words: "IBKR connected · delayed data", "IBKR not connected", ... */
 export function bridgePillLabel(b: BridgeStatus): string {
   if (!b.enabled) return "IBKR off";

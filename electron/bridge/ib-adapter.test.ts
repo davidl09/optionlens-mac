@@ -26,6 +26,7 @@ vi.mock("@stoqey/ib", async (importOriginal) => {
     disconnect() { this.calls.push("disconnect"); }
     reqMarketDataType(type: number) { this.calls.push(`reqMarketDataType:${type}`); }
     reqContractDetails() { this.calls.push("reqContractDetails"); }
+    reqSecDefOptParams(reqId: number, symbol: string, futFopExchange: string, secType: string, conId: number) { this.calls.push(`reqSecDefOptParams:${reqId}:${symbol}:${JSON.stringify(futFopExchange)}:${secType}:${conId}`); }
     reqMktData(reqId: number, contract: Record<string, unknown>) { this.calls.push("reqMktData"); if (this.validate(reqId, contract)) this.emit("tickPrice", reqId, 1, 2.5); }
     cancelMktData() { this.calls.push("cancelMktData"); }
   }
@@ -129,5 +130,63 @@ describe("ibConnector", () => {
     expect(detailsExpiry({ lastTradeDateOrContractMonth: "", lastTradeDate: "20261217" })).toBe("20261217");
     expect(detailsExpiry({ lastTradeDateOrContractMonth: "2026" })).toBeUndefined();
     expect(toIb({ symbol: "SPX", secType: "IND", exchange: "CBOE", currency: "USD" })).toMatchObject({ symbol: "SPX", secType: "IND", exchange: "CBOE" });
+  });
+
+  it("forwards connection-level messages, which @stoqey/ib emits as `info` (farm status 21xx), including those of the handshake", async () => {
+    vi.useRealTimers();
+    const p = connect();
+    const ib = lastIb();
+    ib.emit(EventName.info, "Market data farm connection is OK:usfarm", 2104);     // before the session exists
+    ib.emit(EventName.managedAccounts, "DU1");
+    ib.emit(EventName.nextValidId, 1);
+    const s = await p;
+    const seen: { code: number; message: string }[] = [];
+    s.onSystemMessage((m) => seen.push(m));
+    ib.emit(EventName.info, "Sec-def data farm connection is broken:secdefil", 2157);
+    ib.emit(EventName.error, new Error("Connectivity between IB and Trader Workstation has been lost."), 1100, -1);
+    expect(seen).toEqual([
+      { code: 2104, message: "Market data farm connection is OK:usfarm" },
+      { code: 2157, message: "Sec-def data farm connection is broken:secdefil" },
+      { code: 1100, message: "Connectivity between IB and Trader Workstation has been lost." },
+    ]);
+  });
+
+  it("reports a client id in use (326, sent as `info`) at once instead of waiting for the handshake timeout", async () => {
+    const p = connect();
+    lastIb().emit(EventName.info, "Unable to connect as the client id is already in use. Retry with a unique client id.", 326);
+    await expect(p).rejects.toMatchObject({ code: 326 });
+  });
+
+  it("asks reqSecDefOptParams(symbol, \"\", secType, conId), takes only its own reqId's rows, and an end without rows is an empty answer", async () => {
+    vi.useRealTimers();
+    const p = connect();
+    lastIb().emit(EventName.managedAccounts, "DU1");
+    lastIb().emit(EventName.nextValidId, 1);
+    const s = await p;
+    const ib = lastIb();
+    const a = s.optionParams({ symbol: "DELL", secType: "STK", conId: 1 }, new AbortController().signal);
+    const b = s.optionParams({ symbol: "SPX", secType: "IND", conId: 416904 }, new AbortController().signal);
+    expect(ib.calls.filter((c) => c.startsWith("reqSecDefOptParams"))).toEqual(['reqSecDefOptParams:1:DELL:"":STK:1', 'reqSecDefOptParams:2:SPX:"":IND:416904']);
+    ib.emit(EventName.securityDefinitionOptionParameter, 2, "SMART", 416904, "SPXW", 100, ["20261127"], [6000]);
+    ib.emit(EventName.securityDefinitionOptionParameterEnd, 1);   // DELL: end without rows
+    expect(await a).toEqual([]);
+    ib.emit(EventName.securityDefinitionOptionParameterEnd, 2);
+    expect(await b).toEqual([{ exchange: "SMART", tradingClass: "SPXW", multiplier: "100", expirations: ["20261127"], strikes: [6000] }]);
+  });
+
+  it("switches the market data type only when a request needs another one (delayed options, then back to the session default)", async () => {
+    vi.useRealTimers();
+    const p = connect();
+    lastIb().emit(EventName.managedAccounts, "DU1");
+    lastIb().emit(EventName.nextValidId, 1);
+    const s = await p;
+    const ib = lastIb();
+    const h = { onTick: () => undefined, onError: () => undefined };
+    const opt = { symbol: "DELL", secType: "OPT" as const, exchange: "SMART", currency: "USD" as const, conId: 5 };
+    s.stream(opt, "101", h, 3);
+    s.stream(opt, "101", h, 3);
+    s.stream({ symbol: "DELL", secType: "STK", exchange: "SMART", currency: "USD" }, "", h);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(ib.calls.filter((c) => c.startsWith("req"))).toEqual(["reqMarketDataType:4", "reqMarketDataType:3", "reqMktData", "reqMktData", "reqMarketDataType:4", "reqMktData"]);
   });
 });

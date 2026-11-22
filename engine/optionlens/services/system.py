@@ -97,8 +97,9 @@ def bridge(now: datetime | None = None) -> dict:
     b = bridge_repo.get_status() or {}
     beat = b.get("heartbeat_at")
     fresh = beat is not None and (now or datetime.now(timezone.utc)) - beat <= timedelta(seconds=BRIDGE_STALE_S)
-    return {"connected": bool(fresh and b.get("ibkr_connected")), "last_push_at": b.get("last_push_at"),
-            "client": b.get("client")}
+    connected = bool(fresh and b.get("ibkr_connected"))
+    return {"connected": connected, "last_push_at": b.get("last_push_at"), "client": b.get("client"),
+            "farms": b.get("farms") if connected else None, "options_subscription": b.get("options_subscription")}
 
 
 def sources(latest: dict[str, dict], br: dict) -> list[dict]:

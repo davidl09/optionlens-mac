@@ -186,6 +186,7 @@ export default function ChainTab() {
               <label className="check-inline"><input type="checkbox" checked={greeks} onChange={(e) => setGreeks(e.target.checked)} /> Greeks</label>
               {(chain.source || chain.delayed) && <span className="chain-source">Source <SourceBadge source={chain.source} delayed={chain.delayed === true} /></span>}
               <AfterHoursBadge show={chain.after_hours} />
+              {chain.contracts_from_cache && <span className="muted small" title="IBKR's contract (sec-def) server did not answer, so the bridge used the contract list it saved earlier. Quotes are current; expiries listed since then are missing.">contract list from {chain.contracts_listed_at ? fmtDateTime(chain.contracts_listed_at).slice(0, 10) : "earlier"} (IBKR contract server unavailable)</span>}
               <span className="muted small legend-inline"><span className="swatch itm" /> in the money · <span className="swatch hot" /> volume &gt; OI · click bid to sell / ask to buy</span>
             </div>
           </Card>

@@ -172,6 +172,13 @@ ALTER TABLE metrics_daily ALTER COLUMN source DROP DEFAULT;
 ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
 ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
+-- The chain was built from a contract list the client saved earlier (IBKR's contract server unavailable): when
+-- that list was listed. NULL = listed at fetch time.
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS contracts_listed_at TIMESTAMP;
+-- The bridge's last heartbeat: IBKR server farms (JSON {market_data, historical, sec_def}) and the account's US
+-- options market data ('unknown' | 'realtime' | 'delayed_only').
+ALTER TABLE bridge_status ADD COLUMN IF NOT EXISTS farms VARCHAR;
+ALTER TABLE bridge_status ADD COLUMN IF NOT EXISTS options_subscription VARCHAR;
 -- Provenance of IV and greeks (docs/INTEGRATION.md §6 "Computed IV and greeks"): the chain source's name
 -- ('ibkr', ...) when it sent them, 'computed_mid' / 'computed_last' (IV) and 'computed' (greeks) when the engine
 -- derived them, NULL = none. last_ts: time of the last trade when the source said. metrics_daily.iv_computed:

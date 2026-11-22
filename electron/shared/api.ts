@@ -83,13 +83,23 @@ export interface BridgeStatus {
    * the bridge collects its frozen closing values — underlying stats, then chains; null when none runs.
    */
   populate: { sessionDate: string; done: number; total: number } | null;
+  /** IBKR's server farms as the Gateway reports them (all "unknown" until it does, and while not connected). */
+  farms: Record<"marketData" | "historical" | "secDef", { state: "ok" | "inactive" | "connecting" | "down" | "unknown"; since: string | null; server: string | null }>;
+  /**
+   * Whether chains can get fresh contract definitions from IBKR now: false while the sec-def farm is reported down,
+   * or for 15 min after a contract request went unanswered (chains then use saved contract lists).
+   */
+  contractsAvailable: boolean;
+  /** US options market data of the account: "delayed_only" = no OPRA subscription, option quotes in market hours only. */
+  optionsSubscription: "unknown" | "realtime" | "delayed_only";
 }
 
 export type RefreshResult =
   | { status: "refreshed" }
   | { status: "fresh" }                      // pushed within chains_on_demand_max_age_s
   | { status: "no-options" }                 // IBKR lists no options for the symbol (reported to the engine)
-  | { status: "unavailable"; message: string }  // bridge off / TWS not connected / paused
+  // bridge off / TWS not connected / paused; `waitingFor`: what the bridge waits for before it can fetch the chain
+  | { status: "unavailable"; message: string; waitingFor?: "contract-server" | "market-hours" }
   | { status: "failed"; message: string };
 
 export type Result = { ok: true } | { ok: false; error: string };

@@ -74,7 +74,15 @@ def chain(symbol: str, expiry: str | None = None) -> dict:
         "calls": [r for r in rows if r["right"] == "C"], "puts": [r for r in rows if r["right"] == "P"],
         "delayed": options_repo.latest_delayed(ca.symbol),
         "after_hours": after_session(ca.asof),   # collected after the session's close (IBKR frozen data)
+        **_contract_listing(ca.symbol),
     }
+
+
+def _contract_listing(symbol: str) -> dict:
+    """Chain.contracts_from_cache / contracts_listed_at: the client built the chain from a contract list it saved
+    earlier (IBKR's contract server was unavailable), listed at that time."""
+    listed = options_repo.latest_contracts_listed_at(symbol)
+    return {"contracts_from_cache": listed is not None, "contracts_listed_at": listed}
 
 
 # ----------------------------------------------------------------------------- activity / OI
