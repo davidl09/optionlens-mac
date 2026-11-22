@@ -167,3 +167,15 @@ async def test_fetch_chain_delayed_not_listed_and_no_options(qt):
     with pytest.raises(FetchError, match="no quote"):
         await src.fetch_chain("XYZ")
     assert option_id("2026-11-20", 100, "P") in fake.unquoted
+
+
+def test_option_filters_send_whole_cent_bounds():
+    """Questrade rejects float-noise strikes (37.964999999999996) with 400 code 1013; bounds go out in cents,
+    widened outward so the band never shrinks."""
+    import json
+    from optionlens.sources.questrade.mapping import option_filters
+
+    f = option_filters(40445, ["2026-12-18T00:00:00.000000-05:00"], 50.62 * 0.75, 50.62 * 1.25)
+    assert f[0]["minstrikePrice"] == 37.96 and f[0]["maxstrikePrice"] == 63.28
+    body = json.dumps({"filters": f})
+    assert "37.96," in body and "999999" not in body

@@ -13,6 +13,8 @@ SPX / NDX / RUT an expiry listed under both the AM and the PM root keeps the PM 
 """
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping
@@ -126,8 +128,12 @@ def pick_expiries(expiries: Mapping[date, str], today: date, n: int) -> list[dat
 
 
 def option_filters(underlying_id: int, expiries: Iterable[str], lo: float, hi: float) -> list[dict]:
-    """POST v1/markets/quotes/options filters: one per expiry (calls and puts), strikes in [lo, hi]."""
-    return [{"underlyingId": underlying_id, "expiryDate": raw, "minstrikePrice": lo, "maxstrikePrice": hi}
+    """POST v1/markets/quotes/options filters: one per expiry (calls and puts), strikes in [lo, hi].
+
+    Bounds are widened to whole cents: Questrade answers a strike with float noise (37.964999999999996) with
+    400 code 1013 ("Requesting anything other than 'application/json'"), verified live on 2026-11-21."""
+    lo_c, hi_c = math.floor(lo * 100) / 100, math.ceil(hi * 100) / 100
+    return [{"underlyingId": underlying_id, "expiryDate": raw, "minstrikePrice": lo_c, "maxstrikePrice": hi_c}
             for raw in expiries]
 
 
