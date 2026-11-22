@@ -205,6 +205,22 @@ data (for example option bars without OPRA), the bridge skips that symbol and ki
 status lists it. Backfills can be resumed: after a restart or a reconnect, the bridge continues where it
 stopped. You can cancel bridge work from the menu-bar menu or from Settings.
 
+## Connect Questrade (optional)
+
+With a Questrade account the engine can collect option chains itself — the whole universe, also without IB Gateway:
+
+1. Log in to Questrade, open **API Centre** (menu under your name), activate the API and accept the agreement.
+2. **Register a personal app** (any name), then under it **New manual authorization** → **Generate new token** →
+   **Copy token**.
+3. In OptionLens open **Settings → Data sources → Questrade**, paste the token and click **Connect**.
+
+The engine exchanges the token at once and keeps the new one Questrade returns (stored only on this computer, in
+the app's data folder, readable by your user only). If the card says **token expired** (a token that was already
+used, revoked or left unused too long), generate a new one the same way. Quotes are real-time only with a Questrade
+real-time data package; otherwise they are delayed and badged so. The engine uses at most 70% of Questrade's API
+limits. When IBKR and Questrade both deliver a chain, OptionLens keeps the closing, real-time, more complete one
+(ties: IBKR); every chain shows its source.
+
 ## Notifications
 
 The app checks your alerts' notifications every minute and shows each new one as a system notification

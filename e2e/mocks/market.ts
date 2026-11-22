@@ -1,6 +1,6 @@
 // Market-wide, user-data, calculator and backtest fixtures.
 import type {
-  Alert, CalcRequest, CalcResult, CompareVolatility, MarketOverview, Notification, Preset, ReportResult, Status, StrategyTemplate, SymbolRef, Watchlist,
+  Alert, CalcRequest, CalcResult, CompareVolatility, MarketOverview, Notification, Preset, QuestradeStatus, ReportResult, Status, StrategyTemplate, SymbolRef, Watchlist,
 } from "../../src/api/types";
 import { between, NOW, reseed, rnd, round, rowsFor, SYMBOLS, tradingDays, walk } from "./gen";
 import { REPORT_DEFS } from "./reports";
@@ -25,7 +25,7 @@ export function status(): Status {
       { name: "ibkr", ok: true, last_success_at: NOW, detail: "bridge push 2 min ago" },
       { name: "nasdaq", ok: true, last_success_at: "2026-11-19T15:20:00-05:00", detail: null },
       { name: "treasury", ok: false, last_success_at: "2026-11-15T07:00:00-05:00", detail: "HTTP 503" },
-      { name: "vendor", ok: null, last_success_at: null, detail: "not configured" },
+      { name: "questrade", ok: null, last_success_at: null, detail: "not connected (Settings → Data sources) · 0/10,500 calls this hour" },
     ],
     bridge: { connected: true, last_push_at: NOW, client: "optionlens-mac 0.1.0" },
   };
@@ -141,4 +141,20 @@ export function compareStraddle(symbols: string[], dte: number): ReportResult {
     // like the engine: a symbol without a stored chain comes back as its symbol only
     rows: symbols.map((s) => (NO_CHAIN[s] ? { symbol: s } : { symbol: s, expiry: "2026-12-18", dte: 29, straddle: round(between(3, 30)), straddle_pct: round(between(0.03, 0.09), 4), atm_iv: round(between(0.15, 0.5), 4) })),
     truncated: false, notes: [] };
+}
+
+/** GET /api/sources/questrade (and the answer of POST / DELETE .../token) in a given state. */
+export function questradeStatus(state: QuestradeStatus["state"] = "disconnected"): QuestradeStatus {
+  const connected = state === "connected";
+  return {
+    name: "questrade", state, refreshed_at: state === "disconnected" ? null : "2026-11-19T15:30:00-05:00",
+    detail: state === "expired" ? "Questrade refused the refresh token (it expired, was already used or was revoked). Generate a new one in Questrade's API Centre and paste it here."
+      : state === "error" ? "Questrade login is unreachable (ConnectError)" : null,
+    calls_last_hour: connected ? 1234 : 0, hour_budget: 10500, remaining: connected ? 13766 : null,
+    reset_at: connected ? "2026-11-19T16:00:00-05:00" : null, paused_until: null,
+    delayed: connected ? false : null, expiries: 8, moneyness: 0.25,
+    last_chain_at: connected ? "2026-11-19T15:41:00-05:00" : null,
+    last_sweep_at: connected ? "2026-11-19T15:46:00-05:00" : null,
+    last_sweep_detail: connected ? "questrade: 1140 chains, 2 not optionable, 3 not listed/skipped, 0 failed, 96s" : null,
+  };
 }

@@ -8,7 +8,7 @@ export type Right = "C" | "P";
 export type Pricing = "real" | "model";
 export type SymbolKind = "stock" | "etf" | "index";
 /** Where a value came from (INTEGRATION.md §5). */
-export type DataSource = "vendor" | "ibkr" | "cboe" | "nasdaq" | "model" | "reconstructed";
+export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed";
 
 export interface SymbolRef { symbol: string; name: string; kind: SymbolKind }
 
@@ -53,6 +53,20 @@ export interface Status {
 }
 
 export type FarmState = "ok" | "inactive" | "connecting" | "down" | "unknown";
+
+/** GET /api/sources/questrade, and POST / DELETE /api/sources/questrade/token (INTEGRATION.md §8). Never carries a token. */
+export type QuestradeState = "disconnected" | "connected" | "expired" | "error";
+export interface QuestradeStatus {
+  name: string; state: QuestradeState; detail: string | null; refreshed_at: ISODateTime | null;
+  /** Calls started in the last hour, of the engine's hourly budget (70% of Questrade's 15,000). */
+  calls_last_hour: number; hour_budget: number;
+  /** Questrade's last X-RateLimit-Remaining / X-RateLimit-Reset. */
+  remaining: number | null; reset_at: ISODateTime | null; paused_until: ISODateTime | null;
+  /** The last chain fetched was delayed data (null: none fetched since the engine started). */
+  delayed: boolean | null;
+  expiries: number; moneyness: number;
+  last_chain_at: ISODateTime | null; last_sweep_at: ISODateTime | null; last_sweep_detail: string | null;
+}
 
 // ---------------- market overview ----------------
 export interface IndexCard { symbol: string; name: string; price: number | null; change_pct: number | null; iv30: number | null; spark: number[] }

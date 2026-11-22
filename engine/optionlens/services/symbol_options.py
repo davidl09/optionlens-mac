@@ -74,8 +74,14 @@ def chain(symbol: str, expiry: str | None = None) -> dict:
         "calls": [r for r in rows if r["right"] == "C"], "puts": [r for r in rows if r["right"] == "P"],
         "delayed": options_repo.latest_delayed(ca.symbol),
         "after_hours": after_session(ca.asof),   # collected after the session's close (IBKR frozen data)
-        **_contract_listing(ca.symbol),
+        **_contract_listing(ca.symbol), **_source(ca.symbol),
     }
+
+
+def _source(symbol: str) -> dict:
+    """Chain.source: who supplied the stored chain ("ibkr", "questrade", ...), when known."""
+    src = options_repo.latest_source(symbol)
+    return {"source": src} if src else {}
 
 
 def _contract_listing(symbol: str) -> dict:

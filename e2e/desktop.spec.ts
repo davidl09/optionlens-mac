@@ -4,6 +4,7 @@
 // engine-unreachable banner.
 import { expect, Page, test } from "@playwright/test";
 import { handle } from "./mocks";
+import { questradeStatus } from "./mocks/market";
 import { skew } from "./mocks/symbol";
 
 const BASE = "http://127.0.0.1:59999";
@@ -243,6 +244,55 @@ test("settings page shows engine, bridge status and saves bridge settings", asyn
   await page.getByLabel("Client ID").fill("-3");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Client ID must be a whole number")).toBeVisible();
+});
+
+test("Settings → Data sources: Questrade connects with a pasted token (never shown), rejects a used one, disconnects", async ({ page }) => {
+  await fakeDesktop(page);
+  const seen = await mockEngine(page);
+  const posted: unknown[] = [];
+  page.on("request", (r) => { if (r.url().endsWith("/api/sources/questrade/token") && r.method() === "POST") posted.push(r.postDataJSON()); });
+  await page.goto("/settings");
+  const card = page.locator("section.card", { has: page.getByRole("heading", { name: "Questrade" }) });
+  await expect(card.locator(".card-sub")).toHaveText("not connected");
+  await expect(card.getByRole("button", { name: "Disconnect" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Connect" })).toBeDisabled();
+  const field = card.getByLabel("Questrade refresh token");
+  await expect(field).toHaveAttribute("type", "password");
+  await card.getByText("How to get a refresh token").click();
+  await expect(card.getByText("Register a personal app")).toBeVisible();
+  await field.fill("used-token");
+  await card.getByRole("button", { name: "Connect" }).click();
+  await expect(card.locator(".error-box, [role=alert]").first()).toContainText("Questrade refused the refresh token");
+  await field.fill("  fresh-token ");
+  await card.getByRole("button", { name: "Connect" }).click();
+  await expect(card.locator(".card-sub")).toHaveText("connected");
+  await expect(card.getByText("Connected. Chains are collected")).toBeVisible();
+  await expect(field).toHaveValue("");                                           // cleared, never shown again
+  await expect(card.getByText("real-time", { exact: true })).toBeVisible();
+  await expect(card.getByText("1,234 / 10,500 · 13,766 left at Questrade")).toBeVisible();
+  await expect(card.getByText("first 8 expiries, strikes ±25%")).toBeVisible();
+  await expect(card.getByText(/1140 chains/)).toBeVisible();
+  await expect(page.getByText("fresh-token")).toHaveCount(0);
+  expect(posted).toEqual([{ refresh_token: "used-token" }, { refresh_token: "fresh-token" }]);
+  page.once("dialog", (d) => void d.accept());
+  await card.getByRole("button", { name: "Disconnect" }).click();
+  await expect(card.locator(".card-sub")).toHaveText("not connected");
+  await expect(card.getByText("Disconnected. The token was deleted.")).toBeVisible();
+  expect(seen.unmocked).toEqual([]);
+});
+
+test("Settings → Data sources: an expired Questrade token asks for a new one; Status lists the source", async ({ page }) => {
+  await fakeDesktop(page);
+  await mockEngine(page);
+  await page.route("**/api/sources/questrade", (r) => r.fulfill({ json: questradeStatus("expired"), headers: { "Access-Control-Allow-Origin": "*" } }));
+  await page.goto("/settings");
+  const card = page.locator("section.card", { has: page.getByRole("heading", { name: "Questrade" }) });
+  await expect(card.locator(".card-sub")).toHaveText("token expired");
+  await expect(card.locator(".warn-box")).toContainText("Paste a new refresh token below.");
+  await expect(card.getByText("Replace refresh token")).toBeVisible();
+  await expect(card.getByRole("button", { name: "Disconnect" })).toBeVisible();
+  await page.goto("/status");
+  await expect(page.getByText("not connected (Settings → Data sources) · 0/10,500 calls this hour")).toBeVisible();
 });
 
 test("populating the last session after hours: progress in Settings and Status, and empty views say so", async ({ page }) => {

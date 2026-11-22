@@ -87,6 +87,7 @@ export function AsOf({ ts, label = "as of" }: { ts: string | null | undefined; l
 
 const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutral"; title: string }> = {
   ibkr: { label: "IBKR", tone: "pos", title: "Interactive Brokers market data via the bridge" },
+  questrade: { label: "Questrade", tone: "pos", title: "Questrade market data, fetched by the engine with your Questrade API token" },
   vendor: { label: "vendor", tone: "warn", title: "Third-party vendor data (may be indicative)" },
   reconstructed: { label: "reconstructed", tone: "warn", title: "Rebuilt from historical daily bars: no bid/ask/OI; IV and delta computed from the close" },
   model: { label: "model", tone: "warn", title: "Priced with a Black-Scholes model" },

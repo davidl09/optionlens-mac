@@ -1,10 +1,11 @@
 // /settings — desktop app settings: the engine (status, restart, data import), the IBKR bridge
-// (live status, connection settings, cancel work), launch at login and updates.
+// (live status, connection settings, cancel work), other data sources (Questrade), launch at login and updates.
 import { FormEvent, useEffect, useState } from "react";
 import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus, type LoginItemStatus } from "../../electron/shared/api";
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
+import { QuestradeCard } from "../components/QuestradeCard";
 import { Card, ErrorBox, InfoBox, PathText, Progress, Spinner } from "../components/ui";
 import { UpdatesCard } from "../components/UpdatesCard";
 import { desktop } from "../desktop";
@@ -151,6 +152,10 @@ export default function SettingsPage() {
       <div className="grid-2">
         {bridge ? <BridgeStatusCard b={bridge} /> : <Spinner />}
         {settings && <BridgeForm settings={settings} onSave={save} />}
+      </div>
+      <h2 className="section-title">Data sources <small className="muted">besides IBKR; when several deliver a chain, the more complete real-time one is kept (ties: IBKR)</small></h2>
+      <div className="grid-2">
+        <QuestradeCard />
       </div>
       {settings && (
         <Card title="General">

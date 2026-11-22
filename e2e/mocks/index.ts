@@ -18,6 +18,14 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
 
   if (p === "/api/health") return ok({ ok: true });
   if (p === "/api/status") return ok(m.status());
+  if (p === "/api/sources/questrade") return ok(m.questradeStatus());
+  if (p === "/api/sources/questrade/token") {
+    if (method === "DELETE") return ok(m.questradeStatus("disconnected"));
+    const token = (body as { refresh_token?: string } | null)?.refresh_token ?? "";
+    return token === "used-token"
+      ? { status: 422, body: { detail: "Questrade refused the refresh token (it expired, was already used or was revoked). Generate a new one in Questrade's API Centre and paste it here.", code: "token_rejected" } }
+      : ok(m.questradeStatus("connected"));
+  }
   if (p === "/api/search") return ok(m.search(q.get("q") ?? ""));
   if (p === "/api/market/overview") return ok(m.overview());
   if (p === "/api/strategy-templates") return ok(m.TEMPLATES);

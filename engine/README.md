@@ -42,9 +42,12 @@ Tests: `cd engine && uv run pytest -q`.
 
 - Option data is pushed by the app's IBKR bridge through the ingest API (`/api/ingest/*`): chains for the
   chain universe (watchlists, the most liquid `OPTIONLENS_CHAIN_UNIVERSE_SIZE` symbols and recently
-  opened symbols), closing chains, universe-wide underlying option stats and IV/HV history. When
-  `OPTIONLENS_CHAIN_SOURCE` configures a vendor chain source (none by default), the engine also sweeps
-  chains itself. `GET /api/ingest/wants` tells the bridge what to fetch.
+  opened symbols), closing chains, universe-wide underlying option stats and IV/HV history.
+  `GET /api/ingest/wants` tells the bridge what to fetch.
+- With Questrade connected (Settings → Data sources; docs/INTEGRATION.md §8) the engine also sweeps the whole
+  universe's chains itself: hourly in market hours, a closing snapshot at close + 20 min and after-hours fills.
+  When both deliver a chain, the session keeps the better one (closing, real-time, more quoted contracts; ties:
+  IBKR; `OPTIONLENS_CHAIN_SOURCES` sets the order).
 - End of day: the closing chains are archived to `option_eod`. IV rank and percentile, vol history and
   the backtest IV proxy use the engine's own IV30 where it has one, and ingested IBKR IV30 for other dates.
 - From the engine itself: 10 years of daily prices (Nasdaq), earnings dates and EPS, dividend calendar

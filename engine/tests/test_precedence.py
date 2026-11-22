@@ -63,6 +63,8 @@ def test_real_time_final_beats_delayed_ibkr_archive_and_metrics(tmpdb, payload):
     m = metrics_repo.get_metrics("AAPL", FRI)
     assert m["source"] == "questrade" and m["chain_final"] is True and m["chain_quoted"] > 0 and m["close"] == 350.0
     assert options_repo.latest_source("AAPL") == "ibkr"                          # latest = newest chain
+    from optionlens.services import symbol_options
+    assert symbol_options._source("AAPL") == {"source": "ibkr"}                  # Chain.source
     later = ny(2026, 11, 20, 16, 40)
     chains.store_chain(dataclasses.replace(snap(payload, later), delayed=True), later, final=True, source="ibkr")
     assert eod_source() == "questrade" and metrics_repo.source_of(FRI, "AAPL") == "questrade"

@@ -121,8 +121,10 @@ test("source badges and chain-universe coverage note", async ({ page }) => {
   await page.goto("/s/AAPL/chain");
   await expect(page.locator(".chain-source")).toContainText("IBKR");
   await expect(page.locator(".chain-source")).toContainText("delayed");
+  await page.goto("/s/MSFT/chain");
+  await expect(page.locator(".chain-source .badge")).toHaveText("Questrade");                // real-time: no delayed badge
   await page.goto("/status");
-  await expect(page.getByText("Data sources")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
   await expect(page.getByText("optionlens-mac 0.1.0")).toBeVisible();
   clean(p);
 });

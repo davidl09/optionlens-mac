@@ -77,7 +77,7 @@ export function chain(sym: string, expiry: string | null): Chain {
   return {
     symbol: sym, underlying: quote(sym), asof: NOW, expiries: expiries(), expiry: exp, strikes: STRIKES,
     calls: STRIKES.map((k) => optionRow(sym, exp, "C", k)), puts: STRIKES.map((k) => optionRow(sym, exp, "P", k)),
-    source: "ibkr", delayed: true,
+    ...(sym === "MSFT" ? { source: "questrade", delayed: false } : { source: "ibkr", delayed: true }),   // MSFT: a Questrade chain
   };
 }
 

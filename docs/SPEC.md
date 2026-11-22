@@ -65,7 +65,8 @@ server/optionlens/
   config.py          Settings (env OPTIONLENS_*): DATA_DIR(default ~/.local/share/optionlens),
                      UNIVERSE_STOCKS(1000), ETF list file, SWEEP_INTERVAL_MIN(30), HOST, PORT(8473),
                      NTFY_URL, SMTP_* (optional), RISK_FREE_RATE, TZ, API_TOKEN, PARENT_PID,
-                     CORS_ORIGINS, CHAIN_UNIVERSE_SIZE, CHAIN_SOURCE (HOST loopback only)
+                     CORS_ORIGINS, CHAIN_UNIVERSE_SIZE, CHAIN_SOURCES, QUESTRADE_EXPIRIES,
+                     QUESTRADE_MONEYNESS (HOST loopback only)
   models.py          frozen dataclasses shared across layers (see §3)
   net.py             one shared httpx.AsyncClient, per-host rate limiter, retry
   sources/           INFRA: parse remote payloads -> models.  cboe.py nasdaq.py treasury.py

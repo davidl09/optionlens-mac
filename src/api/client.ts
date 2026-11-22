@@ -8,7 +8,7 @@ import type {
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
   Fundamentals, ImpliedMoves, Insiders, MarketOverview, NewsItem, Notification, OpenInterest,
   OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, ReportDef, ReportResult,
-  Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
+  QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
   SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist,
 } from "./types";
 
@@ -162,6 +162,10 @@ export interface AlertInput {
 export const api = {
   health: () => get<{ ok: boolean; version?: string }>("/api/health", 0),
   status: () => get<Status>("/api/status", 10_000),
+  questradeStatus: () => get<QuestradeStatus>("/api/sources/questrade", 5_000),
+  /** The token goes in the body only; the answer never contains it. */
+  connectQuestrade: (refreshToken: string) => mutate<QuestradeStatus>("POST", "/api/sources/questrade/token", { refresh_token: refreshToken }, ["/api/sources", "/api/status"]),
+  disconnectQuestrade: () => mutate<QuestradeStatus>("DELETE", "/api/sources/questrade/token", undefined, ["/api/sources", "/api/status"]),
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),
 

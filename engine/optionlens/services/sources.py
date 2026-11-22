@@ -2,6 +2,8 @@
 connection (paste / forget a refresh token) and its status. Tokens are never returned or logged."""
 from __future__ import annotations
 
+import asyncio
+
 from ..repo import jobs as jobs_repo
 from ..repo import options as options_repo
 from ..sources import chain_source, questrade
@@ -69,7 +71,7 @@ async def connect_questrade(refresh_token: str) -> dict:
         raise BadRequest(str(e), "token_rejected") from None
     except questrade.TokenError as e:
         raise BadRequest(str(e), UPSTREAM) from None
-    return questrade_status()
+    return await asyncio.to_thread(questrade_status)
 
 
 def disconnect_questrade() -> dict:
