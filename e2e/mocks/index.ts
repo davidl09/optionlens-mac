@@ -1,6 +1,7 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
 import type { CalcRequest, Watchlist } from "../../src/api/types";
 import * as m from "./market";
+import * as refresh from "./refresh";
 import { reportResult, REPORT_DEFS } from "./reports";
 import * as s from "./symbol";
 
@@ -17,6 +18,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
   const syms = (q.get("symbols") ?? "").split(",").filter(Boolean);
 
   if (p === "/api/health") return ok({ ok: true });
+  if (p === "/api/ingest/refresh-result" && method === "POST") return ok(refresh.report(body as Parameters<typeof refresh.report>[0]));
   if (p === "/api/status") return ok(m.status());
   if (p === "/api/sources/questrade") return ok(m.questradeStatus());
   if (p === "/api/sources/questrade/token") {
@@ -69,6 +71,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
     const tail = parts.slice(3).join("/");
     const lookback = Number(q.get("lookback") ?? 12), entry = Number(q.get("entry") ?? -1), exit = Number(q.get("exit") ?? 1);
     if (sym === "NOPE") return { status: 404, body: { detail: "Unknown symbol NOPE" } };
+    if (parts[3] === "refresh") return ok(method === "POST" ? refresh.start(sym) : refresh.status(sym));
     const noChain = s.NO_CHAIN[sym];
     if (noChain && CHAIN_ENDPOINTS.has(parts[3])) {
       return { status: 404, body: { detail: noChain === "no_options" ? `${sym} lists no options` : `no option chain for ${sym}`, code: noChain } };

@@ -1,6 +1,6 @@
-"""On-demand work triggered by API requests: symbol visits (chain freshness from an available server-side
-ChainSource, e.g. Questrade), first-visit history, cached Nasdaq fundamentals. Concurrent requests for the same symbol
-share one fetch (per-symbol lock)."""
+"""On-demand work triggered by API requests: symbol visits (first-visit history, the visit itself), cached Nasdaq
+fundamentals. Concurrent requests for the same symbol share one fetch (per-symbol lock). On-demand chains are
+services.refresh's."""
 from __future__ import annotations
 
 import asyncio
@@ -12,14 +12,12 @@ from ..models import normalize_symbol
 from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import cache as cache_repo
-from ..repo import options as options_repo
 from ..repo import views as views_repo
-from ..sources import chain_source, nasdaq
-from . import chains, prices
-from ._util import final_since, session_date
+from ..sources import nasdaq
+from . import prices
 from .universe import UnknownSymbol, ensure_symbol
 
-__all__ = ["ensure_fresh", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "UnknownSymbol",
+__all__ = ["visit", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "UnknownSymbol",
            "fetch_calendar", "CACHE_TTL_S", "NEGATIVE_TTL_S"]
 
 _locks: dict[str, asyncio.Lock] = {}
@@ -30,17 +28,6 @@ def _lock(key: str) -> asyncio.Lock:
     if lk is None:
         lk = _locks[key] = asyncio.Lock()
     return lk
-
-
-def is_stale(fetched_at: datetime | None, now: datetime, max_age_s: float) -> bool:
-    """Missing; or, until the current session's closing data has arrived (open, or close..final_since),
-    older than max_age_s; afterwards, fetched before final_since (i.e. not the closing snapshot)."""
-    if fetched_at is None:
-        return True
-    final = final_since(session_date(now))
-    if now < final:
-        return (now - fetched_at).total_seconds() > max_age_s
-    return fetched_at < final
 
 
 VIEW_RECORD_INTERVAL_S = 3600   # a symbol's "opened" time is written at most this often
@@ -55,26 +42,16 @@ def _record_view(symbol: str, now: datetime) -> None:
         views_repo.record_view(symbol, now)
 
 
-async def ensure_fresh(symbol: str, max_age_s: float = 120) -> bool:
-    """Make sure the symbol is known (symbols row, price history on first visit) and record the visit.
-    With an available server-side ChainSource (the first in settings.chain_sources), a stale chain (see is_stale)
-    is refetched once from it; without one nothing is fetched: the stored chain (pushed by the IBKR bridge) is
-    served.
-    Returns whether a chain is stored. Raises UnknownSymbol for symbols Nasdaq does not know."""
+async def visit(symbol: str) -> dict:
+    """The user opened `symbol`: make sure it is known (symbols row, price history on first visit) and record the
+    visit (it feeds the bridge's chain universe). Chains are not fetched here: the page starts a refresh round
+    (services.refresh). Returns the symbols row. Raises UnknownSymbol for symbols Nasdaq does not know."""
     symbol = normalize_symbol(symbol)
-    async with _lock(f"chain:{symbol}"):
+    async with _lock(f"visit:{symbol}"):
         row = await ensure_symbol(symbol)
         await ensure_history(symbol, row)
         await asyncio.to_thread(_record_view, symbol, datetime.now(timezone.utc))
-        fetched = await asyncio.to_thread(options_repo.latest_fetched_at, symbol)
-        srcs = chain_source.available()
-        if not srcs or row.get("optionable") is False or not is_stale(fetched, now_ny(), max_age_s):
-            return fetched is not None
-        try:
-            snap = await chains.refresh_chain(srcs[0], symbol)
-        except (FetchError, chain_source.NotListed):
-            return fetched is not None  # serve what we have
-        return snap is not None or fetched is not None
+        return row
 
 
 async def ensure_history(symbol: str, row: dict | None = None) -> int:

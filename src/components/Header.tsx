@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import type { ReportDef } from "../api/types";
 import { useApi } from "../api/useApi";
 import { useTheme } from "../state/theme";
-import { BridgeIndicator } from "./Desktop";
+import { SourcesIndicator } from "./Desktop";
 import { NotificationBell } from "./NotificationBell";
 import { SymbolSearch } from "./SymbolSearch";
 import { useClickOutside } from "./ui";
@@ -105,7 +105,7 @@ export function Header() {
         </nav>
         <div className="header-tools">
           <SymbolSearch onNavigate={closeAll} />
-          <BridgeIndicator />
+          <SourcesIndicator />
           <NotificationBell />
           <button className="icon-btn" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title="Toggle theme">
             {theme === "dark"
@@ -121,7 +121,7 @@ export function Header() {
 export function Footer() {
   return (
     <footer className="app-footer">
-      <span>OptionLens · data from IBKR (real-time or <span className="badge info">delayed</span> per your subscriptions) · model-priced rows are labelled <span className="badge warn">model</span></span>
+      <span>OptionLens · option data from IBKR and/or Questrade (real-time or <span className="badge info">delayed</span> per your subscriptions) · model-priced rows are labelled <span className="badge warn">model</span></span>
       <span><NavLink to="/status">Data status</NavLink> · <NavLink to="/about">About & limitations</NavLink></span>
     </footer>
   );

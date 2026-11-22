@@ -9,7 +9,7 @@ from fastapi import APIRouter
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
 from ..models import normalize_symbol
-from ..services import ingest
+from ..services import ingest, refresh
 from .deps import respond, symbol_param
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
@@ -244,6 +244,20 @@ async def option_bars(req: OptionBarsIn):
 @router.post("/ack-wants")
 async def ack_wants(req: AckWantsIn):
     return await respond(ingest.ack_wants, req.model_dump())
+
+
+class RefreshResultIn(_In):
+    source: Source
+    symbol: Symbol
+    status: Literal["pending", "refreshed", "fresh", "no-options", "unavailable", "failed"]
+    message: Annotated[str, Field(max_length=500)] | None = None
+    waiting_for: Literal["contract-server", "market-hours"] | None = None
+
+
+@router.post("/refresh-result")
+async def refresh_result(req: RefreshResultIn):
+    """The bridge's outcome of an on-demand refresh (docs/INTEGRATION.md §7)."""
+    return await respond(refresh.report, req.symbol, req.source, req.status, req.message, req.waiting_for)
 
 
 @router.get("/wants")

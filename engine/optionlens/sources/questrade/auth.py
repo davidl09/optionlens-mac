@@ -8,6 +8,9 @@ token, which replaces the old one at once (the old one is spent).
 - An access token is refreshed shortly before `expires_in` runs out, and after a 401 (TokenManager.invalidate).
 - Questrade refusing the refresh token (expired, already used, revoked) -> state "expired": the user must paste
   a new one. Network or server trouble -> state "error"; the token is kept and the next call retries.
+- The API refusing a call for an auth / permission reason (client.py, errors.py "auth": e.g. 403 code 1016, the
+  app lacks the market-data permission) -> state "needs_attention" (flag), persisted: no further calls (not even
+  token refreshes) until a new token is pasted.
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ RETRY_AFTER_S = 60.0            # after a transient refresh failure, calls fail 
 REJECTED = ("Questrade refused the refresh token (it expired, was already used or was revoked). "
             "Generate a new one in Questrade's API Centre and paste it here.")
 
-State = Literal["disconnected", "connected", "expired", "error"]
+State = Literal["disconnected", "connected", "expired", "error", "needs_attention"]
 
 
 class TokenError(Exception):
@@ -47,6 +50,10 @@ class TokenRejected(TokenError):
 
 class NotConnected(TokenError):
     """No refresh token stored."""
+
+
+class NeedsAttention(TokenError):
+    """The API refused a call for an auth / permission reason (state needs_attention): a new token must be pasted."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +109,7 @@ class TokenManager:
         self.state: State = rec.get("state", "connected") if self._refresh_token else "disconnected"
         self.detail: str | None = rec.get("detail")
         self.refreshed_at: str | None = rec.get("refreshed_at")
+        self.reason: str | None = rec.get("reason") if self.state == "needs_attention" else None
 
     def unusable(self) -> str | None:
         """Why no call can be made now (not connected, token refused, waiting after a failed refresh), else None."""
@@ -109,6 +117,8 @@ class TokenManager:
             return "not connected"
         if self.state == "expired":
             return "the refresh token was refused: paste a new one"
+        if self.state == "needs_attention":
+            return self.detail or "Questrade refused access: paste a new token"
         if self._access is None and self.clock() < self._retry_at:
             return self.detail or "waiting to retry the login"
         return None
@@ -127,6 +137,8 @@ class TokenManager:
                 raise NotConnected("Questrade is not connected: paste a refresh token in Settings → Data sources")
             if self.state == "expired":
                 raise TokenRejected(REJECTED)
+            if self.state == "needs_attention":
+                raise NeedsAttention(self.detail or "Questrade refused access: paste a new token")
             if self.clock() < self._retry_at:
                 raise TokenError(self.detail or "waiting to retry the Questrade login")
             return await self._refresh(self._refresh_token)
@@ -136,27 +148,37 @@ class TokenManager:
         if self._access is used:
             self._access = None
 
+    def flag(self, detail: str, reason: str | None = None) -> None:
+        """The API refused a call for an auth / permission reason (`detail`: what to do; `reason`: the short form,
+        e.g. "403 code 1016 (missing market-data permission)"): stop calling until a new token is pasted (persisted
+        with the token, so a restart does not retry)."""
+        self._access = None
+        self.reason = reason
+        self._record("needs_attention", detail)
+
     async def connect(self, refresh_token: str) -> dict:
-        """Redeem a pasted refresh token (replacing any stored one). Raises TokenRejected / TokenError."""
+        """Redeem a pasted refresh token (replacing any stored one; clears needs_attention). Raises TokenRejected /
+        TokenError."""
         token = refresh_token.strip()
         if not token or any(ch.isspace() for ch in token):
             raise TokenRejected("That does not look like a Questrade refresh token (copy it from the API Centre).")
         async with self._lock:
             self._access = None
             await self._refresh(token, pasted=True)
+            self._retry_at = 0.0
         return self.status()
 
     def disconnect(self) -> None:
         """Forget the stored token (Questrade's API Centre can revoke it)."""
         self._access, self._refresh_token = None, None
         self.store.clear()
-        self.state, self.detail, self.refreshed_at = "disconnected", None, None
+        self.state, self.detail, self.refreshed_at, self.reason = "disconnected", None, None, None
 
     async def keepalive(self, max_age_s: float) -> bool:
         """Refresh when the last refresh is older than `max_age_s`, so an idle refresh token does not lapse.
         Returns whether it refreshed; TokenError as access()."""
         last = datetime.fromisoformat(self.refreshed_at).timestamp() if self.refreshed_at else 0.0
-        if self._refresh_token is None or self.state == "expired" or self.clock() - last < max_age_s:
+        if self._refresh_token is None or self.state in ("expired", "needs_attention") or self.clock() - last < max_age_s:
             return False
         async with self._lock:
             await self._refresh(self._refresh_token)
@@ -165,11 +187,13 @@ class TokenManager:
     # ------------------------------------------------------------------ internals (caller holds the lock)
     def _record(self, state: State, detail: str | None) -> None:
         self.state, self.detail = state, detail
+        if state != "needs_attention":
+            self.reason = None
         if self._refresh_token is None:
             return
         try:
             self.store.save({"refresh_token": self._refresh_token, "state": state, "detail": detail,
-                             "refreshed_at": self.refreshed_at})
+                             "refreshed_at": self.refreshed_at, "reason": self.reason})
         except OSError as e:
             self.state, self.detail = "error", f"Could not save the Questrade token: {e.strerror or type(e).__name__}"
             log.error("questrade: could not save the token file (%s)", e.strerror or type(e).__name__)

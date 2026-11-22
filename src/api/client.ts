@@ -4,6 +4,7 @@
 // In the desktop app the engine's base URL and per-launch token come from the preload (memory only,
 // never persisted); in a plain browser requests are same-origin without a token.
 import type {
+  RefreshStatus,
   Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain,
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
   Fundamentals, ImpliedMoves, Insiders, MarketOverview, NewsItem, Notification, OpenInterest,
@@ -169,6 +170,9 @@ export const api = {
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),
 
+  /** Starts (or joins) the on-demand refresh round of every connected chain source (INTEGRATION.md §7). */
+  startRefresh: (s: string) => request<RefreshStatus>("POST", `${sym(s)}/refresh`, undefined, GET_TIMEOUT_MS),
+  refreshStatus: (s: string) => get<RefreshStatus>(`${sym(s)}/refresh`, 0),
   summary: (s: string) => get<SymbolSummary>(`${sym(s)}/summary`),
   bars: (s: string, range: string) => get<Bar[]>(`${sym(s)}/bars${qs({ range })}`),
   priceAction: (s: string, range = "1y") => get<PriceAction>(`${sym(s)}/price-action${qs({ range })}`),

@@ -100,6 +100,7 @@ export function AboutPage() {
         <Card title="Where the data comes from">
           <ul className="prose-list">
             <li><b>Interactive Brokers (IBKR bridge)</b> — option chains (bid/ask, volume, open interest, model greeks), per-underlying option volume / open interest / IV for the whole universe, IV and HV history, VIX-family quotes and history, pushed from your IB Gateway or TWS. Real-time where your IBKR account has the subscription, otherwise 15-minute delayed (labelled <span className="badge warn">delayed</span>).</li>
+            <li><b>Questrade</b> — option chains (bid/ask, volume, open interest, IV and greeks) and underlying quotes for the whole universe, fetched by the engine with your Questrade API token (Settings → Data sources). Real-time with a Questrade real-time data package, otherwise delayed (labelled). When both IBKR and Questrade deliver a chain, the better one is used: a closing snapshot over an intraday one, real-time over delayed, more quoted contracts, then the fresher fetch.</li>
             <li><b>Nasdaq public endpoints</b> — daily price history, earnings and dividend calendars, dividend history, company profile, financial statements, insider filings, headlines and extended-hours quotes.</li>
             <li><b>U.S. Treasury</b> — the 13-week bill rate, used as the risk-free rate in option models.</li>
             <li>Everything else (IV rank, term structure, skew, expected moves, backtests…) is computed locally from those inputs.</li>
@@ -111,7 +112,7 @@ export function AboutPage() {
             <li>Implied-volatility history (and therefore IV rank / percentile) begins on the first day the collector ran. IV rank needs at least 20 stored days.</li>
             <li>Historical option prices are only available from stored end-of-day chains. Where a result needs a price from before that, it is estimated with a Black-Scholes model and the row is labelled <span className="badge warn">model</span>; rows from stored prices count as real.</li>
             <li>The model's volatility input falls back from stored at-the-money IV, to stored 30-day IV, to recent historical volatility scaled by the symbol's typical implied/realized ratio.</li>
-            <li>Full option chains are collected for the <b>chain universe</b> (watchlists, the most liquid symbols, recently opened symbols); chain-based screeners say so in their coverage note. Universe-wide reports use per-underlying IBKR statistics.</li>
+            <li>Full option chains are collected for the whole universe with Questrade connected, otherwise for the <b>chain universe</b> (watchlists, the most liquid symbols, recently opened symbols) from IBKR; chain-based screeners say so in their coverage note. Universe-wide reports use per-underlying IBKR statistics.</li>
             <li>Rows labelled <span className="badge warn">reconstructed</span> were rebuilt from historical daily bars of individual contracts (no bid/ask/OI). Pages show an “as of” time.</li>
           </ul>
         </Card>

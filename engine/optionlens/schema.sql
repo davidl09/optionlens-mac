@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS quotes_latest (
     source VARCHAR                             -- who supplied it (docs/INTEGRATION.md §5)
 );
 
--- Replaced per symbol on every chain fetch (a chain older than the stored one is ignored). ts = fetch time.
+-- The served chain per symbol, replaced when a chain wins jobs/precedence.py against it. ts = fetch time.
 CREATE TABLE IF NOT EXISTS option_latest (
     symbol VARCHAR NOT NULL, osi VARCHAR PRIMARY KEY, expiry DATE NOT NULL, strike DOUBLE NOT NULL,
     "right" VARCHAR NOT NULL, bid DOUBLE, ask DOUBLE, last DOUBLE, change DOUBLE,
@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS option_latest (
 
 -- Final sweep of each trading day. Logical key (date, osi); no PK index on purpose (billions of rows
 -- at full retention; an ART index would not fit in memory). Uniqueness is kept by delete-then-insert
--- per (date, symbol) in repo.options. source: 'ibkr' | 'vendor' | 'cboe' (legacy) | 'reconstructed' (from
--- historical contract bars: bid/ask/oi NULL, IV/greeks computed). An IBKR archive is never replaced by
--- another source's, and a reconstructed archive never replaces any other.
+-- per (date, symbol) in repo.options. source: 'ibkr' | 'questrade' | 'vendor' | 'cboe' (legacy) | 'reconstructed'
+-- (from historical contract bars: bid/ask/oi NULL, IV/greeks computed). Which real archive wins follows
+-- jobs/precedence.py; a reconstructed archive never replaces any other.
 CREATE TABLE IF NOT EXISTS option_eod (
     date DATE NOT NULL, symbol VARCHAR NOT NULL, osi VARCHAR NOT NULL, expiry DATE NOT NULL,
     strike DOUBLE NOT NULL, "right" VARCHAR NOT NULL, bid DOUBLE, ask DOUBLE, last DOUBLE,
@@ -200,3 +200,9 @@ ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS after_hours BOOLEAN;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_final BOOLEAN;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_quoted INTEGER;
 ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
+-- Chain precedence without a source tie-break (docs/INTEGRATION.md §6 "Chain precedence"): the served chain is chosen
+-- like a session's metrics row and archive, so option_latest records whether it is a closing snapshot, and the metrics
+-- row / archive when the chain behind them was fetched (the last tie-break: fresher wins). NULL = older rows (unknown).
+ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS final BOOLEAN;
+ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_fetched_at TIMESTAMP;
+ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP;

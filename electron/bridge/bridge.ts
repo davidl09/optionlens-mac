@@ -8,7 +8,8 @@ import { FULL_CHAIN, underlyingContract, type ChainShape } from "./chain";
 import { COMPETING_MESSAGE, COMPETING_PAUSE_MS, TwsSupervisor } from "./connection";
 import { ContractCache, type ContractStore } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
-import type { IngestApi } from "./ingest";
+import { FailureLog } from "./failures";
+import type { IngestApi, RefreshResultBody } from "./ingest";
 import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
@@ -39,6 +40,8 @@ export interface BridgeDeps {
 }
 
 const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
+/** Scheduled chain work: a round of it is the IBKR source's "last sweep" (Settings → Data sources). */
+const CHAIN_ROUND_KINDS: readonly JobKind[] = ["chain-universe", "eod-chains"];
 
 /** Tasks that need the same market-data permission (one kind of data for one symbol). */
 interface Group { id: string; label: string }
@@ -113,6 +116,11 @@ export class Bridge {
   private populate: { sessionDate: string; done: number; total: number } | null = null;
   /** A chain fill wanted while the stats fill still ran: the wants are polled again once the stats are done. */
   private chainFillDeferred = false;
+  /** Failure reasons of IBKR work (grouped, last 24 h). */
+  private readonly failures: FailureLog;
+  /** Chain tasks (universe, closing chains, fills) since the chain queues were last idle, and the last such round. */
+  private chainRound = { done: 0, failed: 0 };
+  private lastChainRound: { at: string; detail: string } | null = null;
 
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
@@ -122,6 +130,7 @@ export class Bridge {
     this.contracts = new ContractCache(d.contractStore ?? null);
     this.contractServer = new ContractServer(() => this.supervisor.state().farms.secDef.state, this.now);
     this.optionsFeed = new OptionsFeed(d.optionsFeedStore ?? null);
+    this.failures = new FailureLog(this.now);
     this.supervisor = new TwsSupervisor({
       connector: d.connector, settings: d.settings, log: d.log, now: this.now,
       onSession: (s) => this.onSession(s),
@@ -171,7 +180,15 @@ export class Bridge {
       current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: this.backfill(),
       populate: this.populate ? { ...this.populate } : null,
       farms: c.farms, contractsAvailable: this.contractServer.available(), optionsSubscription: this.optionsFeed.mode,
+      optionsDelayed: this.feed.optionsDelayed, lastChainAt: this.lastChainAt(), lastChainRound: this.lastChainRound,
+      failures: this.failures.top(), linesPerBatch: this.lines.size,
     };
+  }
+
+  private lastChainAt(): string | null {
+    let last = -Infinity;
+    for (const t of this.lastChainPush.values()) last = Math.max(last, t);
+    return Number.isFinite(last) ? new Date(last).toISOString() : null;
   }
 
   /**
@@ -223,8 +240,24 @@ export class Bridge {
     return out;
   }
 
+  /**
+   * An on-demand refresh (the app asks right after starting the engine's refresh round, INTEGRATION.md §7): "pending"
+   * is reported to that round at once, the outcome when known (POST /api/ingest/refresh-result), and returned.
+   */
   async refreshSymbol(symbol: string): Promise<RefreshResult> {
     const sym = symbol.toUpperCase();
+    await this.reportRefresh({ source: "ibkr", symbol: sym, status: "pending", message: null, waiting_for: null });
+    const r = await this.refresh(sym);
+    await this.reportRefresh({ source: "ibkr", symbol: sym, status: r.status,
+      message: "message" in r ? r.message : null, waiting_for: "waitingFor" in r ? r.waitingFor ?? null : null });
+    return r;
+  }
+
+  private async reportRefresh(b: RefreshResultBody): Promise<void> {
+    try { await this.d.ingest.refreshResult(b); } catch (e) { this.d.log.warn(`bridge refresh-result: ${(e as Error).message}`); }
+  }
+
+  private async refresh(sym: string): Promise<RefreshResult> {
     const c = this.supervisor.state();
     if (!this.d.settings().enabled) return { status: "unavailable", message: "The IBKR bridge is turned off." };
     if (!this.session) return { status: "unavailable", message: "Not connected to IB Gateway / TWS." };
@@ -397,11 +430,22 @@ export class Bridge {
     if (counter) counter.total += 1;
     const outcome = this.scheduler.enqueue(t);
     void outcome.then((o) => {
+      if (CHAIN_ROUND_KINDS.includes(t.kind) && !(!o.ok && o.cancelled)) this.chainDone(o.ok);
       if (!counter || (!o.ok && o.cancelled)) return;
       if (o.ok) counter.done += 1; else counter.failed += 1;
       this.emit();
     });
     return outcome;
+  }
+
+  /** Counts a finished chain task; once no chain work is queued the round is the "last sweep" of the IBKR source. */
+  private chainDone(ok: boolean): void {
+    if (ok) this.chainRound.done += 1; else this.chainRound.failed += 1;
+    if (!CHAIN_ROUND_KINDS.every((k) => this.idle(k))) return;
+    const { done, failed } = this.chainRound;
+    this.lastChainRound = { at: new Date(this.now()).toISOString(), detail: `${done} chain${done === 1 ? "" : "s"}${failed ? `, ${failed} failed` : ""}` };
+    this.chainRound = { done: 0, failed: 0 };
+    this.emit();
   }
 
   private isDenied(group: string | undefined): boolean {
@@ -438,7 +482,7 @@ export class Bridge {
    * quotes the account cannot get now are skipped. An on-demand refresh reports both instead (refreshSymbol).
    */
   private task(kind: JobKind, key: string, label: string, work: (ctx: JobContext) => Promise<void>,
-    o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group } = {}): Task {
+    o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group; symbol?: string } = {}): Task {
     return {
       key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id,
       // Historical requests (the pacer-gated tasks) give way to an on-demand refresh at once: aborted, re-queued.
@@ -455,6 +499,7 @@ export class Bridge {
           if (e instanceof OptionQuotesClosed) return;
           if (isCompetingSession(e)) this.supervisor.pause(COMPETING_MESSAGE, COMPETING_PAUSE_MS);
           if (o.group && isPermissionError(e)) this.deny(o.group.id, o.group.label, e);
+          this.failures.record((e as Error).message, o.symbol);
           this.lastError = `${label}: ${(e as Error).message}`;
           this.d.log.warn(`bridge ${this.lastError}`);
           throw e;
@@ -479,7 +524,7 @@ export class Bridge {
       this.feed.stocksDelayed = r.underlyingDelayed;
       this.lastChainPush.set(symbol, this.now());
       this.pushed();
-    }, { ledgerKey: final ? ledgerKey.eod(sessionDate, symbol) : undefined });
+    }, { ledgerKey: final ? ledgerKey.eod(sessionDate, symbol) : undefined, symbol });
   }
 
   private statsTask(symbols: string[], sessionDate: string): Task {

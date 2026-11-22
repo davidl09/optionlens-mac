@@ -112,20 +112,19 @@ def ensure_known(symbol: str) -> dict:
     return row
 
 
-REFRESH_MIN_INTERVAL_S = 120.0   # one on-demand chain attempt per symbol per interval (backoff on upstream errors)
-_attempts: dict[str, float] = {}
+REFRESH_MIN_INTERVAL_S = 120.0   # a visit is recorded at most once per symbol per interval; also the bridge's
+_attempts: dict[str, float] = {}  # on-demand freshness bound (wants.chains_on_demand_max_age_s)
 
 
 def refresh(symbol: str) -> dict:
-    """ensure_known + fetch the chain if stale (SPEC §5 on-demand), at most one attempt per symbol
-    every REFRESH_MIN_INTERVAL_S (a failed upstream fetch serves stored data meanwhile).
-    Returns the symbols row."""
+    """ensure_known + record the visit (ondemand.visit), at most once per symbol every REFRESH_MIN_INTERVAL_S.
+    Chains are not fetched here: the page starts a refresh round (services.refresh). Returns the symbols row."""
     sym = normalize_symbol(symbol)
     row = symbols_repo.get_symbol(sym)
     last = _attempts.get(sym)
     if row is not None and last is not None and time.monotonic() - last < REFRESH_MIN_INTERVAL_S:
         return row
-    run_async(ondemand.ensure_fresh, sym)
+    run_async(ondemand.visit, sym)
     _attempts[sym] = time.monotonic()
     row = symbols_repo.get_symbol(sym)
     if row is None:

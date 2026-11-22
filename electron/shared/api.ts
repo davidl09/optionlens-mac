@@ -92,6 +92,16 @@ export interface BridgeStatus {
   contractsAvailable: boolean;
   /** US options market data of the account: "delayed_only" = no OPRA subscription, option quotes in market hours only. */
   optionsSubscription: "unknown" | "realtime" | "delayed_only";
+  /** Whether the last chain's option quotes were delayed (null: no chain fetched yet). */
+  optionsDelayed: boolean | null;
+  /** When the last chain was pushed (any kind). */
+  lastChainAt: string | null;
+  /** The last round of scheduled chain work (universe, closing chains, fills) once its queue emptied. */
+  lastChainRound: { at: string; detail: string } | null;
+  /** Most frequent failure reasons of the last 24 h (at most 3). */
+  failures: { reason: string; count: number }[];
+  /** Market-data lines used per batch (of the account's limit, Settings → Market data lines). */
+  linesPerBatch: number;
 }
 
 export type RefreshResult =

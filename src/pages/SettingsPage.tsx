@@ -1,16 +1,22 @@
-// /settings — desktop app settings: the engine (status, restart, data import), the IBKR bridge
-// (live status, connection settings, cancel work), other data sources (Questrade), launch at login and updates.
+// /settings — desktop app settings: the engine (status, restart, data import), the chain sources side by side (IBKR and
+// Questrade, the same status fields), the IBKR bridge (live work, connection settings, cancel work), launch at login and
+// updates.
 import { FormEvent, useEffect, useState } from "react";
 import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus, type LoginItemStatus } from "../../electron/shared/api";
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
 import { QuestradeCard } from "../components/QuestradeCard";
+import { SourceStateBadge, SourceSummary } from "../components/SourceSummary";
+import { ibkrView } from "../lib/sources";
 import { Card, ErrorBox, InfoBox, PathText, Progress, Spinner } from "../components/ui";
 import { UpdatesCard } from "../components/UpdatesCard";
 import { desktop } from "../desktop";
 import { farmsSummary, optionsSubscriptionText, populateText } from "../lib/status";
 import { useBridgeStatus, useEngineStatus, useUpdateStatus } from "../state/desktop";
+
+export const DATA_SOURCES_TEXT =
+  "IBKR and Questrade are equal sources: when both deliver a chain, the better one is shown — a closing snapshot over an intraday one, real-time over delayed, more quoted contracts, then the fresher fetch. With both connected, Questrade sweeps the universe and IBKR adds what only it provides (IV/HV history, index history, option-bar catch-up) and the symbols Questrade could not fetch; if Questrade is unavailable, IBKR takes over its chains.";
 
 const PORTS: { value: string; label: string }[] = [
   { value: "auto", label: "Automatic (4001 → 7496 → 4002 → 7497)" },
@@ -50,6 +56,17 @@ function EngineCard({ engine }: { engine: EngineStatus }) {
         <button className="btn" onClick={() => void importData()} disabled={busy}>{busy ? `Importing…${progress !== null ? ` ${Math.round(progress * 100)}%` : ""}` : "Import data…"}</button>
       </div>
       {msg && (msg.ok ? <InfoBox>{msg.text}</InfoBox> : <ErrorBox error={msg.text} />)}
+    </Card>
+  );
+}
+
+/** IBKR as a chain source: the same fields as Questrade's card (the bridge's own work is in the card below). */
+function IbkrSourceCard({ b }: { b: BridgeStatus }) {
+  const v = ibkrView(b);
+  return (
+    <Card title="IBKR" subtitle={<SourceStateBadge v={v} />}>
+      <SourceSummary v={v} />
+      <p className="muted small">Via the IBKR bridge and your IB Gateway / TWS on this computer (connection settings below).</p>
     </Card>
   );
 }
@@ -149,13 +166,15 @@ export default function SettingsPage() {
     <div className="stack">
       <div className="page-head"><h1 className="page-title">Settings</h1></div>
       {engine ? <EngineCard engine={engine} /> : <Spinner />}
+      <h2 className="section-title">Data sources <small className="muted">{DATA_SOURCES_TEXT}</small></h2>
+      <div className="grid-2">
+        {bridge ? <IbkrSourceCard b={bridge} /> : <Spinner />}
+        <QuestradeCard />
+      </div>
+      <h2 className="section-title">IBKR bridge</h2>
       <div className="grid-2">
         {bridge ? <BridgeStatusCard b={bridge} /> : <Spinner />}
         {settings && <BridgeForm settings={settings} onSave={save} />}
-      </div>
-      <h2 className="section-title">Data sources <small className="muted">besides IBKR; when several deliver a chain, the more complete real-time one is kept (ties: IBKR)</small></h2>
-      <div className="grid-2">
-        <QuestradeCard />
       </div>
       {settings && (
         <Card title="General">

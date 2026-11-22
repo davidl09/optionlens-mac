@@ -54,9 +54,13 @@ export interface Status {
 
 export type FarmState = "ok" | "inactive" | "connecting" | "down" | "unknown";
 
+/** A failure reason of a source and how often it occurred in the last 24 h, e.g. 1141 × "403 code 1016 (missing market-data permission)". */
+export interface FailureCount { reason: string; count: number }
+
 /** GET /api/sources/questrade, and POST / DELETE /api/sources/questrade/token (INTEGRATION.md §8). Never carries a token. */
-export type QuestradeState = "disconnected" | "connected" | "expired" | "error";
+export type QuestradeState = "disconnected" | "connected" | "expired" | "error" | "needs_attention";
 export interface QuestradeStatus {
+  /** `detail`: what is wrong / what to do (needs_attention: e.g. the app lacks the market-data permission). */
   name: string; state: QuestradeState; detail: string | null; refreshed_at: ISODateTime | null;
   /** Calls started in the last hour, of the engine's hourly budget (70% of Questrade's 15,000). */
   calls_last_hour: number; hour_budget: number;
@@ -66,6 +70,30 @@ export interface QuestradeStatus {
   delayed: boolean | null;
   expiries: number; moneyness: number;
   last_chain_at: ISODateTime | null; last_sweep_at: ISODateTime | null; last_sweep_detail: string | null;
+  /** Most frequent failure reasons of the last 24 h, most frequent first (at most 3). */
+  failures: FailureCount[];
+  /** The one market-data call made right after a token was saved ("Token OK: market data permitted" or what failed). */
+  verification: { ok: boolean; message: string; at: ISODateTime } | null;
+}
+
+/**
+ * GET / POST /api/symbol/{sym}/refresh (INTEGRATION.md §7): the on-demand refresh round of every connected chain
+ * source, and the chain served now (the best one per §6 "Chain precedence").
+ */
+export type RefreshState = "pending" | "ok" | "no_options" | "unavailable" | "failed";
+export interface RefreshSource {
+  name: string; state: RefreshState; at: ISODateTime;
+  /** Why (failed / unavailable), e.g. "IBKR's contract server is unavailable…" or Questrade's missing permission. */
+  message: string | null;
+  /** IBKR "unavailable": what the bridge waits for before it can fetch. */
+  waiting_for: "contract-server" | "market-hours" | null;
+  /** failed: the short form, e.g. "403 code 1016 (missing market-data permission)". */
+  reason: string | null;
+}
+export interface RefreshStatus {
+  symbol: string; started_at: ISODateTime | null; pending: boolean;
+  sources: RefreshSource[];
+  served: { source: DataSource | null; fetched_at: ISODateTime; delayed: boolean | null } | null;
 }
 
 // ---------------- market overview ----------------

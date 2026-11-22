@@ -210,16 +210,22 @@ stopped. You can cancel bridge work from the menu-bar menu or from Settings.
 With a Questrade account the engine can collect option chains itself — the whole universe, also without IB Gateway:
 
 1. Log in to Questrade, open **API Centre** (menu under your name), activate the API and accept the agreement.
-2. **Register a personal app** (any name), then under it **New manual authorization** → **Generate new token** →
-   **Copy token**.
-3. In OptionLens open **Settings → Data sources → Questrade**, paste the token and click **Connect**.
+2. **Register a personal app** (any name) with the permission **Retrieve delayed and real-time market data**, then
+   under it **New manual authorization** → **Generate new token** → **Copy token**.
+3. In OptionLens open **Settings → Data sources → Questrade**, paste the token and click **Connect**. The engine
+   checks it with one market-data call and says "Token OK: market data permitted" or what is wrong (e.g. the app
+   lacks the market-data permission: enable it, generate a new token, paste it again).
 
 The engine exchanges the token at once and keeps the new one Questrade returns (stored only on this computer, in
 the app's data folder, readable by your user only). If the card says **token expired** (a token that was already
 used, revoked or left unused too long), generate a new one the same way. Quotes are real-time only with a Questrade
 real-time data package; otherwise they are delayed and badged so. The engine uses at most 70% of Questrade's API
-limits. When IBKR and Questrade both deliver a chain, OptionLens keeps the closing, real-time, more complete one
-(ties: IBKR); every chain shows its source.
+limits. IBKR and Questrade are equal sources: opening a symbol fetches from both at once, and the better chain is
+shown — a closing snapshot over an intraday one, real-time over delayed, more quoted contracts, then the fresher
+fetch; every chain shows its source. With both connected, Questrade sweeps the universe and IBKR adds what only it
+provides (IV/HV history, index history, option-bar catch-up) plus the symbols Questrade could not fetch; if Questrade
+is unavailable, IBKR takes over its chains. If Questrade refuses access (e.g. a missing permission), it stops at once
+and Settings → Data sources says what to fix.
 
 ## Notifications
 

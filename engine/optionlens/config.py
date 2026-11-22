@@ -64,7 +64,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("app://optionlens",)
     parent_pid: int | None = None          # exit when this process (the app) disappears
     chain_universe_size: int = 150         # most-liquid symbols in the chain universe (besides watchlists)
-    # Chain sources in preference order (ties of equal quality go to the earlier one; jobs/precedence.py):
+    # Enabled chain sources (no order: no source is preferred, jobs/precedence.py):
     # "ibkr-bridge" = chains pushed by the app's IBKR bridge, any other name = a server-side ChainSource
     # (sources/chain_source.py REGISTRY) the engine sweeps itself once it is connected.
     chain_sources: tuple[str, ...] = ("ibkr-bridge", "questrade")

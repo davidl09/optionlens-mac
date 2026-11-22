@@ -70,6 +70,27 @@ def borrow_source_iv(contracts: Iterable[OptionContract], stored: Mapping[str, M
     return out
 
 
+def is_computed(label: str | None) -> bool:
+    """Whether an iv_source / greeks_source label names an engine-computed value."""
+    return label is not None and label.startswith(COMPUTED)
+
+
+def adopt_source_iv(served: Iterable[OptionContract], donor: Iterable[OptionContract]) -> list[OptionContract]:
+    """The `served` contracts whose IV is missing or engine-computed, with the IV a `donor` chain's source gave for the
+    same contract (and the donor's source greeks with it, when it has them; else the served chain's own greeks are
+    kept, even computed ones). Only the changed contracts are returned."""
+    given = {c.osi: c for c in donor if c.iv and c.iv_source and not is_computed(c.iv_source)}
+    out = []
+    for c in served:
+        d = given.get(c.osi)
+        if d is None or (c.iv and not is_computed(c.iv_source)):
+            continue
+        greeks = ({**{k: getattr(d, k) for k in GREEKS}, "greeks_source": d.greeks_source}
+                  if d.delta is not None and d.greeks_source and not is_computed(d.greeks_source) else {})
+        out.append(replace(c, iv=d.iv, iv_source=d.iv_source, **greeks))
+    return out
+
+
 def fill_iv_greeks(contracts: Iterable[OptionContract], *, spot: float | None, asof: datetime, r: float, q: float,
                    session_start: datetime, source: str | None) -> list[OptionContract]:
     """`contracts` with source values labelled `source` and missing IV / greeks computed (see module doc).

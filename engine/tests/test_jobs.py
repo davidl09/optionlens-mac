@@ -97,12 +97,12 @@ def test_server_source_schedules_sweeps(monkeypatch):
 
 def test_chain_source_registry(monkeypatch):
     assert chain_source.server_source_names() == ["questrade"]     # default: ibkr-bridge, questrade
-    assert chain_source.preference() == ("ibkr", "questrade") and chain_source.tag("ibkr-bridge") == "ibkr"
+    assert chain_source.tag("ibkr-bridge") == "ibkr" and chain_source.tag("questrade") == "questrade"
     monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("acme", "ibkr-bridge")})())
     with pytest.raises(ValueError, match="acme"):
         chain_source.server_sources()
     monkeypatch.setitem(chain_source.REGISTRY, "acme", lambda: "SRC")
-    assert chain_source.server_sources() == ["SRC"] and chain_source.preference() == ("acme", "ibkr")
+    assert chain_source.server_sources() == ["SRC"]
 
 
 # ----------------------------------------------------------------------------- run_job
@@ -141,6 +141,9 @@ class FakeVendor:
         self.payload = json.loads((FIX / "cboe_chain_AAPL.json").read_text())
         self.calls: list[str] = []
         self.delay = 0.0
+
+    def connected(self):
+        return True
 
     def unavailable(self):
         return None
@@ -195,7 +198,8 @@ async def test_sweep_pipeline(tmpdb, mocked_vendor, monkeypatch):
         detail = await chains.sweep()
     finally:
         hooks.on_sweep_complete.clear()
-    assert detail.startswith("vendor: 1 chains, 1 not optionable, 4 not listed/skipped, 2 failed")   # indices: not listed
+    assert detail.startswith("vendor: 1 chains, 1 not optionable, 4 not listed, 2 failed")   # indices: not listed
+    assert "(failures: 1 × 503 FetchError; 1 × 403 FetchError)" in detail                # grouped reasons
     assert seen == [(date(2026, 11, 19), ["AAPL"])]
     assert status_repo.row_counts()["option_latest"] == 3386
     assert symbols_repo.get_symbol("AAPL")["optionable"] is True
@@ -246,17 +250,9 @@ def test_eod_refuses_while_market_open():
 
 
 # ----------------------------------------------------------------------------- on-demand
-def test_is_stale():
-    open_now = ny(2026, 11, 19, 11, 0)
-    assert ondemand.is_stale(None, open_now, 120)
-    assert not ondemand.is_stale(open_now - timedelta(seconds=60), open_now, 120)
-    assert ondemand.is_stale(open_now - timedelta(seconds=200), open_now, 120)
-    weekend = ny(2026, 11, 21, 12, 0)
-    assert not ondemand.is_stale(ny(2026, 11, 20, 16, 30), weekend, 120)   # after Friday close
-    assert ondemand.is_stale(ny(2026, 11, 20, 15, 0), weekend, 120)       # intraday Friday data
-
-
-async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_vendor, monkeypatch):
+async def test_refresh_round_dedupes_and_creates_symbol(tmpdb, mocked_vendor, monkeypatch):
+    """Five page loads at once: one visit (the symbol is created), one round, one fetch from the server source."""
+    from optionlens.services import refresh
     mocked_vendor.delay = 0.02
     ondemand._viewed.clear()
 
@@ -268,9 +264,13 @@ async def test_ensure_fresh_dedupes_and_creates_symbol(tmpdb, mocked_vendor, mon
 
     monkeypatch.setattr(prices, "backfill_symbol", no_history)
     monkeypatch.setattr(nasdaq, "fetch_info", info)
-    monkeypatch.setattr(ondemand, "now_ny", lambda: ny(2026, 11, 19, 16, 30))
-    res = await asyncio.gather(*(ondemand.ensure_fresh("aapl") for _ in range(5)))
-    assert all(res) and mocked_vendor.calls == ["AAPL"]
+    res = await asyncio.gather(*(refresh.start("aapl") for _ in range(5)))
+    assert all(r["pending"] for r in res)
+    await asyncio.gather(*refresh._tasks)
+    assert mocked_vendor.calls == ["AAPL"]
+    st = refresh.status("AAPL")
+    assert not st["pending"] and st["sources"][0]["name"] == "vendor" and st["sources"][0]["state"] == "ok"
+    assert st["served"]["source"] == "vendor"
     from optionlens.repo import views as views_repo
     assert views_repo.viewed_since(datetime(2000, 1, 1, tzinfo=timezone.utc)) == ["AAPL"]
     row = symbols_repo.get_symbol("AAPL")

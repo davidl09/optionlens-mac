@@ -5,12 +5,24 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 
-from ..services import symbol, symbol_company, symbol_earnings, symbol_options, symbol_vol
+from ..services import refresh, symbol, symbol_company, symbol_earnings, symbol_options, symbol_vol
 from .deps import respond, symbol_param
+from .json import ApiJSON
 
 router = APIRouter(prefix="/api/symbol/{sym}", tags=["symbol"])
 Sym = Depends(symbol_param)
 Range = Literal["1m", "3m", "6m", "1y", "3y", "5y", "10y", "max"]
+
+
+@router.post("/refresh")
+async def refresh_start(sym: str = Sym):
+    """Start an on-demand refresh round from every connected chain source (docs/INTEGRATION.md §7)."""
+    return ApiJSON(await refresh.start(sym))
+
+
+@router.get("/refresh")
+async def refresh_status(sym: str = Sym):
+    return await respond(refresh.status, sym)
 
 
 @router.get("/summary")

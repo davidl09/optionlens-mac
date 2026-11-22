@@ -7,7 +7,7 @@ import { COLLECTION_END_H, nextCollectionWindow, populateText } from "../lib/sta
 import { useBridgeStatus } from "../state/desktop";
 
 export const CHAIN_COLLECTION_TEXT =
-  "Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET), after hours for a last session that has none yet, and on demand when you open a symbol.";
+  "Option chains are collected from your connected sources (IBKR and/or Questrade) during market hours, after hours for a last session that has none yet, and on demand when you open a symbol.";
 
 /** The next collection: the engine's scheduled sweep when it has one, else the bridge's next window. */
 export function nextCollection(s: Status): string {

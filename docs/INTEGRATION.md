@@ -22,7 +22,7 @@ API against other local processes and web pages.
 | `OPTIONLENS_PARENT_PID` | — | The app's pid: the engine shuts down when that process disappears |
 | `OPTIONLENS_CORS_ORIGINS` | `app://optionlens` | Comma list of allowed browser origins (the Electron renderer origin) |
 | `OPTIONLENS_CHAIN_UNIVERSE_SIZE` | `150` | Most-liquid symbols (by option volume) included in the chain universe besides watchlists and recently opened symbols |
-| `OPTIONLENS_CHAIN_SOURCES` | `ibkr-bridge,questrade` | Chain sources in preference order (ties of equal quality go to the earlier one, §6 "Chain precedence"): `ibkr-bridge` = chains pushed by the bridge; `questrade` = the engine's own Questrade sweeps (§8), active once a token is pasted. Unknown names: the engine refuses to start |
+| `OPTIONLENS_CHAIN_SOURCES` | `ibkr-bridge,questrade` | Enabled chain sources (no order: no source is preferred, §6 "Chain precedence"): `ibkr-bridge` = chains pushed by the bridge; `questrade` = the engine's own Questrade sweeps (§8), active once a token is pasted. Unknown names: the engine refuses to start |
 | `OPTIONLENS_QUESTRADE_EXPIRIES` | `8` | Questrade sweeps: first N expiries (on/after today) |
 | `OPTIONLENS_QUESTRADE_MONEYNESS` | `0.25` | Questrade sweeps: strikes within ±this fraction of the underlying price |
 | `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `<userData>/data` (macOS `~/Library/Application Support/OptionLens/data`, Windows `%APPDATA%\OptionLens\data`, Linux `~/.config/OptionLens/data`) |
@@ -183,6 +183,11 @@ POST /api/ingest/option-bars               // historical daily bars of individua
                       // computed server-side from close + underlying close); never overwrite real rows.
                       // Pushes add to the session's reconstructed archive (same contract = replaced):
                       // the bridge pushes contract by contract
+POST /api/ingest/refresh-result            // an on-demand refresh's state (§7): "pending" when the bridge accepted it,
+{ "source": "ibkr", "symbol": "DELL",      // then its outcome: "refreshed" | "fresh" | "no-options" | "unavailable" |
+  "status": "unavailable",                 // "failed" (RefreshResult)
+  "message": "IBKR's contract server is unavailable; …", "waiting_for": "contract-server" }   // both optional
+→ 200 RefreshStatus (§7)
 POST /api/ingest/ack-wants                 // the bridge accepted (queued) these wants
 { "kind": "option_bars", "items": [ { "symbol": "AAPL", "sessions": ["2026-11-18"] } ] }
 → 200 {"recorded": n_session_symbol_pairs}
@@ -258,20 +263,35 @@ Precedence of one session's `metrics_daily` row (jobs/chains.py), with `after_ho
 - `option_latest` and `quotes_latest` always hold the newest data (`after_hours` on Chain / Quote says when it
   was collected); `option_eod` (the archive) is written only from a closing snapshot (`final`), never from a fill.
 
-**Chain precedence** (jobs/precedence.py), when several sources deliver a chain for one session: within one tier
-of the metrics row (own data / fills) and for the archive, a chain from the source of the stored one always
-replaces it (newer data of that source); a chain from another source replaces it only when it is better, in this
-order: (1) a closing snapshot (`final`) beats an intraday chain; (2) real-time data beats delayed or unknown
-(`delayed`); (3) more quoted contracts — an ask > 0 and some bid, OI or volume, i.e. the rows the archive keeps —
-wins (`metrics_daily.chain_quoted`, `chain_final`; the archive's count and `option_eod.delayed`); (4) all equal:
-the source listed first in `OPTIONLENS_CHAIN_SOURCES` (default IBKR). A reconstructed archive never replaces a real
-one. Every row keeps its `source`. `eod_chains` (wants) leaves out a session's symbols whose archive is from IBKR or
-is real-time data from another source (a delayed IBKR chain could not replace it).
+**Chain precedence** (jobs/precedence.py). IBKR and Questrade are equal sources: whichever chain is better is used, no
+source is preferred. One rule decides the served chain (`option_latest`, what every chain endpoint reads), the session's
+metrics row (within one tier: own data / fills) and its archive (`option_eod`). A chain of a later session always
+replaces the served one. Within one session, two non-final chains fetched more than 15 min apart are not the same
+snapshot: the fresher one wins. Otherwise: (1) a closing snapshot (`final`) beats a chain that is not one; (2)
+real-time data beats delayed or unknown (`delayed`); (3) more quoted contracts — an ask > 0 and some bid, OI or volume,
+i.e. the rows the archive keeps — wins; (4) the fresher fetch wins. The same chain stored again (same source and fetch
+time) replaces itself. Stored for the rule: `option_latest.final`, `metrics_daily.chain_final` / `chain_quoted` /
+`chain_fetched_at`, `option_eod.delayed` / `fetched_at` (rows from before a column existed count as unknown: intraday,
+not real-time, fetched long ago). A reconstructed archive never replaces a real one. Every row keeps its `source`.
+`quotes_latest` holds the newest quote whatever chain is served. `eod_chains` (wants) leaves out a session's symbols
+whose archive is real-time (an IBKR closing chain could win only with more quoted contracts) and those a healthy
+server-side source covers ("Splitting chain work" below).
 
-**IV across sources.** Before the engine computes IV for a contract without a source IV, it takes the IV (and the
-greeks, when the contract has none) that another source sent for the same contract in the same session (the stored
-latest chain, fetched since the session's open), keeping that source's `iv_source` / `greeks_source`. So computed
-values appear only where no source has an IV.
+**IV across sources.** Any source's IV for a contract in the session comes before a computed one. Before the engine
+computes IV for a contract without a source IV, it takes the IV (and the greeks, when the contract has none) that
+another source sent for the same contract in the same session (the served chain, fetched since the session's open),
+keeping that source's `iv_source` / `greeks_source`. And when a chain loses to the served one of the same session,
+the served chain takes the losing chain's source IVs (with its source greeks, when it has them) for its contracts
+whose IV is computed or missing; its metrics row and archive are rebuilt from it where they hold that chain. So
+computed values appear only where no source has an IV.
+
+**Splitting chain work** (jobs/bridge_plan.py `for_bridge`). While a server-side source (Questrade) is healthy —
+connected, not needing attention (§8 "Errors"), and not failing (more than half of its last 50 fetches failed,
+jobs/source_health.py) — it sweeps the whole universe itself, so `chain_universe` (also its after-hours fill) and
+`eod_chains` ask the bridge only for the symbols that source did not cover: its last attempt for the symbol failed, or
+it does not list the symbol (a symbol it was not asked yet counts as covered). IV/HV history, underlying stats, index
+quotes / bars and option-bar catch-up stay the bridge's: only IBKR provides them. When Questrade is unavailable or
+failing, the wants give the bridge the full lists again at the next poll.
 
 The underlying-stats pass also posts each stock's quote (last or mid, bid/ask, open/high/low, previous close,
 volume) to `/api/ingest/quotes` from the same streams. Without a quote of the latest session (none pushed,
@@ -299,14 +319,28 @@ server's own collected IV30 for that date is missing (collected values win; both
 
 ## 7. Client-triggered refresh
 
-When the user opens a symbol page the app (renderer → main) asks the bridge to fetch that symbol's chain
-from IBKR (if connected) and POST it, then reloads the page data from the engine. With Questrade connected (§8) the
-engine also refetches a chain older than 2 minutes from Questrade when the page asks for it; otherwise it serves
-the most recent chain it has stored (from an earlier IBKR push or Questrade sweep).
+**One refresh round from every connected source** (services/refresh.py). When the user opens a symbol page (or clicks
+Retry) the renderer calls `POST /api/symbol/{sym}/refresh`: the engine starts a round, fetches its own connected
+sources (Questrade) in the background, and marks IBKR pending while the bridge's heartbeat says it is connected. The
+renderer then asks the bridge (renderer → main) for the IBKR chain; the bridge reports `pending` and then its outcome
+to the same round (`POST /api/ingest/refresh-result`). Each chain is stored as it arrives, so the first one is served at
+once and a better second one replaces it (§6 "Chain precedence"). A round still pending is joined, not repeated; a
+source that delivered within 2 min is not asked again; an IBKR attempt without a report after 5 min counts as failed.
+A source that is set up but unusable (e.g. Questrade needing attention) is listed as failed with its reason, without a
+call; a source not set up is not listed. Chain endpoints themselves fetch nothing (they record the visit).
+
+`GET /api/symbol/{sym}/refresh` (and the POST's answer) → `RefreshStatus` (types.ts):
+`{ symbol, started_at, pending, sources: [{ name: "ibkr" | "questrade", state: "pending" | "ok" | "no_options" |
+"unavailable" | "failed", message, waiting_for, reason, at }], served: { source, fetched_at, delayed } | null }`
+(`reason`: the short form of a failure, e.g. "403 code 1016 (missing market-data permission)"). The renderer polls it
+every 1.5 s while a source is pending and reloads the page each time a source delivered. The wording is source-neutral:
+"Fetching chain (IBKR, Questrade)…", then the served chain's source badge; a source is named only when it is the one with
+a problem and no other source delivered ("IBKR contract server unavailable; Questrade: missing market-data
+permission").
 
 The on-demand refresh runs at any time, also outside market hours and on weekends: the bridge requests
 market data type 4 (delayed-frozen), so TWS answers with the last values of the session. Its result
-(`RefreshResult`, electron/shared/api.ts) is `refreshed` / `fresh` / `no-options` (IBKR lists no options:
+(`RefreshResult`, electron/shared/api.ts, also reported to the round) is `refreshed` / `fresh` / `no-options` (IBKR lists no options:
 the bridge POSTed `/api/ingest/no-options`) / `unavailable` (bridge off, not connected or paused; asked again
 when the bridge connects while the page is open) / `failed`. After `refreshed` or `no-options` the page reloads.
 
@@ -368,8 +402,10 @@ The engine fetches option chains and underlying quotes itself from the user's Qu
   `symbols/:id/options`) allow 20 requests/s and 15,000/h (account calls 30/s, 30,000/h). Limited responses carry
   `X-RateLimit-Remaining` (requests left against the current limit) and `X-RateLimit-Reset` (Unix time it expires);
   over the limit: HTTP 429 (error code 1006) with the same headers.
-- *Error handling*: `{"code", "message"}`; 401 code 1017 "Access token is invalid", 1014 missing header, 404 1019
-  symbol not found, 5xx 1007-1011.
+- *Error handling*: `{"code", "message"}`; the full table is in `sources/questrade/errors.py` (404 1001 invalid
+  endpoint, 400 1002-1004, 413 1005, 429 1006 rate limit, 500 1007-1009, 502 1010, 503 1011, 405 1012, 400 1013,
+  401 1014 missing authorization header, 400 1015 malformed authorization header, 403 1016 "Request is out-of-allowed
+  OAuth scopes", 401 1017 access token invalid, 404 1018 account / 1019 symbol / 1020 order not found, 500 1021).
 - *symbols/search* (`prefix`) → symbols (`symbol`, `symbolId`, `securityType` Stock/Option/Index/…, `listingExchange`,
   `currency`); *symbols/:id* → `prevDayClosePrice`, `hasOptions`, …; *symbols/:id/options* → per expiry
   (`expiryDate`) per root (`optionRoot`, `multiplier`) per strike (`strikePrice`, `callSymbolId`, `putSymbolId`);
@@ -390,6 +426,22 @@ The engine fetches option chains and underlying quotes itself from the user's Qu
   index symbology (an `Index` search result whose name before any `.` suffix is the symbol, e.g. SPX; untested
   against the live API).
 
+**Errors** (errors.py, client.py). Every failed call is a `QuestradeError` with a class and a grouping reason
+("403 code 1016 (missing market-data permission)"):
+- *auth / permission*: HTTP 401 after the one token refresh, any 403, codes 1014-1017. Every further call would fail the
+  same way, so the source **needs attention** at once (circuit breaker): state `needs_attention` (persisted with the
+  token), the running sweep or refresh stops asking (at most the calls already in flight), nothing is retried, and no
+  Questrade job runs — sweeps, fills, on-demand refreshes, the keep-alive — until a new token is saved. The detail says
+  what to do; for 1016: "Your Questrade app lacks the 'Retrieve delayed and real-time market data' permission. In
+  Questrade's API Centre enable it for your personal app, generate a new manual token, and paste it here." Meanwhile the
+  bridge's chain work resumes its full role (§6 "Splitting chain work").
+- *rate limit*: 429 / 1006: wait for the reset (Pacing), then retry.
+- *transient*: 5xx, timeouts, connection errors: client backoff, then the sweep's one retry pass.
+- *other* (e.g. 404 1019): that symbol fails; not retried.
+Failure reasons are counted per source over 24 h (jobs/source_health.py) and shown grouped: `QuestradeStatus.failures`
+(`[{reason, count}]`, top 3), the sweep detail ("failures: 1,141 × 403 code 1016 (missing market-data permission)")
+and the Status line. The IBKR source shows its own the same way (`BridgeStatus.failures`).
+
 **Connection** (`POST /api/sources/questrade/token {"refresh_token": "…"}` → `QuestradeStatus`, `DELETE` same path,
 `GET /api/sources/questrade`; types.ts `QuestradeStatus`). The engine redeems the pasted token at once (422
 `code: "token_rejected"` when Questrade refuses it, `"upstream"` when its login is unreachable; nothing is stored
@@ -398,9 +450,14 @@ fsync, rename), mode 0600 in a 0700 directory (Windows: the user profile's defau
 used, on every refresh. Tokens are never logged, returned or put in URLs. The access token is refreshed 60 s before
 `expires_in` runs out and after a 401 (one retry). `state`: `disconnected` | `connected` | `expired` (Questrade
 refused the stored refresh token: "paste a new one"; no further logins until then) | `error` (login unreachable or
-the file could not be saved; the token is kept, calls fail fast for 60 s, then retry). Settings → Data sources shows
-the state, data type (real-time / delayed), calls this hour, last chain and sweep, a password field and the App Hub
-steps; Status lists `questrade` in `sources` (detail: state · data type · calls this hour · last sweep).
+the file could not be saved; the token is kept, calls fail fast for 60 s, then retry) | `needs_attention` (see
+"Errors"). Saving a token clears `needs_attention` and the earlier failure counts, then checks it with one market-data
+call (`symbols/search?prefix=SPY`): `verification` = `{ok: true, message: "Token OK: market data permitted"}` or the
+classified error (e.g. the 1016 text above, the source needing attention again); only a passed check starts the
+pending sweep (in the session) or after-hours fill. Settings → Data sources shows IBKR and Questrade side by side with
+the same fields — state, data (real-time / delayed), last chain, last sweep, top failure reasons, usage (calls this
+hour / market-data lines) — plus, for Questrade, the token check, a password field and the API Centre steps; Status lists
+`questrade` in `sources` (detail: state · data type · failures · calls this hour · last sweep).
 
 **Pacing** (ratelimit.py): at most 70% of each documented market-data limit — calls spaced 1/14 s, at most 10,500 in
 any rolling hour — and of the headers' current limit: when calls used against it (documented limit − remaining)
@@ -423,8 +480,9 @@ are tagged `source: "questrade"`; missing IV / greeks are borrowed or computed a
 `SWEEP_INTERVAL_MIN` (60) from 09:45 to the close; `sweep_final` at close + 20 min (until 20:00 ET, also as a
 catch-up after a late start): the closing snapshot, archived per "Chain precedence"; `sweep_fill` hourly at :35
 outside the session (evening, weekend, before the open): an after-hours fill of the universe symbols without a chain
-fetched since the current session's open, once per symbol per 6 h, watchlists / recently opened / most liquid first
-(the bridge's fill order) — never archived, never over the session's own data; it also refreshes an idle token
-daily. Swept: the universe plus SPX, NDX, RUT, XSP. With ~1,150 symbols a sweep is ~3,500 calls (the day's first ~5,800
+fetched since the current session's open, watchlists / recently opened / most liquid first (the bridge's fill order) —
+never archived, never over the session's own data; it also refreshes an idle token daily. Coverage is a stored chain
+(or a confirmed "not listed" / "no options", asked again after 6 h), never an attempt: a symbol whose fetch failed is
+asked again 30 min later, and the run says "N symbols … failed recently" instead of "covered". Swept: the universe plus SPX, NDX, RUT, XSP. With ~1,150 symbols a sweep is ~3,500 calls (the day's first ~5,800
 with the daily symbol info), under the 10,500/h budget; the on-demand refresh of an opened symbol also uses Questrade
 when it is connected (§7).

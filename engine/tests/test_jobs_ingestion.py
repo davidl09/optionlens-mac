@@ -12,7 +12,7 @@ import pytest
 
 from optionlens import db
 from optionlens.analytics.calendar import NY
-from optionlens.jobs import _util, chains, ondemand, prices, scheduler
+from optionlens.jobs import _util, chains, prices, scheduler
 from optionlens.models import Bar
 from optionlens.repo import bars as bars_repo
 from optionlens.repo import jobs as jobs_repo
@@ -58,16 +58,6 @@ def test_final_boundary_is_close_plus_feed_delay_everywhere(monkeypatch):
     final = scheduler.JOBS["sweep_final"].schedule    # server-side closing snapshot at the boundary
     assert final.next_after(ny(2026, 11, 20, 12, 0)) == _util.final_since(FRI)
     assert final.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 27))
-
-
-def test_is_stale_uses_final_boundary():
-    sat = ny(2026, 11, 21, 12, 0)
-    assert ondemand.is_stale(ny(2026, 11, 20, 16, 5), sat, 120)        # 16:05 fetch = 15:50 data: not final
-    assert not ondemand.is_stale(ny(2026, 11, 20, 16, 20), sat, 120)
-    settling = ny(2026, 11, 20, 16, 10)                                # between close and close+20: age-based
-    assert not ondemand.is_stale(settling - timedelta(seconds=60), settling, 120)
-    assert ondemand.is_stale(settling - timedelta(seconds=600), settling, 120)
-    assert ondemand.is_stale(ny(2026, 11, 20, 16, 5), ny(2026, 11, 23, 8, 0), 120)   # Monday pre-open
 
 
 def test_eod_refuses_before_closing_data_arrived():

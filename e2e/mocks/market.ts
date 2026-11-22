@@ -149,12 +149,15 @@ export function questradeStatus(state: QuestradeStatus["state"] = "disconnected"
   return {
     name: "questrade", state, refreshed_at: state === "disconnected" ? null : "2026-11-19T15:30:00-05:00",
     detail: state === "expired" ? "Questrade refused the refresh token (it expired, was already used or was revoked). Generate a new one in Questrade's API Centre and paste it here."
-      : state === "error" ? "Questrade login is unreachable (ConnectError)" : null,
+      : state === "error" ? "Questrade login is unreachable (ConnectError)"
+      : state === "needs_attention" ? "Your Questrade app lacks the 'Retrieve delayed and real-time market data' permission. In Questrade's API Centre enable it for your personal app, generate a new manual token, and paste it here." : null,
     calls_last_hour: connected ? 1234 : 0, hour_budget: 10500, remaining: connected ? 13766 : null,
     reset_at: connected ? "2026-11-19T16:00:00-05:00" : null, paused_until: null,
     delayed: connected ? false : null, expiries: 8, moneyness: 0.25,
     last_chain_at: connected ? "2026-11-19T15:41:00-05:00" : null,
     last_sweep_at: connected ? "2026-11-19T15:46:00-05:00" : null,
-    last_sweep_detail: connected ? "questrade: 1140 chains, 2 not optionable, 3 not listed/skipped, 0 failed, 96s" : null,
+    last_sweep_detail: connected ? "questrade: 1140 chains, 2 not optionable, 3 not listed, 0 failed, 96s" : null,
+    failures: state === "needs_attention" ? [{ reason: "403 code 1016 (missing market-data permission)", count: 1141 }] : [],
+    verification: connected ? { ok: true, message: "Token OK: market data permitted", at: "2026-11-19T15:30:00-05:00" } : null,
   };
 }

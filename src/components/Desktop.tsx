@@ -1,12 +1,14 @@
 // Desktop-app chrome: waits for the engine sidecar, keeps the API client pointed at it, shows the
-// engine-unreachable banner with retry, the IBKR indicator in the header, and follows navigation
+// engine-unreachable banner with retry, the data-source pill in the header, and follows navigation
 // requests from the main process (notification clicks, menu). All of it is inert in a plain browser.
 import { ReactNode, useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { BridgeStatus } from "../../electron/shared/api";
 import { api, configureClient } from "../api/client";
+import type { QuestradeStatus } from "../api/types";
 import { useConnectivity } from "../api/useApi";
 import { desktop } from "../desktop";
+import { questradeView } from "../lib/sources";
 import { bridgePillLabel, populateText } from "../lib/status";
 import { useBridgeStatus, useEngineStatus } from "../state/desktop";
 import { Spinner } from "./ui";
@@ -86,12 +88,43 @@ export function bridgeSummary(b: BridgeStatus): string {
   return [`${b.endpoint ?? "IBKR"} connected${b.accountType ? ` (${b.accountType})` : ""}`, b.paused, populateText(b), ...b.notes].filter(Boolean).join(" · ");
 }
 
-export function BridgeIndicator() {
+const QUESTRADE_POLL_MS = 60_000;
+
+/** Questrade's status, re-read every minute (null: not loaded, or Questrade not enabled in this engine). */
+export function useQuestradeStatus(): QuestradeStatus | null {
+  const [s, setS] = useState<QuestradeStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api.questradeStatus().then((x) => { if (alive) setS(x); }, () => { if (alive) setS(null); });
+    void load();
+    const t = window.setInterval(() => void load(), QUESTRADE_POLL_MS);
+    return () => { alive = false; window.clearInterval(t); };
+  }, []);
+  return s;
+}
+
+/**
+ * The header's data-source pill: every chain source that is set up, side by side with its state (IBKR via the
+ * bridge, Questrade via the engine); "No data source" when neither is. Links to Settings → Data sources.
+ */
+export function SourcesIndicator() {
   const b = useBridgeStatus();
-  if (!b) return null;
+  const q = useQuestradeStatus();
+  const parts: { key: string; tone: string; label: string; title: string; busy?: string }[] = [];
+  if (b && b.enabled) parts.push({ key: "ibkr", tone: bridgeTone(b), label: bridgePillLabel(b), title: `IBKR bridge: ${bridgeSummary(b)}`, busy: b.current?.label });
+  if (q && q.state !== "disconnected") {
+    const v = questradeView(q);
+    parts.push({ key: "questrade", tone: v.tone, label: `Questrade ${v.state}`, title: `Questrade: ${[v.state, v.problem, v.dataQuality].filter(Boolean).join(" · ")}` });
+  }
+  if (!b && !q) return null;
+  const title = parts.length ? parts.map((p) => p.title).join("\n") : "No chain source connected: connect IB Gateway or Questrade in Settings → Data sources";
   return (
-    <Link to="/settings" className={`bridge-pill ${bridgeTone(b)}`} title={bridgeSummary(b)} aria-label={`IBKR bridge: ${bridgeSummary(b)}`}>
-      <span className="dot" aria-hidden="true" />{bridgePillLabel(b)}{b.current ? <span className="bridge-busy" aria-hidden="true" title={b.current.label}>…</span> : null}
+    <Link to="/settings" className="bridge-pill sources-pill" title={title} aria-label={`Data sources: ${parts.length ? parts.map((p) => p.label).join("; ") : "none connected"}`}>
+      {parts.length ? parts.map((p) => (
+        <span key={p.key} className={`source-seg ${p.tone}`}>
+          <span className="dot" aria-hidden="true" />{p.label}{p.busy ? <span className="bridge-busy" aria-hidden="true" title={p.busy}>…</span> : null}
+        </span>
+      )) : <span className="source-seg neutral"><span className="dot" aria-hidden="true" />No data source</span>}
     </Link>
   );
 }

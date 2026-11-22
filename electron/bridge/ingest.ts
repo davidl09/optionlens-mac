@@ -45,6 +45,11 @@ export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] 
 export interface NoOptions { source: "ibkr"; symbol: string }
 /** The bridge accepted (queued) these wants; the engine counts only accepted option_bars offers. */
 export interface AckWants { kind: "option_bars"; items: { symbol: string; sessions: string[] }[] }
+/** The outcome of an on-demand refresh (RefreshResult), reported to the engine's refresh round (INTEGRATION.md §7). */
+export interface RefreshResultBody {
+  source: "ibkr"; symbol: string; status: "pending" | "refreshed" | "fresh" | "no-options" | "unavailable" | "failed";
+  message: string | null; waiting_for: "contract-server" | "market-hours" | null;
+}
 export type FarmStateName = "ok" | "inactive" | "connecting" | "down" | "unknown";
 export interface Heartbeat {
   client: string; ibkr_connected: boolean; account_type: "live" | "paper" | null;
@@ -65,6 +70,7 @@ export interface IngestApi {
   optionBars(b: OptionBars): Promise<unknown>;
   ackWants(b: AckWants): Promise<unknown>;
   heartbeat(b: Heartbeat): Promise<unknown>;
+  refreshResult(b: RefreshResultBody): Promise<unknown>;
 }
 
 export function ingestApi(http: JsonHttp): IngestApi {
@@ -79,5 +85,6 @@ export function ingestApi(http: JsonHttp): IngestApi {
     optionBars: (b) => http.post("/api/ingest/option-bars", b),
     ackWants: (b) => http.post("/api/ingest/ack-wants", b),
     heartbeat: (b) => http.post("/api/ingest/heartbeat", b),
+    refreshResult: (b) => http.post("/api/ingest/refresh-result", b),
   };
 }

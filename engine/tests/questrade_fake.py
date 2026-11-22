@@ -43,6 +43,7 @@ class FakeQuestrade:
         self.headers: dict[str, str] = {}
         self.unquoted = {option_id("2026-11-20", 100, "P")}   # listed, no quote
         self.no_vol = {option_id("2026-11-20", 90, "C")}      # quoted, volatility 0
+        self.scope_denied = False   # the personal app lacks the market-data permission: 403 code 1016 on every call
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -60,11 +61,14 @@ class FakeQuestrade:
             return self._login(request)
         if request.headers.get("Authorization") != f"Bearer {self.access}":
             return httpx.Response(401, json={"code": 1017, "message": "Access token is invalid"})
+        if self.scope_denied:
+            return httpx.Response(403, json={"code": 1016, "message": "Request is out of allowed OAuth scopes"})
         h = self.headers
         if path == "/v1/symbols/search":
             prefix = request.url.params["prefix"]
-            hits = [{"symbol": "XYZ", "symbolId": 1000, "securityType": "Stock", "currency": "USD",
-                     "listingExchange": "NYSE", "isQuotable": True, "isTradable": True}] if prefix == "XYZ" else []
+            hits = [{"symbol": prefix, "symbolId": 1000 if prefix == "XYZ" else 1001, "securityType": "Stock",
+                     "currency": "USD", "listingExchange": "NYSE", "isQuotable": True, "isTradable": True}] \
+                if prefix in ("XYZ", "SPY") else []
             return httpx.Response(200, json={"symbols": hits}, headers=h)
         if path == "/v1/symbols/1000":
             return httpx.Response(200, json={"symbols": [{"symbol": "XYZ", "symbolId": 1000, "hasOptions": True,

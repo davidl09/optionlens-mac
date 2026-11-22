@@ -1,23 +1,13 @@
-// Settings → Data sources → Questrade: connect with a refresh token from Questrade's API Centre, see the connection,
-// call pacing and data type, disconnect (INTEGRATION.md §8). The token is sent once and never shown again.
+// Settings → Data sources → Questrade: the source's status (the same fields as IBKR's, SourceSummary), connect with a
+// refresh token from Questrade's API Centre (checked at once with one market-data call), disconnect (INTEGRATION.md
+// §8). The token is sent once and never shown again.
 import { FormEvent, useState } from "react";
 import { api } from "../api/client";
-import type { QuestradeState, QuestradeStatus } from "../api/types";
+import type { QuestradeStatus } from "../api/types";
 import { useApi } from "../api/useApi";
-import { StatGrid } from "./StatGrid";
+import { questradeView } from "../lib/sources";
+import { SourceStateBadge, SourceSummary } from "./SourceSummary";
 import { Card, ErrorBox, InfoBox, Spinner } from "./ui";
-
-const STATE: Record<QuestradeState, { label: string; tone: "pos" | "warn" | "neg" | "neutral" }> = {
-  connected: { label: "connected", tone: "pos" },
-  disconnected: { label: "not connected", tone: "neutral" },
-  expired: { label: "token expired", tone: "warn" },
-  error: { label: "error", tone: "neg" },
-};
-
-function dataKind(s: QuestradeStatus): string | null {
-  if (s.delayed === null) return null;
-  return s.delayed ? "delayed (no real-time data package)" : "real-time";
-}
 
 function Help() {
   return (
@@ -25,7 +15,7 @@ function Help() {
       <summary>How to get a refresh token</summary>
       <ol>
         <li>Log in to Questrade and open <b>API Centre</b> from the menu under your name (activate the API once and accept the agreement).</li>
-        <li>Click <b>Register a personal app</b>, give it a name, and save.</li>
+        <li>Click <b>Register a personal app</b>, give it a name, enable the permission <b>Retrieve delayed and real-time market data</b>, and save.</li>
         <li>Under the app, click <b>New manual authorization</b> → <b>Generate new token</b>, then <b>Copy token</b>.</li>
         <li>Paste it here and click Connect. OptionLens exchanges it at once; each exchange gives a new token, which the engine
           stores privately on this computer. A token that was already used or left unused too long stops working — then
@@ -63,26 +53,22 @@ export function QuestradeCard() {
   };
   const connect = (e: FormEvent) => {
     e.preventDefault();
-    if (token.trim()) void run(() => api.connectQuestrade(token.trim()), "Connected. Collecting chains now, then hourly in market hours.");
+    if (token.trim()) void run(() => api.connectQuestrade(token.trim()), "Token saved.");
   };
   const disconnect = () => {
     if (window.confirm("Disconnect Questrade? The stored token is deleted from this computer (revoke it in Questrade's API Centre too if you no longer need it).")) {
       void run(() => api.disconnectQuestrade(), "Disconnected. The token was deleted.");
     }
   };
-  const st = STATE[s.state];
+  const v = questradeView(s);
   const connected = s.state !== "disconnected";
   return (
-    <Card title="Questrade" subtitle={<span className={`badge ${st.tone}`}>{st.label}</span>}>
-      <StatGrid items={[
-        { label: "Data", value: dataKind(s), fmt: "text", hint: "Known after the first chain is fetched." },
-        { label: "Calls this hour", node: <span title="Calls started in the last hour, of the engine's budget (70% of Questrade's 15,000 per hour)">{s.calls_last_hour.toLocaleString("en-US")} / {s.hour_budget.toLocaleString("en-US")}{s.remaining !== null ? ` · ${s.remaining.toLocaleString("en-US")} left at Questrade` : ""}</span> },
-        { label: "Last chain", value: s.last_chain_at, fmt: "datetime", hint: "No chain from Questrade yet." },
-        { label: "Last sweep", value: s.last_sweep_at, fmt: "datetime", hint: "No sweep yet.", sub: s.last_sweep_detail ?? undefined },
-        { label: "Chains", value: `first ${s.expiries} expiries, strikes ±${Math.round(s.moneyness * 100)}%`, fmt: "text" },
-      ]} />
-      {s.state === "expired" && <div className="warn-box">{s.detail ?? "Questrade refused the stored token."} Paste a new refresh token below.</div>}
-      {s.state === "error" && s.detail && <div className="warn-box">{s.detail}</div>}
+    <Card title="Questrade" subtitle={<SourceStateBadge v={v} />}>
+      <SourceSummary v={v} />
+      {s.verification && (
+        <p className={`small ${s.verification.ok ? "pos-text" : "warn-text"}`} role="status">Token check: {s.verification.message}</p>
+      )}
+      <p className="muted small">Chains: first {s.expiries} expiries, strikes ±{Math.round(s.moneyness * 100)}%; at most 70% of Questrade's limits.</p>
       {s.paused_until && <p className="muted small">Pausing calls until {new Date(s.paused_until).toLocaleTimeString()} (rate limit).</p>}
       <form className="settings-form" onSubmit={connect}>
         <label>{connected ? "Replace refresh token" : "Refresh token"}

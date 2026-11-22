@@ -61,7 +61,7 @@ export const ALL_TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
 /** `optionable` (true / false / null = not known yet) as a header badge: nothing when a chain is stored. */
 function OptionsBadge({ optionable }: { optionable: boolean | null }) {
-  if (optionable === false) return <span className="badge warn" title="The chain source (IBKR) lists no options for this symbol">no options</span>;
+  if (optionable === false) return <span className="badge warn" title="A chain source confirmed that this symbol lists no options">no options</span>;
   if (optionable === null) return <span className="badge subtle" title="No option chain fetched for this symbol yet">options not loaded</span>;
   return null;
 }

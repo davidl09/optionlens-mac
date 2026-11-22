@@ -11,8 +11,12 @@
   metrics row for it, chains for chain-universe symbols without a chain fetched since its open. So a first
   launch on a weekend or in the evening populates the last session from IBKR's frozen data
   (docs/INTEGRATION.md §6 "After-hours fills"), watchlists first, then recently opened, then most liquid.
-- eod_chains: chain universe + indices whose closing chain for the session has not arrived from IBKR (nor a
-  real-time one from a server-side source such as Questrade, which a delayed IBKR chain could not replace).
+- eod_chains: chain universe + indices whose session has no real-time closing archive yet.
+- Splitting chain work (chain_universe, its after-hours fill, eod_chains): while a server-side source (Questrade)
+  is healthy — available (connected, not needing attention) and not failing (jobs.source_health) — it sweeps the
+  whole universe itself, so the bridge is asked only for the symbols that source did not cover: its last attempt
+  failed, or it does not list the symbol. When no server-side source is healthy the bridge gets the full lists.
+  IV/HV history, underlying stats, index data and option-bar catch-up stay the bridge's (only IBKR provides them).
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
   each (session, symbol) is offered until the bridge has accepted it MAX_OFFERS times (POST
   /api/ingest/ack-wants, record_offers), and again only REOFFER_AFTER after an accepted offer.
@@ -29,7 +33,8 @@ from ..repo import options as options_repo
 from ..repo import symbols as symbols_repo
 from ..repo import user as user_repo
 from ..repo import views as views_repo
-from . import catchup
+from ..sources import chain_source
+from . import catchup, source_health
 from ._util import eod_deadline, final_since, session_date
 
 EOD_INDICES = ("SPX", "NDX", "RUT", "XSP")
@@ -72,16 +77,36 @@ def prioritized(symbols: list[str], now: datetime) -> list[str]:
     return _unique(first, symbols)
 
 
+def server_covered(symbols: list[str]) -> set[str]:
+    """Of `symbols`, those a healthy server-side source sweeps (see module doc "Splitting chain work")."""
+    out: set[str] = set()
+    for src in chain_source.server_sources():
+        if src.unavailable() is not None or source_health.failing(src.name):
+            continue
+        for s in symbols:
+            a = source_health.last(src.name, s)
+            if a is None or a.result in ("ok", "no_options"):
+                out.add(s)
+    return out
+
+
+def for_bridge(symbols: list[str]) -> list[str]:
+    """`symbols` minus those a healthy server-side source covers (same order)."""
+    covered = server_covered(symbols)
+    return [s for s in symbols if s not in covered]
+
+
 def chain_universe_want(now: datetime | None = None) -> dict:
     """The chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on trading days. Outside those hours quotes
     do not move, so only an after-hours fill (`as_of_session`): the chain-universe symbols without a chain
-    fetched since the open of the current session (session_date), once each (FILL_MAX_AGE_S)."""
+    fetched since the open of the current session (session_date), once each (FILL_MAX_AGE_S). Both without the
+    symbols a healthy server-side source covers (for_bridge)."""
     now = (now or now_ny()).astimezone(NY)
     shape = {"expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
     if is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]:
-        return {"symbols": chain_universe(now), "max_age_s": CHAIN_MAX_AGE_S, **shape}
+        return {"symbols": for_bridge(chain_universe(now)), "max_age_s": CHAIN_MAX_AGE_S, **shape}
     day = session_date(now)
-    syms = chain_universe(now)
+    syms = for_bridge(chain_universe(now))
     have = options_repo.fetched_since(datetime.combine(day, OPEN, NY), syms)
     return {"symbols": [s for s in syms if s not in have], "max_age_s": FILL_MAX_AGE_S, **shape, "as_of_session": day}
 
@@ -103,17 +128,18 @@ def underlying_stats_want(now: datetime | None = None) -> dict:
 
 
 def eod_chains_want(now: datetime | None = None) -> dict:
-    """Closing chains of the current session (chain universe + indices) whose archive is neither from IBKR nor
-    real-time data from another source, wanted from final_since (close + 20 min) until eod_deadline (20:00 ET)."""
+    """Closing chains of the current session (chain universe + indices) without a real-time closing archive yet
+    (a closing chain of IBKR's could still win, jobs/precedence.py) and not covered by a healthy server-side
+    source (for_bridge), wanted from final_since (close + 20 min) until eod_deadline (20:00 ET)."""
     now = now or now_ny()
     day = session_date(now)
     have = options_repo.eod_quality(day)
 
     def settled(s: str) -> bool:
         a = have.get(s)
-        return a is not None and (a["source"] == options_repo.IBKR or a["delayed"] is False)
+        return a is not None and a["delayed"] is False
     return {"session_date": day,
-            "symbols": [s for s in _unique(chain_universe(now), EOD_INDICES) if not settled(s)],
+            "symbols": for_bridge([s for s in _unique(chain_universe(now), EOD_INDICES) if not settled(s)]),
             "not_before": final_since(day), "deadline": eod_deadline(day)}
 
 

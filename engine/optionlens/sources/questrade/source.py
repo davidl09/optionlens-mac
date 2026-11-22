@@ -25,6 +25,7 @@ from ...net import FetchError
 from ..chain_source import NotListed
 from .auth import TokenError, TokenManager, TokenStore
 from .client import QuestradeClient
+from .errors import QuestradeError
 from .mapping import (SymbolInfo, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
                       pick_symbol_id, snapshot, symbol_info)
 from .ratelimit import RateGate
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 
 NAME = "questrade"
 NEGATIVE_TTL = timedelta(days=7)
+VERIFY_SYMBOL = "SPY"   # a liquid symbol every market-data permission can search
 KEEPALIVE_S = 24 * 3600   # refresh an idle token daily: an unused refresh token lapses (reportedly after ~7 days)
 
 
@@ -74,15 +76,36 @@ class QuestradeSource:
         self.ids = SymbolIds(data_dir / "questrade_symbols.json")
         self._info: dict[str, tuple[date, SymbolInfo]] = {}
         self.last_delayed: bool | None = None
+        self.verification: dict | None = None   # result of the check after a token was saved (verify)
+
+    def connected(self) -> bool:
+        return self.tokens.state != "disconnected"
 
     def unavailable(self) -> str | None:
-        """Why the source cannot fetch now (e.g. "not connected"), or None when it can."""
+        """Why the source cannot fetch now (e.g. "not connected", needs attention), or None when it can."""
         return self.tokens.unusable()
 
+    def problem(self) -> str | None:
+        """The short reason the source needs attention (e.g. "403 code 1016 (missing market-data permission)")."""
+        return self.tokens.reason if self.tokens.state == "needs_attention" else None
+
     def status(self) -> dict:
-        """Connection state, call pacing and whether the last chain was delayed (never a token)."""
+        """Connection state, call pacing, whether the last chain was delayed and the last token check (never a
+        token)."""
         return {**self.tokens.status(), **self.gate.stats(), "delayed": self.last_delayed,
-                "expiries": self.expiries, "moneyness": self.moneyness}
+                "expiries": self.expiries, "moneyness": self.moneyness, "verification": self.verification}
+
+    async def verify(self) -> dict:
+        """One market-data call (symbols/search for VERIFY_SYMBOL) right after a token was saved, so a missing
+        permission shows at once instead of in the next sweep: {ok, message, at}. An auth-class answer leaves the
+        source needing attention (client.py)."""
+        try:
+            await self.api.get("symbols/search", {"prefix": VERIFY_SYMBOL})
+            result = {"ok": True, "message": "Token OK: market data permitted"}
+        except QuestradeError as e:
+            result = {"ok": False, "message": e.attention or f"Token check failed: {e.reason}"}
+        self.verification = {**result, "at": datetime.now(timezone.utc)}
+        return self.verification
 
     async def keepalive(self) -> None:
         try:

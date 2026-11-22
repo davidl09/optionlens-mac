@@ -80,6 +80,7 @@ describe("bridgePillLabel", () => {
     enabled: true, tws: "connected", port: 4001, endpoint: "IB Gateway (live)", accountType: "live", paused: null, lastError: null,
     notes: [], lastPushAt: null, current: null, queued: {} as BridgeStatus["queued"], backfill: { total: 0, done: 0, failed: 0 },
     populate: null, contractsAvailable: true, optionsSubscription: "unknown",
+    optionsDelayed: null, lastChainAt: null, lastChainRound: null, failures: [], linesPerBatch: 90,
     farms: { marketData: { state: "ok", since: null, server: "usfarm" }, historical: { state: "ok", since: null, server: "ushmds" }, secDef: { state: "ok", since: null, server: "secdefil" } },
   };
   it("reads in plain words", () => {

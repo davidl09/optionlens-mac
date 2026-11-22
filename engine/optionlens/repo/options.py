@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Iterable, Mapping, Sequence
 
 import numpy as np
+import pyarrow as pa
 
 from .. import db
 from ..models import ChainSnapshot, OptionContract
@@ -23,7 +24,7 @@ _EOD_COLS = ('date, symbol, osi, expiry, strike, "right", bid, ask, last, volume
              'gamma, theta, vega, underlying, iv_source, greeks_source')
 _EOD_FIELDS = ("date", "symbol", "osi", "expiry", "strike", "right", "bid", "ask", "last", "volume", "oi",
                "iv", "delta", "gamma", "theta", "vega", "underlying", "iv_source", "greeks_source", "source",
-               "delayed")
+               "delayed", "fetched_at")
 
 IBKR = "ibkr"
 RECONSTRUCTED = "reconstructed"
@@ -34,9 +35,10 @@ def _syms(symbols: Sequence[str] | None) -> list[str] | None:
 
 
 # ----------------------------------------------------------------------------- option_latest
-def replace_option_latest(snap: ChainSnapshot, source: str | None = None) -> int:
-    """Replace all option_latest rows of snap.quote.symbol with snap.contracts (tagged `source` and
-    snap.delayed). Returns rows written."""
+def replace_option_latest(snap: ChainSnapshot, source: str | None = None, final: bool = False) -> int:
+    """Replace all option_latest rows of snap.quote.symbol with snap.contracts (tagged `source`, snap.delayed and
+    `final`: a closing snapshot). Which chain is served is the caller's decision (jobs/precedence.py). Returns rows
+    written."""
     symbol = snap.quote.symbol
     uniq = list({c.osi: c for c in snap.contracts}.values())
     data = to_columns(uniq, _CONTRACT_FIELDS)
@@ -44,10 +46,43 @@ def replace_option_latest(snap: ChainSnapshot, source: str | None = None) -> int
     data["ts"] = [utc_naive(snap.fetched_at)] * len(uniq)
     data["source"] = [source] * len(uniq)
     data["delayed"] = [snap.delayed] * len(uniq)
+    data["final"] = [final] * len(uniq)
     data["contracts_listed_at"] = [utc_naive(snap.contracts_listed_at) if snap.contracts_listed_at else None] * len(uniq)
     with db.write() as cur:
         cur.execute("DELETE FROM option_latest WHERE symbol = ?", [symbol])
         return insert_arrow(cur, "option_latest", data)
+
+
+_QUOTED = "ask > 0 AND NOT (COALESCE(bid, 0) = 0 AND COALESCE(oi, 0) = 0 AND COALESCE(volume, 0) = 0)"
+
+
+def latest_quality(symbol: str) -> dict | None:
+    """{source, fetched_at (aware UTC), final, delayed, quoted} of the served chain (jobs/precedence.py), or None.
+    `delayed` None when unknown; `quoted`: contracts with an ask > 0 that the archive would keep."""
+    rows = query(f"""SELECT any_value(source) AS source, max(ts) AS fetched_at, bool_or(final) AS final,
+                            bool_or(delayed) AS delayed, count(*) FILTER (WHERE {_QUOTED}) AS quoted
+                     FROM option_latest WHERE symbol = ? HAVING count(*) > 0""", [symbol])
+    if not rows:
+        return None
+    r = rows[0]
+    return {**r, "fetched_at": aware(r["fetched_at"]), "final": bool(r["final"]), "quoted": int(r["quoted"])}
+
+
+def update_source_iv(symbol: str, contracts: Iterable[OptionContract]) -> int:
+    """Overwrite IV / greeks and their labels of these served-chain rows (by osi). Returns rows updated."""
+    data = to_columns(contracts, ("osi", "iv", "delta", "gamma", "theta", "vega", "iv_source", "greeks_source"))
+    if not data["osi"]:
+        return 0
+    tbl = pa.table(data)
+    with db.write() as cur:
+        cur.register("_iv_update", tbl)
+        try:
+            cur.execute("""UPDATE option_latest o SET iv = u.iv, delta = u.delta, gamma = u.gamma, theta = u.theta,
+                           vega = u.vega, iv_source = u.iv_source, greeks_source = u.greeks_source
+                           FROM _iv_update u WHERE o.symbol = ? AND o.osi = u.osi""", [symbol])
+        finally:
+            cur.unregister("_iv_update")
+    return tbl.num_rows
 
 
 def latest_fetched_at(symbol: str) -> datetime | None:
@@ -200,10 +235,10 @@ def write_option_eod(day: date, fresh_since: datetime, symbols: Sequence[str] | 
             return 0
         _clear_eod(cur, day, ok)
         cur.execute(f"""
-            INSERT INTO option_eod ({_EOD_COLS}, source, delayed)
+            INSERT INTO option_eod ({_EOD_COLS}, source, delayed, fetched_at)
             SELECT ?::DATE, o.symbol, o.osi, o.expiry, o.strike, o."right", o.bid, o.ask, o.last, o.volume,
                    o.oi, o.iv, o.delta, o.gamma, o.theta, o.vega, q.price, o.iv_source, o.greeks_source, o.source,
-                   o.delayed
+                   o.delayed, o.ts
             FROM option_latest o LEFT JOIN quotes_latest q ON q.symbol = o.symbol
             WHERE o.ts >= ? AND o.symbol IN (SELECT unnest(?::VARCHAR[]))
               AND NOT (COALESCE(o.bid, 0) = 0 AND COALESCE(o.oi, 0) = 0 AND COALESCE(o.volume, 0) = 0)
@@ -219,21 +254,23 @@ def write_eod_chain(day: date, snap: ChainSnapshot, source: str | None) -> int:
     data = {f: [getattr(c, f) for c in uniq] for f in _EOD_FIELDS[2:16] + ("iv_source", "greeks_source")}
     n = len(uniq)
     data.update(date=[day] * n, symbol=[symbol] * n, underlying=[snap.quote.price] * n, source=[source] * n,
-                delayed=[snap.delayed] * n)
+                delayed=[snap.delayed] * n, fetched_at=[utc_naive(snap.fetched_at)] * n)
     with db.write() as cur:
         _clear_eod(cur, day, [symbol])
         return insert_arrow(cur, "option_eod", {f: data[f] for f in _EOD_FIELDS})
 
 
 def eod_quality(day: date, symbols: Sequence[str] | None = None) -> dict[str, dict]:
-    """{symbol: {source, delayed, quoted}} of the real (not reconstructed) archives of `day`: `delayed` true when
-    any row is delayed (None when unknown), `quoted` the rows with an ask > 0 (jobs/precedence.py)."""
+    """{symbol: {source, delayed, quoted, fetched_at}} of the real (not reconstructed) archives of `day`: `delayed`
+    true when any row is delayed (None when unknown), `quoted` the rows with an ask > 0, `fetched_at` when the
+    archived chain was fetched (aware UTC; None for older archives) (jobs/precedence.py)."""
     rows = query("""SELECT symbol, any_value(source) AS source, bool_or(delayed) AS delayed,
-                           count(*) FILTER (WHERE ask > 0) AS quoted
+                           count(*) FILTER (WHERE ask > 0) AS quoted, max(fetched_at) AS fetched_at
                     FROM option_eod WHERE date = ? AND source IS DISTINCT FROM ?
                       AND (?::VARCHAR[] IS NULL OR symbol IN (SELECT unnest(?::VARCHAR[])))
                     GROUP BY symbol""", [day, RECONSTRUCTED, _syms(symbols), _syms(symbols)])
-    return {r["symbol"]: {"source": r["source"], "delayed": r["delayed"], "quoted": int(r["quoted"])} for r in rows}
+    return {r["symbol"]: {"source": r["source"], "delayed": r["delayed"], "quoted": int(r["quoted"]),
+                          "fetched_at": aware(r["fetched_at"])} for r in rows}
 
 
 def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> int:
@@ -246,7 +283,7 @@ def write_reconstructed_eod(day: date, symbol: str, rows: Iterable[Mapping]) -> 
     n = len(rows)
     data = {f: [r.get(f) for r in rows] for f in _EOD_FIELDS}
     data.update(date=[day] * n, symbol=[symbol] * n, bid=[None] * n, ask=[None] * n, oi=[None] * n,
-                source=[RECONSTRUCTED] * n, delayed=[None] * n)
+                source=[RECONSTRUCTED] * n, delayed=[None] * n, fetched_at=[None] * n)
     with db.write() as cur:
         if not n or not _open_archives(cur, day, {symbol: RECONSTRUCTED}):
             return 0

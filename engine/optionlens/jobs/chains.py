@@ -5,41 +5,47 @@ uncovered last session) and the end-of-day archive.
 Precedence for one session's metrics_daily row (docs/INTEGRATION.md §6 "After-hours fills"):
 - the session's own data (fetched while it is open and until its closing data arrived, or its closing snapshot)
   always replaces an after-hours fill, and among itself follows jobs/precedence.py (closing snapshot, then
-  real-time, then quoted contracts, then the configured source order; also for option_eod);
+  real-time, then quoted contracts, then the fresher fetch; also for option_eod);
 - an after-hours fill (fetched later: evening, weekend, next pre-market) only creates a row for a session that has
   none, or refreshes an earlier fill (same precedence); it never touches a row of the session's own data;
-- option_latest and quotes_latest always hold the newest data with its source; option_eod is written only from a
-  closing snapshot (`final`).
+- option_latest (the served chain) follows jobs/precedence.py too, across sessions (a later session's chain always
+  replaces it); quotes_latest holds the newest quote; option_eod is written only from a closing snapshot (`final`).
+Every stored row keeps its `source`.
 """
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import time as _time
+from collections import Counter
 from datetime import date, datetime, timedelta
 from typing import Mapping, Sequence
 
 import numpy as np
 
-from ..analytics import chainmetrics, vol
+from ..analytics import chainmetrics, computed_iv, vol
 from ..analytics.calendar import NY, OPEN, is_market_open, last_completed_session, now_ny
 from ..models import Bar, ChainSnapshot
+from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from ..repo import quotes as quotes_repo
 from ..repo import symbols as symbols_repo
 from ..repo import vol_history as vol_history_repo
+from ..repo._sql import utc_naive
 from ..sources import chain_source
 from ..sources.chain_source import ChainSource, NotListed
-from . import bridge_plan, hooks, precedence
+from . import bridge_plan, hooks, precedence, source_health
 from ._util import after_session, eod_deadline, final_since, report_progress, run_bounded, session_close, session_date
 
 log = logging.getLogger(__name__)
 
 HV_LOOKBACK_DAYS = 400  # calendar days of closes loaded for HV252
 SWEEP_CONCURRENCY = 4
-FILL_RETRY_S = 6 * 3600   # an after-hours fill asks a symbol the source sent nothing for again after this
+CONFIRMED_RETRY_S = 6 * 3600   # after-hours fill: a symbol the source has no chain for (not listed / no options)
+FAILED_RETRY_S = 30 * 60       # ... and one whose fetch failed, asked again after this (never counted as coverage)
 STATS_SUFFIX = ":stats"  # metrics_daily.source of a row holding only pushed underlying stats
 AFTER_HOURS = "after_hours"  # metrics_daily column: the row is an after-hours fill (schema.sql)
 
@@ -117,7 +123,8 @@ def _chain_row(snap: ChainSnapshot, day: date, now: datetime, existing: dict | N
     """The chain-derived row (with its precedence quality); values the chain cannot give are kept from a
     stats-only row of the same tier."""
     row = {**chain_metrics_row(snap, day, min(now, session_close(day)), after_hours),
-           "chain_final": quality.final, "chain_quoted": quality.quoted}
+           "chain_final": quality.final, "chain_quoted": quality.quoted,
+           "chain_fetched_at": utc_naive(quality.fetched_at) if quality.fetched_at else None}
     if existing and is_stats_only(existing.get("source")) and is_after_hours(existing) == after_hours:
         for k in metrics_repo.metric_columns():
             if row.get(k) is None and existing.get(k) is not None:
@@ -125,23 +132,39 @@ def _chain_row(snap: ChainSnapshot, day: date, now: datetime, existing: dict | N
     return row
 
 
-def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, source: str | None = None) -> None:
-    """Persist a chain from `source` ('ibkr', 'questrade', ...; None = unknown) observed at `now`:
-    - option_latest + quotes_latest, unless a newer chain is stored (then those keep the newer one);
+def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, source: str | None = None) -> bool:
+    """Persist a chain from `source` ('ibkr', 'questrade', ...; None = unknown) observed at `now`, each part per
+    jobs/precedence.py:
+    - the served chain (option_latest), when the chain wins against the served one; when it loses, the served
+      chain takes this chain's source IVs where its own are computed (adopt_source_iv: any source's IV before a
+      computed one);
+    - the underlying's quote (quotes_latest) when it is the newest one;
     - the optionable flag;
     - the session's metrics row per the module doc's precedence (writes_metrics: the session's own data, else
       an after-hours fill; time to expiry measured at `now`, or at the close once it passed);
-    - `final` (a closing snapshot, `now` after the close): the session's end-of-day archive, unless the stored
-      archive wins jobs/precedence.py."""
+    - `final` (a closing snapshot, `now` after the close): the session's end-of-day archive.
+    Returns whether the chain is now the served one."""
     symbol = snap.quote.symbol
-    stored_at = options_repo.latest_fetched_at(symbol)
-    if stored_at is None or snap.fetched_at >= stored_at:
-        options_repo.replace_option_latest(snap, source)
-        quotes_repo.upsert_quotes([snap.quote], source)
+    quality = precedence.of_snapshot(snap, source, final)
+    served = precedence.of_latest(options_repo.latest_quality(symbol))
+    wins = precedence.replaces(served, quality)
+    if wins:
+        options_repo.replace_option_latest(snap, source, final)
+    if wins or served is None or served.fetched_at is None or snap.fetched_at >= served.fetched_at:
+        quotes_repo.upsert_quotes([snap.quote], source)   # the stock quote: the newest one
     symbols_repo.set_optionable(symbol, True)
+    _store_session(snap, now, final, source, quality)
+    if not wins and served is not None and served.session == quality.session and served.source != source:
+        adopt_source_iv(symbol, served, snap)
+    return wins
+
+
+def _store_session(snap: ChainSnapshot, now: datetime, final: bool, source: str | None,
+                   quality: precedence.Quality) -> None:
+    """The session's metrics row and (closing snapshots) archive from `snap`, where it wins (store_chain)."""
+    symbol = snap.quote.symbol
     day = session_date(now)
     after_hours = not writes_metrics(day, now, final)
-    quality = precedence.of_snapshot(snap, source, final)
     existing = metrics_repo.get_metrics(symbol, day)
     if may_touch(existing, after_hours) and _chain_replaces(existing, quality, after_hours):
         metrics_repo.upsert_metrics(day, symbol, _chain_row(snap, day, now, existing, after_hours, quality), source)
@@ -149,6 +172,29 @@ def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, sour
         stored = options_repo.eod_quality(day, [symbol]).get(symbol)
         if precedence.replaces(None if stored is None else precedence.of_archive(stored), quality):
             options_repo.write_eod_chain(day, snap, source)
+
+
+def adopt_source_iv(symbol: str, served: precedence.Quality, donor: ChainSnapshot) -> int:
+    """The served chain takes `donor`'s (a losing chain of the same session) source-given IV and greeks for its
+    contracts whose IV is engine-computed or missing (analytics.computed_iv.adopt_source_iv), and its metrics row and
+    archive are rebuilt from it where they hold that chain. Returns contracts changed."""
+    stored = options_repo.get_chain(symbol)
+    if stored is None:
+        return 0
+    changed = computed_iv.adopt_source_iv(stored.contracts, donor.contracts)
+    if not changed:
+        return 0
+    options_repo.update_source_iv(symbol, changed)
+    merged = options_repo.get_chain(symbol)
+    if merged is None or served.fetched_at is None:
+        return 0
+    raw = options_repo.latest_quality(symbol) or {}
+    merged = dataclasses.replace(merged, fetched_at=served.fetched_at, delayed=raw.get("delayed"),
+                                 contracts_listed_at=options_repo.latest_contracts_listed_at(symbol))
+    when = merged.fetched_at.astimezone(NY)
+    _store_session(merged, when, served.final, served.source,
+                   dataclasses.replace(served, quoted=precedence.quoted(merged.contracts)))
+    return len(changed)
 
 
 # pushed underlying-stats key -> metrics_daily column
@@ -185,7 +231,7 @@ def store_underlying_stats(session: date, stats: Sequence[Mapping], source: str,
         return 0
     existing = {s: r for s, r in metrics_repo.metrics_on(session).items() if s in set(syms)}
     hist = bars_repo.bars_since(session - timedelta(days=HV_LOOKBACK_DAYS), syms)
-    cols = metrics_repo.metric_columns()
+    cols = metrics_repo.row_columns()
     rows: dict[str, tuple[dict, str | None]] = {}
     for st in stats:
         sym = st["symbol"]
@@ -224,55 +270,97 @@ def _prepare(snap: ChainSnapshot, source: str) -> ChainSnapshot:
 async def refresh_chain(src: ChainSource, symbol: str, final: bool = False) -> ChainSnapshot | None:
     """Fetch one symbol's chain from `src`, complete it (hooks.chain_preparers: IV / greeks) and store it
     (`final`: closing snapshot). None (and optionable=false) when the source lists no options. Raises NotListed
-    when the source does not carry the symbol, net.FetchError on failure."""
-    snap = await src.fetch_chain(symbol, final)
+    when the source does not carry the symbol, net.FetchError on failure. Every outcome is recorded in
+    jobs.source_health (failure reasons, per-symbol coverage)."""
+    try:
+        snap = await src.fetch_chain(symbol, final)
+    except NotListed:
+        source_health.record(src.name, symbol, "not_listed", now=now_ny())
+        raise
+    except Exception as e:
+        source_health.record(src.name, symbol, "failed", failure_reason(e), now=now_ny())
+        raise
     if not snap.contracts:
         await asyncio.to_thread(quotes_repo.upsert_quotes, [snap.quote], src.name)
         await asyncio.to_thread(symbols_repo.set_optionable, symbol, False)
+        source_health.record(src.name, symbol, "no_options", now=now_ny())
         return None
     now = now_ny()
 
     def store() -> None:
         store_chain(_prepare(snap, src.name), now, final, source=src.name)
     await asyncio.to_thread(store)
+    source_health.record(src.name, symbol, "ok", now=now)
     return snap
 
 
+def failure_reason(e: BaseException) -> str:
+    """The grouping key of a failed fetch: the source's own (e.g. Questrade's "403 code 1016 (missing market-data
+    permission)"), else HTTP status / exception type and message."""
+    r = getattr(e, "reason", None)
+    if r:
+        return str(r)
+    if isinstance(e, FetchError):
+        return f"{e.status or 'no response'} {type(e).__name__}"
+    return f"{type(e).__name__}: {e}"[:160]
+
+
+def retryable(e: BaseException) -> bool:
+    """Whether a failed fetch is worth another try in the same sweep: transient (5xx, timeouts) and rate limits.
+    An auth / permission problem stops the source (circuit breaker); a refused request fails that symbol."""
+    return getattr(e, "kind", "transient") in ("transient", "rate")
+
+
 async def _sweep_source(src: ChainSource, syms: list[str], final: bool) -> tuple[list[str], str]:
-    """Sweep `syms` from one source. Returns (symbols stored, detail)."""
+    """Sweep `syms` from one source; a second pass retries transient failures only. When the source becomes
+    unavailable mid-sweep (e.g. Questrade answered 403 code 1016: it needs attention) the rest is not asked for.
+    Returns (symbols stored, detail with the grouped failure reasons)."""
     t0 = _time.monotonic()
     done: list[str] = []
-    skipped: list[str] = []
+    no_options: list[str] = []
+    not_listed: list[str] = []
+    failed: dict[str, BaseException] = {}
+    aborted: list[str] = []
 
     async def one(sym: str) -> None:
-        if src.unavailable() is not None:   # e.g. the token was refused mid-sweep: stop asking
-            skipped.append(sym)
+        if src.unavailable() is not None:   # circuit breaker (e.g. the token lacks a permission): stop asking
+            aborted.append(sym)
             return
         try:
             if await refresh_chain(src, sym, final) is not None:
                 done.append(sym)
+            else:
+                no_options.append(sym)
+            failed.pop(sym, None)
         except NotListed:
-            skipped.append(sym)
+            not_listed.append(sym)
+            return
+        except Exception as e:  # noqa: BLE001 - one symbol must not stop the sweep
+            failed[sym] = e
+            log.debug("sweep %s %s failed: %s", src.name, sym, e)
             return
         if len(done) % 100 == 0 and done:
             await report_progress(f"{src.name}: {len(done)}/{len(syms)} chains")
 
-    ok, failed = await run_bounded(syms, one, SWEEP_CONCURRENCY, f"sweep {src.name}")
-    if failed:  # second pass for transient failures (e.g. a rate-limit burst)
-        ok2, failed = await run_bounded(failed, one, SWEEP_CONCURRENCY, f"sweep-retry {src.name}")
-        ok += ok2
-    detail = (f"{src.name}: {len(done)} chains, {ok - len(done) - len(skipped)} not optionable, "
-              f"{len(skipped)} not listed/skipped, {len(failed)} failed, {_time.monotonic() - t0:.0f}s")
-    if failed:
-        detail += f" (failed: {','.join(failed[:20])})"
+    await run_bounded(syms, one, SWEEP_CONCURRENCY, f"sweep {src.name}")
+    retry = [s for s, e in failed.items() if retryable(e)]
+    if retry and src.unavailable() is None:   # second pass for transient failures (e.g. a burst of 5xx)
+        await run_bounded(retry, one, SWEEP_CONCURRENCY, f"sweep-retry {src.name}")
+    counts = Counter(failure_reason(e) for e in failed.values())
+    detail = (f"{src.name}: {len(done)} chains, {len(no_options)} not optionable, {len(not_listed)} not listed, "
+              f"{len(failed)} failed, {_time.monotonic() - t0:.0f}s")
+    if counts:
+        detail += f" (failures: {source_health.format_failures([{'reason': r, 'count': c} for r, c in counts.most_common(3)])})"
+    if aborted:
+        detail += f"; stopped, {len(aborted)} not asked: {src.unavailable() or 'source unavailable'}"
     return done, detail
 
 
 async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
     """Refresh chains of the universe + the cash indices (bridge_plan.EOD_INDICES; or the given symbols) from every available server-side
     ChainSource, then fire on_sweep_complete. `final`: the closing snapshot (archived per jobs/precedence.py).
-    A configured source that is not available (e.g. Questrade not connected) is reported, not swept.
-    RuntimeError without any server-side source."""
+    A configured source that is not available (e.g. Questrade not connected, or it needs attention) is reported,
+    not swept. RuntimeError without any server-side source."""
     srcs = server_sources()
     syms = symbols or list(dict.fromkeys([*await asyncio.to_thread(symbols_repo.universe_symbols), *bridge_plan.EOD_INDICES]))
     done: set[str] = set()
@@ -300,16 +388,25 @@ async def sweep_final() -> str:
     return await sweep(final=True)
 
 
-_fill_attempts: dict[tuple[str, str], float] = {}   # (source, symbol) -> monotonic time of the last fill attempt
-
-
-def fill_symbols(now: datetime, syms: list[str], source: str) -> list[str]:
-    """Of `syms`, those without a chain fetched since the open of the current session (session_date) and not
-    attempted by `source` within FILL_RETRY_S (docs/INTEGRATION.md §6 "After-hours fills")."""
+def fill_symbols(now: datetime, syms: list[str], source: str) -> tuple[list[str], int]:
+    """(Of `syms`, those an after-hours fill from `source` should fetch, how many wait for a retry after failing).
+    A symbol is covered by a chain stored since the open of the current session (session_date), or by a recent
+    answer that it has none to give (not listed / no options, within CONFIRMED_RETRY_S). A failed attempt is never
+    coverage: the symbol is asked again FAILED_RETRY_S later (docs/INTEGRATION.md §6 "After-hours fills")."""
     have = options_repo.fetched_since(datetime.combine(session_date(now), OPEN, NY), syms)
-    t = _time.monotonic()
-    return [s for s in syms if s not in have
-            and t - _fill_attempts.get((source, s), -FILL_RETRY_S) >= FILL_RETRY_S]
+    todo, waiting = [], 0
+    for s in syms:
+        if s in have:
+            continue
+        a = source_health.last(source, s)
+        age = None if a is None else (now - a.at).total_seconds()
+        if a is not None and a.result != "failed" and age < CONFIRMED_RETRY_S:
+            continue
+        if a is not None and a.result == "failed" and age < FAILED_RETRY_S:
+            waiting += 1
+            continue
+        todo.append(s)
+    return todo, waiting
 
 
 async def sweep_fill() -> str:
@@ -331,12 +428,12 @@ async def sweep_fill() -> str:
         if why is not None:
             details.append(f"{src.name}: {why}")
             continue
-        todo = await asyncio.to_thread(fill_symbols, now, order, src.name)
+        todo, waiting = await asyncio.to_thread(fill_symbols, now, order, src.name)
         if not todo:
-            details.append(f"{src.name}: session {session_date(now)} covered")
+            details.append(f"{src.name}: session {session_date(now)} covered" if not waiting else
+                           f"{src.name}: {waiting} symbols of session {session_date(now)} failed recently; "
+                           f"asked again {FAILED_RETRY_S // 60} min after their attempt")
             continue
-        t = _time.monotonic()
-        _fill_attempts.update({(src.name, s): t for s in todo})
         got, detail = await _sweep_source(src, todo, final=False)
         done.update(got)
         details.append(f"fill of {session_date(now)}: {detail}")

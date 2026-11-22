@@ -12,15 +12,22 @@ from .. import db
 from ._sql import columns, insert_arrow, now_utc, query, scalar, split_by
 
 _NON_VALUE = ("date", "symbol", "updated_at", "source")
+PROVENANCE = ("chain_fetched_at",)   # stored with a row's values, not a metric (jobs/precedence.py)
 
 
 @lru_cache(maxsize=1)
 def metric_columns() -> tuple[str, ...]:
-    """Value columns of metrics_daily (everything except date, symbol, updated_at, source), from the schema."""
+    """Value columns of metrics_daily (everything except date, symbol, updated_at, source and PROVENANCE), from the
+    schema."""
     rows = db.cursor().execute(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'metrics_daily' "
         "ORDER BY ordinal_position").fetchall()
-    return tuple(r[0] for r in rows if r[0] not in _NON_VALUE)
+    return tuple(r[0] for r in rows if r[0] not in _NON_VALUE and r[0] not in PROVENANCE)
+
+
+def row_columns() -> tuple[str, ...]:
+    """The columns an upsert writes: metric_columns + PROVENANCE."""
+    return metric_columns() + PROVENANCE
 
 
 def _clean(v):
@@ -32,7 +39,7 @@ def _clean(v):
 
 
 def _check(values: Mapping) -> None:
-    unknown = set(values) - set(metric_columns())
+    unknown = set(values) - set(row_columns())
     if unknown:
         raise ValueError(f"unknown metrics columns: {sorted(unknown)}")
 
@@ -45,7 +52,7 @@ def upsert_metrics(day: date, symbol: str, values: dict, source: str | None = No
 
 def upsert_metrics_many(day: date, rows: Mapping[str, tuple[Mapping, str | None]]) -> int:
     """upsert_metrics for many symbols in one write: {symbol: (values, source)}. Returns rows written."""
-    cols = metric_columns()
+    cols = row_columns()
     for values, _ in rows.values():
         _check(values)
     syms = list(rows)

@@ -1,8 +1,8 @@
-"""Option-chain sources. `settings.chain_sources` (OPTIONLENS_CHAIN_SOURCES) lists them in preference order:
+"""Option-chain sources. `settings.chain_sources` (OPTIONLENS_CHAIN_SOURCES) lists the enabled ones:
 - "ibkr-bridge": chains pushed by the app's IBKR bridge through the ingest API (rows tagged "ibkr");
 - any other name: a server-side ChainSource from REGISTRY, which the scheduler sweeps itself while the source is
   available (rows tagged with its name, e.g. "questrade").
-The order breaks ties between chains of equal quality (jobs/precedence.py).
+No source is preferred: which chain wins is decided by quality and freshness alone (jobs/precedence.py).
 """
 from __future__ import annotations
 
@@ -22,8 +22,17 @@ class NotListed(Exception):
 class ChainSource(Protocol):
     name: str
 
+    def connected(self) -> bool:
+        """Whether the user set the source up (e.g. pasted a token), whether or not it can fetch now."""
+        ...
+
     def unavailable(self) -> str | None:
-        """Why the source cannot fetch now (e.g. "not connected"), or None."""
+        """Why the source cannot fetch now (e.g. "not connected", a permission problem), or None."""
+        ...
+
+    def problem(self) -> str | None:
+        """While unavailable for a reason the user must fix: its short form (e.g. "403 code 1016 (missing
+        market-data permission)"), else None."""
         ...
 
     def status(self) -> dict:
@@ -53,13 +62,8 @@ def tag(name: str) -> str:
     return BRIDGE_TAG if name == BRIDGE else name
 
 
-def preference() -> tuple[str, ...]:
-    """Source tags in the configured preference order."""
-    return tuple(tag(n) for n in get_settings().chain_sources)
-
-
 def server_source_names() -> list[str]:
-    """Names of the configured server-side ChainSources, in preference order. Unknown name -> ValueError."""
+    """Names of the configured server-side ChainSources. Unknown name -> ValueError."""
     names = [n for n in get_settings().chain_sources if n != BRIDGE]
     unknown = [n for n in names if n not in REGISTRY]
     if unknown:
@@ -69,7 +73,7 @@ def server_source_names() -> list[str]:
 
 
 def server_sources() -> list[ChainSource]:
-    """The configured server-side ChainSources (available or not), in preference order."""
+    """The configured server-side ChainSources (available or not)."""
     return [REGISTRY[n]() for n in server_source_names()]
 
 

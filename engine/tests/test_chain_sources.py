@@ -58,41 +58,50 @@ def eod_source(day: date = FRI) -> str | None:
 
 
 # ----------------------------------------------------------------------------- precedence
-def test_ibkr_session_data_is_not_overwritten_by_a_later_vendor_chain(tmpdb, payload):
+def test_equal_closing_chains_the_fresher_wins_everywhere(tmpdb, payload):
+    """No source is preferred: of two equal closing snapshots the fresher one is the served chain, the session's
+    metrics row and its archive; every row keeps its source."""
     t1, t2 = ny(2026, 11, 20, 16, 5), ny(2026, 11, 20, 16, 25)
     chains.store_chain(snap(payload, t1), t1, final=True, source="ibkr")
-    ibkr_metrics = metrics_repo.get_metrics("AAPL", FRI)
-    n_ibkr = len(options_repo.eod_for_date(FRI, ["AAPL"])["osi"])
-    assert eod_source() == "ibkr" and ibkr_metrics["source"] == "ibkr" and n_ibkr > 0
+    assert eod_source() == "ibkr" and metrics_repo.source_of(FRI, "AAPL") == "ibkr"
+    assert options_repo.latest_source("AAPL") == "ibkr"
     chains.store_chain(snap(payload, t2, price=400.0), t2, final=True, source="vendor")
-    assert metrics_repo.get_metrics("AAPL", FRI) == ibkr_metrics                   # metrics kept
-    assert eod_source() == "ibkr"                                                  # archive kept
-    assert set(options_repo.eod_for_date(FRI, ["AAPL"])["underlying"]) != {400.0}
-    assert options_repo.latest_source("AAPL") == "vendor"                          # latest = newest chain
+    assert eod_source() == "vendor" and metrics_repo.source_of(FRI, "AAPL") == "vendor"
+    assert options_repo.latest_source("AAPL") == "vendor"
+    assert set(options_repo.eod_for_date(FRI, ["AAPL"])["underlying"]) == {400.0}
     assert quotes_repo.get_quote("AAPL").price == 400.0 and quotes_repo.source_of("AAPL") == "vendor"
-    # bulk archive of option_latest (vendor) does not replace the IBKR archive either
-    assert options_repo.write_option_eod(FRI, t1, ["AAPL"]) == 0 and eod_source() == "ibkr"
+    options_repo.write_option_eod(FRI, t1, ["AAPL"])                              # the bulk archive: same chain
+    assert eod_source() == "vendor"
 
 
-def test_ibkr_replaces_vendor_and_older_chains_do_not_replace_latest(tmpdb, payload):
+def test_an_older_snapshot_pushed_later_does_not_replace_a_fresher_equal_one(tmpdb, payload):
     t1, t2 = ny(2026, 11, 20, 16, 5), ny(2026, 11, 20, 16, 25)
     chains.store_chain(snap(payload, t2, price=400.0), t2, final=True, source="vendor")
-    assert eod_source() == "vendor"
     chains.store_chain(snap(payload, t1), t2, final=True, source="ibkr")         # older snapshot, pushed later
-    assert eod_source() == "ibkr" and metrics_repo.source_of(FRI, "AAPL") == "ibkr"
-    assert metrics_repo.get_metrics("AAPL", FRI)["close"] == pytest.approx(348.515)
-    assert options_repo.latest_source("AAPL") == "vendor"                          # newer vendor chain stays latest
-    assert quotes_repo.get_quote("AAPL").price == 400.0
+    assert eod_source() == "vendor" and metrics_repo.source_of(FRI, "AAPL") == "vendor"
+    assert options_repo.latest_source("AAPL") == "vendor"
+    assert quotes_repo.get_quote("AAPL").price == 400.0                            # the newest quote stays
 
 
-def test_intraday_ibkr_metrics_win_over_later_intraday_vendor(tmpdb, payload):
+def test_intraday_chains_far_apart_the_fresher_wins(tmpdb, payload):
     t1, t2 = ny(2026, 11, 20, 11, 0), ny(2026, 11, 20, 12, 0)
-    chains.store_chain(snap(payload, t1), t1, source="ibkr")
-    chains.store_chain(snap(payload, t2, price=400.0), t2, source="vendor")
-    assert metrics_repo.get_metrics("AAPL", FRI)["close"] == pytest.approx(348.515)
-    chains.store_chain(snap(payload, t2, price=401.0), t2, source="ibkr")         # newer IBKR replaces IBKR
-    assert metrics_repo.get_metrics("AAPL", FRI)["close"] == 401.0
+    chains.store_chain(dataclasses.replace(snap(payload, t1), delayed=False), t1, source="ibkr")
+    chains.store_chain(snap(payload, t2, price=400.0), t2, source="vendor")      # delayed-unknown, an hour later
+    assert metrics_repo.get_metrics("AAPL", FRI)["close"] == 400.0 and options_repo.latest_source("AAPL") == "vendor"
+    t3 = ny(2026, 11, 20, 12, 5)                                                  # within the same snapshot window:
+    chains.store_chain(dataclasses.replace(snap(payload, t3, price=401.0), delayed=False), t3, source="ibkr")
+    assert metrics_repo.get_metrics("AAPL", FRI)["close"] == 401.0 and options_repo.latest_source("AAPL") == "ibkr"
+    t4 = ny(2026, 11, 20, 12, 10)                                                 # real-time beats a fresher delayed
+    chains.store_chain(dataclasses.replace(snap(payload, t4, price=402.0), delayed=True), t4, source="vendor")
+    assert options_repo.latest_source("AAPL") == "ibkr" and metrics_repo.source_of(FRI, "AAPL") == "ibkr"
     assert eod_source() is None                                                    # non-final: no archive
+
+
+def test_a_later_session_always_replaces_the_served_chain(tmpdb, payload):
+    fri, mon = ny(2026, 11, 20, 16, 25), ny(2026, 11, 23, 9, 35)
+    chains.store_chain(dataclasses.replace(snap(payload, fri), delayed=False), fri, final=True, source="questrade")
+    chains.store_chain(dataclasses.replace(snap(payload, mon), delayed=True), mon, source="ibkr")
+    assert options_repo.latest_source("AAPL") == "ibkr" and eod_source() == "questrade"
 
 
 async def test_eod_without_vendor_archives_unarchived_pushes_only(tmpdb, payload, monkeypatch):
@@ -120,16 +129,14 @@ async def test_a_trading_day_eod_that_archives_nothing_fails(tmpdb, monkeypatch)
         await chains.eod()
 
 
-async def test_ensure_fresh_without_source_serves_stored_chain(tmpdb, payload, monkeypatch):
+async def test_visit_records_the_view_and_fetches_no_chain(tmpdb, payload, monkeypatch):
     async def no_history(row, start=None):
         return 0
     monkeypatch.setattr(prices, "backfill_symbol", no_history)
     ondemand._viewed.clear()
-    assert await ondemand.ensure_fresh("AAPL") is False                            # nothing stored, nothing fetched
-    t = ny(2026, 11, 20, 11, 0)
-    chains.store_chain(snap(payload, t), t, source="ibkr")
-    assert await ondemand.ensure_fresh("AAPL") is True
-    assert views_repo.viewed_since(t - timedelta(days=1)) == ["AAPL"]
+    row = await ondemand.visit("AAPL")
+    assert row["symbol"] == "AAPL" and options_repo.latest_fetched_at("AAPL") is None
+    assert views_repo.viewed_since(ny(2026, 1, 1)) == ["AAPL"]
 
 
 # ----------------------------------------------------------------------------- underlying stats
@@ -253,8 +260,11 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
     assert cu["symbols"] == ["F", "TSLA", "NVDA", "AAPL"] and cu["as_of_session"] == FRI
     assert bridge_plan.chain_universe_want(ny(2026, 11, 20, 8, 59))["as_of_session"] == date(2026, 11, 19)
     assert bridge_plan.chain_universe_want(ny(2026, 11, 21, 12, 0))["as_of_session"] == FRI   # Saturday
-    # eod chains: chain universe + indices, minus closing chains already archived from IBKR
-    chains.store_chain(snap(payload, ny(2026, 11, 20, 16, 30)), ny(2026, 11, 20, 16, 30), final=True, source="ibkr")
+    # eod chains: chain universe + indices, minus real-time closing chains already archived
+    t_close = ny(2026, 11, 20, 16, 30)
+    chains.store_chain(snap(payload, t_close), t_close, final=True, source="ibkr")                # delayed/unknown
+    assert "AAPL" in bridge_plan.eod_chains_want(ny(2026, 11, 20, 17, 0))["symbols"]             # could be beaten
+    chains.store_chain(dataclasses.replace(snap(payload, t_close), delayed=False), t_close, final=True, source="ibkr")
     e = bridge_plan.eod_chains_want(ny(2026, 11, 20, 17, 0))
     assert e["session_date"] == FRI and "AAPL" not in e["symbols"] and {"SPX", "NDX", "RUT", "XSP", "F"} <= set(e["symbols"])
     assert e["not_before"] == ny(2026, 11, 20, 16, 20) and e["deadline"] == ny(2026, 11, 20, 20, 0)

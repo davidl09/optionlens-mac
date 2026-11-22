@@ -5,7 +5,7 @@ import type { BridgeStatus } from "../shared/api";
 import { Bridge } from "./bridge";
 import { emptyMarket, FakeConnector, FakeSession, memoryContractStore } from "./fake-tws.test-helper";
 import type { ContractStore } from "./contract-cache";
-import type { Heartbeat, IngestApi, IngestChain, UnderlyingStats } from "./ingest";
+import type { Heartbeat, IngestApi, IngestChain, RefreshResultBody, UnderlyingStats } from "./ingest";
 import { CONTRACTS_UNAVAILABLE, OPTION_QUOTES_CLOSED } from "./jobs";
 import type { OptionsFeedStore } from "./options-feed";
 import { Ledger } from "./ledger";
@@ -31,9 +31,11 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
   const statsBodies: UnderlyingStats[] = [];
   const chains: IngestChain[] = [];
   const heartbeats: Heartbeat[] = [];
+  const reports: RefreshResultBody[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
   const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
-    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; } };
+    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
+    refreshResult: async (b) => { reports.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
   const bridge = new Bridge({
@@ -42,7 +44,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
     contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
   });
-  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats };
+  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports };
 }
 
 const WANTS = {
@@ -84,6 +86,26 @@ describe("Bridge", () => {
     expect(await p).toEqual({ status: "refreshed" });
     expect(h.calls).toContain("chain:AAPL");
     expect(await h.bridge.refreshSymbol("AAPL")).toEqual({ status: "fresh" });
+    // every outcome goes to the engine's refresh round too: pending at once, then the result
+    expect(h.reports.map((r) => `${r.symbol}:${r.status}`)).toEqual(["AAPL:pending", "AAPL:refreshed", "AAPL:pending", "AAPL:fresh"]);
+    expect(h.reports[1]).toEqual({ source: "ibkr", symbol: "AAPL", status: "refreshed", message: null, waiting_for: null });
+    h.bridge.stop();
+  });
+
+  it("reports the last chain round, the last chain and grouped failure reasons in its status", async () => {
+    const m = market();
+    const h = harness({ ...WANTS, iv_history: [], hv_history: [], underlying_stats: { symbols: [], max_age_s: 1800 }, index_bars: [], index_symbols: [],
+      chain_universe: { symbols: ["MSFT", "KO", "PEP"], max_age_s: 3600, expiries: 1, moneyness: 0.2 } }, m);
+    m.optionParams = [];
+    const details = m.details;
+    m.details = (c) => { if (c.symbol === "KO" || c.symbol === "PEP") throw new TwsRequestError(200, `No security definition has been found for ${c.symbol}`); return details(c); };
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const last = h.statuses[h.statuses.length - 1];
+    expect(last.lastChainRound?.detail).toMatch(/chains?, 2 failed$/);
+    expect(last.failures[0]).toMatchObject({ count: 2 });
+    expect(last.failures[0].reason).toContain("No security definition has been found for …");
+    expect(last.linesPerBatch).toBeGreaterThan(0);
     h.bridge.stop();
   });
 

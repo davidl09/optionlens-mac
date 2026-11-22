@@ -250,7 +250,7 @@ test("empty report: the engine's reason, when chains are collected, and the meth
   await page.goto("/reports/oi-changes");
   const empty = page.locator(".dt-empty");
   await expect(empty).toContainText("No stored option chain matches these settings.");
-  await expect(empty).toContainText("Option chains are collected by the IBKR bridge during market hours (09:00–20:00 ET), after hours for a last session that has none yet, and on demand when you open a symbol.");
+  await expect(empty).toContainText("Option chains are collected from your connected sources (IBKR and/or Questrade) during market hours, after hours for a last session that has none yet, and on demand when you open a symbol.");
   await expect(empty).toContainText("Last bridge push 2026-11-19 15:45 ET · next collection 2026-11-19 16:00 ET.");
   await expect(page.getByText("No data.", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Contracts not present in the prior end-of-day snapshot are skipped.")).toBeHidden();
@@ -401,7 +401,7 @@ test("symbol page: fundamentals as numbers, insider sells split, IV30 legend onl
 test("compare straddles: a symbol without a stored chain is named, with when chains are collected", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/compare/straddle?symbols=SPY,DELL&dte=30");
-  await expect(page.locator(".info-box", { hasText: "No stored option chain for DELL yet" })).toContainText("Option chains are collected by the IBKR bridge");
+  await expect(page.locator(".info-box", { hasText: "No stored option chain for DELL yet" })).toContainText("Option chains are collected from your connected sources");
   await expect(page.locator("td", { hasText: "DELL" })).toBeVisible();
   clean(p);
 });
