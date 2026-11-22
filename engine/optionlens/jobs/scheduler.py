@@ -241,6 +241,19 @@ async def _bootstrap() -> None:
         _tasks.append(asyncio.create_task(_loop(job), name=f"job:{job.name}"))
 
 
+def is_running() -> bool:
+    """Whether the scheduler was started in this process (not with OPTIONLENS_NO_SCHEDULER, nor in the CLI)."""
+    return bool(_tasks)
+
+
+def run_soon(name: str) -> None:
+    """Run a job in the background now (no-op unless the scheduler runs; run_job skips one already running)."""
+    if is_running():
+        task = asyncio.get_running_loop().create_task(run_job(name), name=f"job:{name}:now")
+        _tasks.append(task)
+        task.add_done_callback(lambda t: t in _tasks and _tasks.remove(t))
+
+
 async def start() -> None:
     """Start the scheduler in the running event loop (idempotent)."""
     if _tasks:

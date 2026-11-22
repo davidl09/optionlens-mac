@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
+from ..analytics.calendar import now_ny
+from ..jobs import scheduler
+from ..jobs._util import after_session
 from ..repo import jobs as jobs_repo
 from ..repo import options as options_repo
 from ..sources import chain_source, questrade
@@ -62,8 +65,9 @@ def status_entry() -> list[dict]:
 
 
 async def connect_questrade(refresh_token: str) -> dict:
-    """POST /api/sources/questrade/token: redeem and store a pasted refresh token. 422 code "token_rejected" when
-    Questrade refuses it, "upstream" when its login cannot be reached."""
+    """POST /api/sources/questrade/token: redeem and store a pasted refresh token, then start collecting at once
+    (a sweep in the session, else the after-hours fill). 422 code "token_rejected" when Questrade refuses it,
+    "upstream" when its login cannot be reached."""
     src = _questrade()
     try:
         await src.tokens.connect(refresh_token)
@@ -71,6 +75,7 @@ async def connect_questrade(refresh_token: str) -> dict:
         raise BadRequest(str(e), "token_rejected") from None
     except questrade.TokenError as e:
         raise BadRequest(str(e), UPSTREAM) from None
+    scheduler.run_soon("sweep_fill" if after_session(now_ny()) else "sweep")
     return await asyncio.to_thread(questrade_status)
 
 

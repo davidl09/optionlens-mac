@@ -73,3 +73,15 @@ def test_not_enabled(client, monkeypatch):
     monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("ibkr-bridge",)})())
     assert client.get("/api/sources/questrade").status_code == 404
     assert all(s["name"] != "questrade" for s in client.get("/api/status").json()["sources"])
+
+
+def test_connecting_starts_collecting_when_the_scheduler_runs(client, qt, monkeypatch):
+    from optionlens.jobs import scheduler
+    from optionlens.services import sources
+    asked = []
+    monkeypatch.setattr(sources.scheduler, "run_soon", asked.append)
+    monkeypatch.setattr(sources, "after_session", lambda now: True)
+    assert client.post("/api/sources/questrade/token", json={"refresh_token": "pasted-token"}).status_code == 200
+    assert asked == ["sweep_fill"]
+    assert not scheduler.is_running()      # API tests run without the scheduler: run_soon is a no-op there
+    scheduler.run_soon("sweep")            # no loop needed when not running

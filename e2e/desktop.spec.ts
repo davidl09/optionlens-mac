@@ -266,7 +266,7 @@ test("Settings → Data sources: Questrade connects with a pasted token (never s
   await field.fill("  fresh-token ");
   await card.getByRole("button", { name: "Connect" }).click();
   await expect(card.locator(".card-sub")).toHaveText("connected");
-  await expect(card.getByText("Connected. Chains are collected")).toBeVisible();
+  await expect(card.getByText("Connected. Collecting chains now")).toBeVisible();
   await expect(field).toHaveValue("");                                           // cleared, never shown again
   await expect(card.getByText("real-time", { exact: true })).toBeVisible();
   await expect(card.getByText("1,234 / 10,500 · 13,766 left at Questrade")).toBeVisible();

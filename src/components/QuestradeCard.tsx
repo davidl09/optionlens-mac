@@ -63,7 +63,7 @@ export function QuestradeCard() {
   };
   const connect = (e: FormEvent) => {
     e.preventDefault();
-    if (token.trim()) void run(() => api.connectQuestrade(token.trim()), "Connected. Chains are collected on the next sweep (hourly during market hours).");
+    if (token.trim()) void run(() => api.connectQuestrade(token.trim()), "Connected. Collecting chains now, then hourly in market hours.");
   };
   const disconnect = () => {
     if (window.confirm("Disconnect Questrade? The stored token is deleted from this computer (revoke it in Questrade's API Centre too if you no longer need it).")) {
