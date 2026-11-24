@@ -21,6 +21,7 @@ log = logging.getLogger("optionlens.jobs.hooks")
 Hook = Callable[[date, list[str]], Any]
 on_sweep_complete: list[Hook] = []   # after every sweep (incl. the EOD final sweep): symbols refreshed
 on_eod: list[Hook] = []              # after option_eod + daily_bars were written for `day`
+on_halt_change: list[Hook] = []      # a symbol's trading halt started or ended (repo.halts): symbols changed
 # Applied in order to a server-side source's chain (sync, in a worker thread) before it is stored: the
 # services layer completes IV and greeks the same way as for pushed chains (services.ingest.complete_chain).
 chain_preparers: list[Callable[[ChainSnapshot, str], ChainSnapshot]] = []

@@ -8,7 +8,7 @@ const has = (f: LiveFields, k: keyof LiveFields) => f[k] !== undefined && f[k] !
 export function withLiveQuote<T extends object>(q: T, f: LiveFields | null): T {
   if (!f) return q;
   const out = { ...q } as Record<string, unknown>;
-  for (const k of ["price", "change", "change_pct", "bid", "ask", "open", "high", "low", "volume"] as const) if (has(f, k)) out[k] = f[k];
+  for (const k of ["price", "change", "change_pct", "bid", "ask", "open", "high", "low", "volume", "vwap", "halted"] as const) if (has(f, k)) out[k] = f[k];
   if (f.ts) out.ts = f.ts;
   if (f.source) out.source = f.source;
   if (f.delayed !== undefined) out.delayed = f.delayed;
@@ -31,7 +31,7 @@ export function withLiveOption(row: OptionRow, f: LiveFields | null, spot?: numb
 }
 
 /** Report columns a live quote can update: of the row's underlying, or of its contract for rows with an `osi`. */
-const QUOTE_COLUMNS = new Set(["price", "change", "change_pct", "bid", "ask", "volume", "open", "high", "low"]);
+const QUOTE_COLUMNS = new Set(["price", "change", "change_pct", "bid", "ask", "volume", "open", "high", "low", "vwap", "halted"]);
 const UNDERLYING_COLUMNS = new Set(["price", "change", "change_pct"]);
 const OPTION_COLUMNS = new Set(["bid", "ask", "mid", "last", "volume", "oi", "iv", "delta", "gamma", "theta", "vega"]);
 

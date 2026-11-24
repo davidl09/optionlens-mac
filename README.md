@@ -227,6 +227,14 @@ provides (IV/HV history, index history, option-bar catch-up) plus the symbols Qu
 is unavailable, IBKR takes over its chains. If Questrade refuses access (e.g. a missing permission), it stops at once
 and Settings → Data sources says what to fix.
 
+Questrade also fills data the free sources lack: once a day each symbol's P/E, EPS, market cap, shares outstanding,
+52-week range, average volumes, sector and current dividend (one value per figure on every page; P/E and market cap
+follow the live price), VWAP and trading halts in quotes (HALTED badge, `halted` / `resumed` alerts), and
+extended-hours quotes of the whole universe for the pre-market / after-hours movers. Dividends cover every US listing:
+Nasdaq's history where it has one, else dividends derived from IBKR's dividend-adjusted daily closes (the IBKR bridge
+backfills ten years per symbol, a few hours on the first connection), else Questrade's current dividend — each with
+its source, and amounts that disagree between sources flagged.
+
 ## Live quotes
 
 While the market is open, what is on screen updates by itself: the symbol header, the option chain (the expiry and

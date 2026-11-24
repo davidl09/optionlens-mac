@@ -51,6 +51,9 @@ def test_bridge_push_fills_the_missing_spans(client):
     body = client.get("/api/symbol/DELL/bars?interval=1h&range=3m").json()
     assert mismatches(body, schema) == [] and body["sources"] == ["ibkr"] and body["delayed"] is None
     assert [b["close"] for b in body["bars"]] == [50.5] * 6                       # 16:00 is after the close
+    # the push has no VWAP per bar: the session VWAP is computed from typical prices and labelled so
+    assert body["vwap_source"] == "computed"
+    assert all(b["vwap"] == pytest.approx((51 + 49 + 50.5) / 3) for b in body["bars"])
     assert len(client.get("/api/symbol/DELL/bars?interval=1h&range=3m&extended=1").json()["bars"]) == 7
     left = [datetime.fromisoformat(m["end"]) - datetime.fromisoformat(m["start"]) for m in body["missing"]]
     assert all(d <= intraday.RECENT + timedelta(minutes=1) for d in left)       # only the unsettled tail
@@ -59,6 +62,7 @@ def test_bridge_push_fills_the_missing_spans(client):
 def test_questrade_candles_are_cached(client, monkeypatch, tmp_path):
     fake = FakeQuestrade()
     fake.listed["SPY"] = 1000
+    fake.candle_vwap = True                                                    # each candle sends its own VWAP
     src = QuestradeSource(tmp_path, get_settings().questrade_expiries, get_settings().questrade_moneyness, fake.http)
     monkeypatch.setitem(chain_source.REGISTRY, "questrade", lambda: src)
     assert client.post("/api/sources/questrade/token", json={"refresh_token": "pasted-token"}).status_code == 200
@@ -66,6 +70,7 @@ def test_questrade_candles_are_cached(client, monkeypatch, tmp_path):
     body = client.get("/api/symbol/SPY/bars?interval=15m&range=1m").json()
     assert mismatches(body, load_types().parse("IntradayBars")) == []
     assert body["sources"] == ["questrade"] and body["missing"] == [] and body["has_extended"] is True
+    assert body["vwap_source"] == "questrade" and all(b["vwap"] is not None for b in body["bars"])
     first = len(calls())
     assert 1 <= first <= 2
     client.get("/api/symbol/SPY/bars?interval=15m&range=1m&extended=1")

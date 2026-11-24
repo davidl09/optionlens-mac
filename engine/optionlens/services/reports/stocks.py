@@ -10,8 +10,12 @@ from datetime import date
 
 import numpy as np
 
+from ...analytics import intraday as intraday_a
+from ...analytics.calendar import NY
+from ...jobs import extended as extended_job
 from ...jobs import ondemand
 from ...repo import bars as bars_repo
+from ...repo import extended as extended_repo
 from ...repo import user as user_repo
 from . import columns as C
 from .base import Col, Output, Param, ReportDef, RunParams, group, pick, today
@@ -327,62 +331,94 @@ SEASONALITY = ReportDef(
 # ============================================================================ extended hours
 EXT_COLS = (*C.DESC_SHORT, Col("price", "Last close", "money", C.G_QUOTE), Col("change_pct", "Regular % Chg", "pct_signed", C.G_QUOTE),
             *group("Extended hours", (Col("ext_price", "Ext. price", "money"), Col("ext_change", "Ext. change", "money"),
-                                      Col("ext_change_pct", "Ext. % Chg", "pct_signed"), Col("ext_volume", "Ext. volume", "int"),
+                                      Col("ext_change_pct", "Ext. % Chg", "pct_signed"),
+                                      Col("ext_volume", "Ext. volume", "int", description="Nasdaq rows: extended-hours volume"),
+                                      Col("day_volume", "Volume (day)", "int", description="Questrade rows: the day's "
+                                          "volume as the quote reports it"),
                                       Col("ext_high", "Ext. high", "money", default_hidden=True),
                                       Col("ext_low", "Ext. low", "money", default_hidden=True),
-                                      Col("ext_updated", "Updated", "text"))),
-            Col("in_watchlist", "In Watchlist", "bool", C.G_DESC), *pick(C.VOL_CORE, "iv30"), *C.CATALYSTS[:2])
+                                      Col("ext_updated", "Updated", "text"), Col("source", "Source", "text"))),
+            C.HALTED, Col("in_watchlist", "In Watchlist", "bool", C.G_DESC), *pick(C.VOL_CORE, "iv30"), *C.CATALYSTS[:2])
 EXT_CONCURRENCY = 4
+EXT_BASE_KEYS = ("name", "market_cap", "sector", "price", "change_pct", "iv30", "next_earnings", "days_to_earnings",
+                 "halted")
+
+
+def questrade_extended(market: str) -> dict[str, dict]:
+    """{symbol: report fields} of the newest session's stored extended-hours quotes (jobs.extended) that show a trade in
+    the window: the last trade's time inside it, or (no time sent) a last price that differs from the last
+    regular-hours trade."""
+    out = {}
+    for r in extended_repo.latest_session(market):
+        px, reg = r["price"], r["regular_price"]
+        a, b = intraday_a.extended_window(r["session_date"], market)
+        t = r["last_trade_at"]
+        if px is None or reg is None or not (a <= t < b if t is not None else px != reg):
+            continue
+        out[r["symbol"]] = {"ext_price": px, "ext_change": px - reg, "ext_change_pct": px / reg - 1.0,
+                            "day_volume": r["volume"], "ext_updated": f"{(t or r['ts']).astimezone(NY):%H:%M} ET",
+                            "source": r["source"], "delayed": r["delayed"]}
+    return out
+
+
+async def _nasdaq_extended(market: str, syms: list[str]) -> dict[str, dict]:
+    """{symbol: report fields} from Nasdaq's extended-hours quotes (5-minute cache), for symbols with a trade."""
+    sem = asyncio.Semaphore(EXT_CONCURRENCY)
+
+    async def one(s: str):
+        async with sem:
+            try:
+                return s, await ondemand.fetch_cached("extended", s, market=market)
+            except Exception as e:  # noqa: BLE001 - one symbol failing must not fail the report
+                log.info("extended %s %s: %s", market, s, e)
+                return s, None
+
+    return {s: {"ext_price": d.get("price"), "ext_change": d.get("change"), "ext_change_pct": d.get("change_pct"),
+                "ext_volume": d.get("volume"), "ext_high": d.get("high"), "ext_low": d.get("low"),
+                "ext_updated": d.get("updated"), "source": "nasdaq"}
+            for s, d in await asyncio.gather(*(one(s) for s in syms)) if d and d.get("price") is not None}
 
 
 def _extended(market: str):
     async def run(p: RunParams) -> Output:
         f = await asyncio.to_thread(frame)
         wl = set(await asyncio.to_thread(user_repo.watchlist_symbols))
+        qt = await asyncio.to_thread(questrade_extended, market)
         if p.scope is not None:
-            syms = list(p.scope)
-        else:
+            wanted = list(p.scope)
+        else:   # every symbol Questrade has; Nasdaq for the watchlists and the most active ones it lacks
             m = f["in_universe"] & (f["kind"] != "index") & np.isfinite(f["volume"])
             idx = np.nonzero(m)[0]
             idx = idx[np.argsort(-f["volume"][idx], kind="stable")][: p["top_n"]]
-            syms = list(dict.fromkeys([*sorted(wl), *f["symbol"][idx]]))
-        sem = asyncio.Semaphore(EXT_CONCURRENCY)
-
-        async def one(s: str):
-            async with sem:
-                try:
-                    return s, await ondemand.fetch_cached("extended", s, market=market)
-                except Exception as e:  # noqa: BLE001 - one symbol failing must not fail the report
-                    log.info("extended %s %s: %s", market, s, e)
-                    return s, None
-
-        got = await asyncio.gather(*(one(s) for s in syms))
+            wanted = list(dict.fromkeys([*sorted(qt), *sorted(wl), *f["symbol"][idx]]))
+        fallback = [s for s in wanted if s not in qt]
+        nq = await _nasdaq_extended(market, fallback) if fallback else {}
         pos = f.index()
-        base_keys = ("name", "market_cap", "sector", "price", "change_pct", "iv30", "next_earnings", "days_to_earnings")
         rows = []
-        for s, d in got:
-            if not d or d.get("price") is None:
+        for s in wanted:
+            d = qt.get(s) or nq.get(s)
+            if d is None:
                 continue
             i = pos.get(s)
-            r = {"symbol": s, **({k: v for k, v in f.rows([i], base_keys)[0].items()} if i is not None else {})}
-            r.update(ext_price=d.get("price"), ext_change=d.get("change"), ext_change_pct=d.get("change_pct"),
-                     ext_volume=d.get("volume"), ext_high=d.get("high"), ext_low=d.get("low"),
-                     ext_updated=d.get("updated"), in_watchlist=s in wl)
-            rows.append(r)
-        notes = [f"{len(syms)} symbols requested (watchlists ∪ top {p['top_n']} by volume); "
-                 f"{len(rows)} had {market}-market trades. Nasdaq extended-hours data, 5-minute cache; "
-                 "the first load can take a while."]
+            rows.append({**dict.fromkeys(C.keys(EXT_COLS)), "symbol": s,
+                         **(f.rows([i], EXT_BASE_KEYS)[0] if i is not None else {}), **d, "in_watchlist": s in wl})
+        n_qt = sum(1 for s in wanted if s in qt)
+        notes = [f"{n_qt} symbols from Questrade's extended-hours quotes (the whole universe, collected every "
+                 f"{extended_job.COLLECT_EVERY_MIN} minutes during {market}-market hours); "
+                 f"{len(rows) - n_qt} from Nasdaq (watchlists ∪ top {p['top_n']} by volume without a Questrade quote, "
+                 "5-minute cache)."]
         rows.sort(key=lambda r: -abs(r["ext_change_pct"] or 0))
         return Output(rows, notes, asof=f.asof, presorted=True)
     return run
 
 
-EXT_PARAMS = (p_int("top_n", "Top N by volume", 50, 0, 200, help="Plus every watchlist symbol"), *SCOPE)
+EXT_PARAMS = (p_int("top_n", "Nasdaq fallback: top N by volume", 50, 0, 200,
+                    help="Only for symbols without a Questrade extended-hours quote; plus every watchlist symbol"), *SCOPE)
 PREMARKET = ReportDef("premarket-movers", "Pre-market movers", "Stocks",
-                      "Pre-market moves for watchlist symbols and the most active names.", EXT_PARAMS, EXT_COLS,
+                      "Pre-market moves of every symbol with a pre-market trade.", EXT_PARAMS, EXT_COLS,
                       _extended("pre"), None)
 AFTERHOURS = ReportDef("afterhours-movers", "After-hours movers", "Stocks",
-                       "After-hours moves for watchlist symbols and the most active names.", EXT_PARAMS, EXT_COLS,
+                       "After-hours moves of every symbol with an after-hours trade.", EXT_PARAMS, EXT_COLS,
                        _extended("post"), None)
 
 # ============================================================================ event-driven

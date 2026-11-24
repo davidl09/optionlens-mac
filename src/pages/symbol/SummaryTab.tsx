@@ -7,8 +7,10 @@ import { LineChart, LineSeries } from "../../components/charts/Charts";
 import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
-import { Async, Card } from "../../components/ui";
+import { Async, Card, SourceBadge } from "../../components/ui";
 import { fmt, plural } from "../../lib/format";
+import { atPrice } from "../../lib/keyStats";
+import { isFlowing, useLiveQuote, useLiveStatus } from "../../live";
 import { IDEA_COLUMNS, ideasAsRows, ivAsOf, useSym } from "./shared";
 
 export const MIN_IV_HISTORY = 20;
@@ -38,9 +40,14 @@ function Levels({ title, values, spot, tone }: { title: string; values: number[]
   );
 }
 
+const NO_KEY_STAT = "No Questrade reference data for this symbol yet (stored once a day with the sweeps).";
+
 function SummaryBody({ s }: { s: SymbolSummary }) {
   const p = usePalette();
   const q = s.quote;
+  const patch = useLiveQuote(s.symbol);
+  const ks = atPrice(s.key_stats, isFlowing(useLiveStatus()) ? patch?.price : null);   // the header's figures
+  const src = (k: string) => <SourceBadge source={ks.sources[k]} />;
   const ivHint = ivHistoryHint(s.iv_history_days);
   const price = useMemo<LineSeries[]>(() => [{ name: "Close", data: s.price_1y.map((x) => [x.date, x.close]), color: p.series[0], area: true }], [s.price_1y, p]);
   const vol = useMemo<LineSeries[]>(() => [
@@ -61,11 +68,17 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
             { label: "Low", value: q?.low, fmt: "money" },
             { label: "Prev close", value: q?.prev_close, fmt: "money" },
             { label: "Volume", value: q?.volume, fmt: "int", sub: s.rel_volume !== null ? `${fmt(s.rel_volume, "ratio")} 30d avg` : undefined },
-            { label: "Avg vol (30d)", value: s.avg_volume_30d, fmt: "int" },
-            { label: "52w range", node: <span><StatValue value={s.low_52w} kind="money" /> – <StatValue value={s.high_52w} kind="money" /></span> },
+            { label: "Avg vol (30d)", value: s.avg_volume_30d, fmt: "int", sub: "from stored daily bars" },
+            { label: "Avg vol 20d / 3m", node: <span><StatValue value={ks.avg_volume_20d} kind="int" hint={NO_KEY_STAT} /> / <StatValue value={ks.avg_volume_3m} kind="int" hint={NO_KEY_STAT} /> {src("avg_volume_20d")}</span> },
+            { label: "52w range", node: <span><StatValue value={s.low_52w} kind="money" /> – <StatValue value={s.high_52w} kind="money" /> {ks.high_52w != null ? src("high_52w") : <small className="muted">stored bars</small>}</span> },
             { label: "3y range", node: <span><StatValue value={s.low_3y} kind="money" /> – <StatValue value={s.high_3y} kind="money" /></span> },
-            { label: "Market cap", value: s.market_cap, fmt: "bigmoney" },
+            { label: "Market cap", node: <span><StatValue value={ks.market_cap} kind="bigmoney" /> {src("market_cap")}</span>, title: "Price × shares outstanding (Questrade), else Nasdaq's figure" },
+            { label: "P/E", node: <span><StatValue value={ks.pe} kind="num2" hint={ks.eps != null && ks.eps <= 0 ? "Not meaningful: EPS is not positive." : NO_KEY_STAT} /> {src("pe")}</span>, title: "Price / EPS" },
+            { label: "EPS", node: <span><StatValue value={ks.eps} kind="money" hint={NO_KEY_STAT} /> {src("eps")}</span> },
+            { label: "Shares out", node: <span><StatValue value={ks.shares_outstanding} kind="bigmoney" hint={NO_KEY_STAT} /> {src("shares_outstanding")}</span> },
+            { label: "Div yield", node: <span><StatValue value={ks.dividend_yield} kind="pct" hint="No dividend data for this symbol." /> {src("dividend_yield")}</span>, title: "Indicated annual dividend / price; Questrade's yield while the history is too short" },
             { label: "Sector", value: s.sector, fmt: "text", sub: s.industry ?? undefined },
+            { label: "Industry (Questrade)", node: <span><StatValue value={ks.industry_group} kind="text" hint={NO_KEY_STAT} /> {src("industry_group")}</span>, sub: [ks.sector, ks.industry_subgroup].filter(Boolean).join(" · ") || undefined },
             { label: "Beta (1y vs SPY)", value: s.beta_1y, fmt: "num2" },
             { label: "Corr SPY (1y)", value: s.corr_spy_1y, fmt: "num2" },
             { label: "IV30", value: s.iv30, fmt: "vol", sub: ivAsOf(s.iv30_asof) ? `as of ${ivAsOf(s.iv30_asof)}` : undefined },
@@ -94,7 +107,7 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
           <Card title="Next ex-dividend">
             {nd ? <StatGrid cols={2} items={[
               { label: "Ex-date", value: nd.ex_date, fmt: "date", sub: `in ${nd.days}d` },
-              { label: "Amount", value: nd.amount, fmt: "money" },
+              { label: "Amount", node: <span><StatValue value={nd.amount} kind="money" /> <SourceBadge source={nd.source} /></span> },
               { label: "Yield", value: nd.yield, fmt: "pct" },
             ]} /> : <div className="muted small">No announced ex-dividend date{s.kind === "index" ? " (indices pay none)" : ""}.</div>}
           </Card>

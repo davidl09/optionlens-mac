@@ -25,6 +25,8 @@ class Quote:
     ask: float | None
     iv30: float | None  # fraction
     delayed: bool | None = None  # pushed from delayed (not real-time) market data; None = unknown
+    vwap: float | None = None    # the session's volume-weighted average price as the source reported it; None = not sent
+    halted: bool | None = None   # trading in the symbol is halted (Questrade isHalted); None = not reported
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +91,7 @@ class IntradayBar:
     low: float
     close: float
     volume: int | None
+    vwap: float | None = None   # the bar's own VWAP when the source sent one (Questrade candles); None = not sent
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +115,42 @@ class Dividend:
     record_date: date | None
     declared_date: date | None
     kind: str
+    source: str | None = None    # 'nasdaq' | 'ibkr-adjusted' | 'questrade' (analytics.dividends.SOURCE_PRIORITY)
+    discrepancy: bool = False    # merged rows: the sources' amounts for this ex-date differ by > DISCREPANCY_TOLERANCE
+
+
+@dataclass(frozen=True, slots=True)
+class Fundamentals:
+    """One day's reference figures of a symbol as its source reported them (Questrade GET v1/symbols/:id)."""
+    symbol: str
+    date: date
+    source: str
+    pe: float | None
+    eps: float | None
+    market_cap: float | None
+    shares_outstanding: float | None
+    high_52w: float | None
+    low_52w: float | None
+    avg_volume_20d: float | None
+    avg_volume_3m: float | None
+    sector: str | None
+    industry_group: str | None
+    industry_subgroup: str | None
+    dividend_yield: float | None   # fraction (Questrade sends percent)
+    prev_close: float | None       # the price the source's pe / marketCap / yield refer to
+
+
+@dataclass(frozen=True, slots=True)
+class ExtendedQuote:
+    """A Level 1 quote collected in extended hours: the last trade (any session) vs the last regular-hours trade."""
+    symbol: str
+    ts: datetime                    # when it was fetched
+    price: float | None             # last trade, extended hours included (Questrade lastTradePrice)
+    regular_price: float | None     # last regular-hours trade (Questrade lastTradePriceTrHrs)
+    volume: int | None              # the day's volume as reported
+    last_trade_at: datetime | None
+    halted: bool | None
+    delayed: bool | None
 
 
 def normalize_symbol(raw: str) -> str:

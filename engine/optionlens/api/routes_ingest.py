@@ -248,6 +248,26 @@ async def ack_wants(req: AckWantsIn):
     return await respond(ingest.ack_wants, req.model_dump())
 
 
+class CloseIn(_In):
+    date: date
+    close: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
+class DividendHistoryIn(_In):
+    """IBKR daily closes of one symbol (INTEGRATION.md §6 "Dividends"): `adjusted` = whatToShow ADJUSTED_LAST,
+    `trades` = TRADES, both 1 day bars with useRTH."""
+    source: Source
+    symbol: Symbol
+    adjusted: list[CloseIn] = Field(max_length=ingest.MAX_BARS)
+    trades: list[CloseIn] = Field(max_length=ingest.MAX_BARS)
+
+
+@router.post("/dividend-history")
+async def dividend_history(req: DividendHistoryIn):
+    """Dividends derived from IBKR's adjusted vs raw daily closes (stored with source 'ibkr-adjusted')."""
+    return await respond(ingest.dividend_history, req.model_dump())
+
+
 class IntradayBarIn(_In):
     ts: AwareDatetime                    # the bar's start
     open: Annotated[float, Field(gt=0, allow_inf_nan=False)]

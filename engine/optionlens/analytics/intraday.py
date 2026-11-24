@@ -65,6 +65,23 @@ def window(rng: str, now: datetime, extended: bool) -> Span:
     return _at(first, EXTENDED_OPEN), now.astimezone(timezone.utc)
 
 
+def extended_window(day: date, market: str) -> Span:
+    """The extended-hours window of trading day `day`: 'pre' 04:00-09:30, 'post' the close-20:00 ET."""
+    if market == "pre":
+        return _at(day, EXTENDED_OPEN), _at(day, OPEN)
+    if market == "post":
+        return _at(day, close_time(day)), _at(day, EXTENDED_CLOSE)
+    raise ValueError(market)
+
+
+def extended_market(ts: datetime) -> str | None:
+    """'pre' | 'post' when `ts` is in a trading day's extended-hours window (extended_window), else None."""
+    d = ts.astimezone(NY).date()
+    if not is_trading_day(d):
+        return None
+    return next((m for m in ("pre", "post") if (w := extended_window(d, m))[0] <= ts < w[1]), None)
+
+
 def is_regular(ts: datetime) -> bool:
     """Whether a bar starting at `ts` is in the regular session (09:30 to the close, ET)."""
     ny = ts.astimezone(NY)
@@ -160,7 +177,7 @@ def aggregate(rows: list[dict], interval: str, grid: datetime | None = None) -> 
             continue
         vols = [v for v in (b["volume"], r["volume"]) if v is not None]
         b.update(high=max(b["high"], r["high"]), low=min(b["low"], r["low"]), close=r["close"],
-                 volume=sum(vols) if vols else None)
+                 volume=sum(vols) if vols else None, vwap=None)   # a merged bar has no VWAP of its own
     return list(out.values())
 
 
@@ -186,3 +203,31 @@ def live_only_from(span: Span, source_ts: Iterable[datetime], live_ts: Iterable[
     if first is None:
         return None
     return max(s, bucket(first, interval, newest) - step)
+
+
+def day_vwap(bars: list[dict]) -> tuple[list[float | None], str | None]:
+    """The session VWAP after each bar (ascending bars {ts, high, low, close, volume, vwap}): per New York trading day,
+    Σ(price × volume) / Σ volume over its regular-hours bars so far, price = the bar's own VWAP when its source sent
+    one, else the typical price (high + low + close) / 3. None for extended-hours bars and before any volume.
+    -> (values, how: 'candles' when every bar used had its own VWAP, 'computed' when any used the typical price,
+    None without a value)."""
+    out: list[float | None] = []
+    day = None
+    pv = vol = 0.0
+    used_own = used_typical = False
+    for b in bars:
+        if not is_regular(b["ts"]):
+            out.append(None)
+            continue
+        d = b["ts"].astimezone(NY).date()
+        if d != day:
+            day, pv, vol = d, 0.0, 0.0
+        v = b.get("volume")
+        if v:
+            own = b.get("vwap")
+            price = own if own else (b["high"] + b["low"] + b["close"]) / 3.0
+            used_own, used_typical = used_own or bool(own), used_typical or not own
+            pv, vol = pv + price * v, vol + v
+        out.append(pv / vol if vol > 0 else None)
+    how = "computed" if used_typical else ("candles" if used_own else None)
+    return out, how

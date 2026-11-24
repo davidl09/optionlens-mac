@@ -40,6 +40,7 @@ from ..models import Bar, Dividend, EarningsEvent, OptionContract, Quote, normal
 from ..repo import bars as bars_repo
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
+from ..repo import halts as halts_repo
 from ..repo import market as market_repo
 from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
@@ -280,7 +281,17 @@ def optionable(symbol: str) -> bool | None:
 
 
 _QUOTE_KEYS = ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low", "prev_close", "volume", "bid",
-               "ask", "iv30")
+               "ask", "iv30", "vwap")
+HALT_FRESH_S = 90 * 60   # a halt flag observed longer ago than this is unknown (sweeps observe it at least hourly)
+
+
+def halt_flags(symbols: Sequence[str] | None = None, now: datetime | None = None) -> dict[str, dict]:
+    """{symbol: {halted, since, source}} of the halt observations younger than HALT_FRESH_S (`since`: when the state
+    last changed, None when no change was seen)."""
+    now = now or datetime.now(timezone.utc)
+    return {s: {"halted": bool(r["halted"]), "since": r["changed_at"], "source": r["source"]}
+            for s, r in halts_repo.current(symbols).items()
+            if (now - r["observed_at"]).total_seconds() <= HALT_FRESH_S}
 _BAR_FILLED = ("price", "change", "change_pct", "open", "high", "low", "prev_close", "volume")
 QUOTE_BARS_DAYS = 10   # calendar days of bars read for a quote (the latest bar and the one before it)
 
@@ -309,11 +320,13 @@ def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
         for k in _BAR_FILLED:
             if out[k] is None:
                 out[k] = from_bars.get(k)
-        return {**out, "delayed": bool(q.delayed), "after_hours": after_session(q.ts), "source": quotes_repo.source_of(sym)}
+        halt = halt_flags([sym]).get(sym)
+        return {**out, "delayed": bool(q.delayed), "after_hours": after_session(q.ts), "source": quotes_repo.source_of(sym),
+                "halted": halt["halted"] if halt else None}
     if not from_bars or from_bars["price"] is None:
         return None
     return {**dict.fromkeys(_QUOTE_KEYS), **from_bars, "symbol": sym, "ts": session_close(bars[-1].date),
-            "delayed": False, "after_hours": False, "source": bars_source(sym)}
+            "delayed": False, "after_hours": False, "source": bars_source(sym), "halted": None}
 
 
 def iv_history(symbol: str, cols: Sequence[str]) -> dict[str, np.ndarray]:

@@ -25,7 +25,8 @@ def store(symbol: str, interval: str, bars: Sequence[IntradayBar], spans: Sequen
         n = insert_arrow(cur, "intraday_bars", {
             "symbol": [symbol] * len(uniq), "interval": [interval] * len(uniq), "ts": [utc_naive(b.ts) for b in uniq],
             "open": [b.open for b in uniq], "high": [b.high for b in uniq], "low": [b.low for b in uniq],
-            "close": [b.close for b in uniq], "volume": [b.volume for b in uniq], "source": [source] * len(uniq),
+            "close": [b.close for b in uniq], "volume": [b.volume for b in uniq], "vwap": [b.vwap for b in uniq],
+            "source": [source] * len(uniq),
             "delayed": [delayed] * len(uniq)}, "INSERT OR REPLACE")
         insert_arrow(cur, "intraday_spans", {
             "symbol": [symbol] * len(spans), "interval": [interval] * len(spans),
@@ -45,9 +46,9 @@ def spans(symbol: str, interval: str) -> list[Span]:
 
 
 def bars(symbol: str, interval: str, start: datetime, end: datetime) -> list[dict]:
-    """Stored bars starting in [start, end] ascending: {ts (aware UTC), open, high, low, close, volume, source,
-    delayed}."""
-    return query("""SELECT ts, open, high, low, close, volume, source, delayed FROM intraday_bars
+    """Stored bars starting in [start, end] ascending: {ts (aware UTC), open, high, low, close, volume, vwap (the
+    bar's own, when its source sent one), source, delayed}."""
+    return query("""SELECT ts, open, high, low, close, volume, vwap, source, delayed FROM intraday_bars
                     WHERE symbol = ? AND interval = ? AND ts >= ? AND ts <= ? ORDER BY ts""",
                  [symbol, interval, utc_naive(start), utc_naive(end)])
 

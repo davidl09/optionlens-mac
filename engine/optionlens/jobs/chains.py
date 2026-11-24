@@ -26,9 +26,10 @@ import numpy as np
 
 from ..analytics import chainmetrics, computed_iv, vol
 from ..analytics.calendar import NY, OPEN, is_market_open, last_completed_session, now_ny
-from ..models import Bar, ChainSnapshot
+from ..models import Bar, ChainSnapshot, Quote
 from ..net import FetchError
 from ..repo import bars as bars_repo
+from ..repo import halts as halts_repo
 from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from ..repo import quotes as quotes_repo
@@ -152,6 +153,7 @@ def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, sour
         options_repo.replace_option_latest(snap, source, final)
     if wins or served is None or served.fetched_at is None or snap.fetched_at >= served.fetched_at:
         quotes_repo.upsert_quotes([snap.quote], source)   # the stock quote: the newest one
+    record_halt(snap.quote, source)
     symbols_repo.set_optionable(symbol, True)
     _store_session(snap, now, final, source, quality)
     if not wins and served is not None and served.session == quality.session and served.source != source:
@@ -172,6 +174,13 @@ def _store_session(snap: ChainSnapshot, now: datetime, final: bool, source: str 
         stored = options_repo.eod_quality(day, [symbol]).get(symbol)
         if precedence.replaces(None if stored is None else precedence.of_archive(stored), quality):
             options_repo.write_eod_chain(day, snap, source)
+
+
+def record_halt(quote: Quote, source: str | None) -> list[str]:
+    """The quote's halt flag (when its source reports one) -> halt_status. Returns the symbols whose state changed."""
+    if quote.halted is None or source is None:
+        return []
+    return halts_repo.record([(quote.symbol, quote.halted, quote.ts)], source)
 
 
 def adopt_source_iv(symbol: str, served: precedence.Quality, donor: ChainSnapshot) -> int:
@@ -282,6 +291,7 @@ async def refresh_chain(src: ChainSource, symbol: str, final: bool = False) -> C
         raise
     if not snap.contracts:
         await asyncio.to_thread(quotes_repo.upsert_quotes, [snap.quote], src.name)
+        await asyncio.to_thread(record_halt, snap.quote, src.name)
         await asyncio.to_thread(symbols_repo.set_optionable, symbol, False)
         source_health.record(src.name, symbol, "no_options", now=now_ny())
         return None

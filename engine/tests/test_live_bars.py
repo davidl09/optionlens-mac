@@ -143,7 +143,9 @@ async def test_live_bars_follow_the_lagging_candles_and_source_bars_replace_them
     by = {hm(b): b for b in r["bars"]}
     assert by["11:42"]["close"] < 200 and by["11:43"]["close"] == 513.5        # source up to 11:42, live from 11:43
     assert by["11:35"]["close"] < 200                                          # inside the source's bars: never live
-    assert by["12:12"] == {"ts": ny(2026, 11, 17, 12, 12), "open": 600, "high": 601, "low": 599, "close": 600.5, "volume": 7}
+    assert {k: v for k, v in by["12:12"].items() if k != "vwap"} == {
+        "ts": ny(2026, 11, 17, 12, 12), "open": 600, "high": 601, "low": 599, "close": 600.5, "volume": 7}
+    assert r["vwap_source"] == "computed"                       # live-built bars have no VWAP of their own
     assert r["sources"] == ["questrade", "live"] and r["lag_s"] == 29 * 60 + 30   # 11:43:00 -> 12:12:30
     # the span is stored only up to where live bars alone cover it: the next request asks from there again
     assert max(e for _, e in repo.spans("AAPL", "1m")) == ny(2026, 11, 17, 11, 42)

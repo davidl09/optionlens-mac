@@ -3,11 +3,14 @@
 One chain = (cached) symbol id + (daily) symbol info + 3 market-data calls:
   GET v1/symbols/search?prefix=SYM  once per symbol, cached in DATA_DIR/questrade_symbols.json (not-found answers
                                     are asked again after NEGATIVE_TTL)
-  GET v1/symbols/:id                once per New York day: hasOptions, prevDayClosePrice
+  GET v1/symbols/:id                once per New York day: hasOptions, prevDayClosePrice and the reference data
+                                    (fundamentals, current dividend: cached_reference, stored by services.reference)
   GET v1/markets/quotes?ids=:id     the underlying quote (strike band centre)
   GET v1/symbols/:id/options        the chain structure (expiries, strikes, option symbol ids)
   POST v1/markets/quotes/options    quotes + greeks of the first `expiries` expiries within ±`moneyness` (one
                                     filter per expiry, all in one request)
+Extended-hours quotes of many symbols (fetch_extended):
+  GET v1/markets/quotes?ids=…       MAX_IDS ids per call, only symbols whose id is cached (no searches)
 Intraday bars (fetch_candles):
   GET v1/markets/candles/:id        OHLCV candles of startTime..endTime at `interval`; at most MAX_CANDLES per
                                     response ("This call is limited to returning 2,000 candlesticks in a single
@@ -26,15 +29,16 @@ import httpx
 from ...analytics import intraday
 from ...analytics.calendar import now_ny
 from ...fileio import read_json, write_json_atomic
-from ...models import ChainSnapshot, IntradayBar
+from ...models import ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar
 from ...net import FetchError
 from ..chain_source import NotListed
 from ..osi import format_osi
 from .auth import TokenError, TokenManager, TokenStore
 from .client import QuestradeClient
 from .errors import QuestradeError
-from .mapping import (CANDLE_INTERVAL, Listed, SymbolInfo, candle_time, candles, listed_contracts, option_filters,
-                      option_quotes, parse_quote, pick_expiries, pick_symbol_id, snapshot, symbol_info)
+from .mapping import (CANDLE_INTERVAL, Listed, SymbolInfo, candle_time, candles, current_dividend, extended_quote,
+                      fundamentals, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
+                      pick_symbol_id, snapshot, symbol_info)
 from .ratelimit import RateGate
 
 log = logging.getLogger(__name__)
@@ -43,6 +47,7 @@ NAME = "questrade"
 NEGATIVE_TTL = timedelta(days=7)
 VERIFY_SYMBOL = "SPY"   # a liquid symbol every market-data permission can search
 MAX_CANDLES = 2000   # documented per-response limit of markets/candles
+MAX_IDS = 100        # ids per markets/quotes call (the docs give no maximum; 100 keeps URLs small)
 KEEPALIVE_S = 24 * 3600   # refresh an idle token daily: an unused refresh token lapses (reportedly after ~7 days)
 
 
@@ -152,9 +157,32 @@ class QuestradeSource:
         return info
 
     async def symbol_info(self, symbol: str) -> SymbolInfo:
-        """hasOptions and prevDayClosePrice of `symbol` (symbols/:id once per New York day). Raises NotListed,
-        QuestradeError."""
+        """hasOptions, prevDayClosePrice and the reference data of `symbol` (symbols/:id once per New York day).
+        Raises NotListed, QuestradeError."""
         return await self._symbol_info(symbol, await self.symbol_id(symbol), now_ny().date())
+
+    def cached_reference(self, day: date) -> dict[str, tuple[Fundamentals, Dividend | None]]:
+        """{symbol: (reference snapshot, current dividend or None)} of the symbol infos fetched on New York day `day`
+        (by the sweeps and live quotes): no call."""
+        return {s: (fundamentals(info, s, day), current_dividend(info, s)) for s, (d, info) in self._info.items()
+                if d == day}
+
+    async def fetch_extended(self, symbols: list[str]) -> list[ExtendedQuote]:
+        """Level 1 quotes of the `symbols` whose Questrade id is cached (the sweeps searched them; no searches here),
+        MAX_IDS per call. Raises QuestradeError."""
+        now = datetime.now(timezone.utc)
+        ids = {sid: s for s in symbols if type(sid := self.ids.get(s, now)) is int}   # not None / False (bool)
+        out: list[ExtendedQuote] = []
+        order = sorted(ids)
+        for i in range(0, len(order), MAX_IDS):
+            chunk = order[i:i + MAX_IDS]
+            payload = await self.api.get("markets/quotes", {"ids": ",".join(map(str, chunk))})
+            at = datetime.now(timezone.utc)
+            for q in payload.get("quotes") or []:
+                sym = ids.get(int(q.get("symbolId", -1)))
+                if sym is not None:
+                    out.append(extended_quote(q, sym, at))
+        return out
 
     async def option_ids(self, symbol: str) -> dict[str, tuple[int, Listed]]:
         """{OSI: (option symbolId, Listed)} of the standard contracts Questrade lists for `symbol` (symbols/:id/options

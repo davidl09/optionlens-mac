@@ -58,7 +58,7 @@ export interface UpdateStatus {
 
 /** Bridge work kinds in §6 order: on-demand first, the rest share time by weight (bridge/scheduler.ts); "live":
  * snapshots of the symbols on screen while Questrade is unavailable (INTEGRATION.md §9). */
-export const JOB_KINDS = ["on-demand", "live", "eod-chains", "chain-universe", "underlying-stats", "index", "option-bars", "iv-history"] as const;
+export const JOB_KINDS = ["on-demand", "live", "eod-chains", "chain-universe", "underlying-stats", "index", "option-bars", "dividend-history", "iv-history"] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export type TwsState = "disabled" | "connecting" | "connected" | "disconnected";

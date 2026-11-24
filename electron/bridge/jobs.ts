@@ -518,6 +518,23 @@ export async function pushIndexBars(ctx: JobContext, symbol: string, from: strin
   return rows.length;
 }
 
+/**
+ * The closes behind a symbol's dividends (INTEGRATION.md §6 "Dividends"): daily ADJUSTED_LAST (dividend- and
+ * split-adjusted) and TRADES (split-adjusted) bars from `from` on (up to 10 years, regular hours), one request pair per
+ * symbol through the pacer like any daily bars; the engine derives the dividends from the step in their ratio.
+ */
+export async function pushDividendHistory(ctx: JobContext, symbol: string, from: string): Promise<number> {
+  const req = { duration: durationFor(from, ctx.now()), useRth: true } as const;
+  const closes = (bars: HistBar[]) => bars.flatMap((b) => {
+    const date = isoDate(b.time);
+    return date && date >= from && Number.isFinite(b.close) && b.close > 0 ? [{ date, close: b.close }] : [];
+  });
+  const adjusted = closes(await pacedHistorical(ctx, underlyingContract(symbol), { ...req, whatToShow: "ADJUSTED_LAST" }));
+  const trades = closes(await pacedHistorical(ctx, underlyingContract(symbol), { ...req, whatToShow: "TRADES" }));
+  await ctx.ingest.dividendHistory({ source: "ibkr", symbol, adjusted, trades });
+  return Math.min(adjusted.length, trades.length);
+}
+
 /** Daily TRADES bars of one (unexpired) contract for the wanted sessions. */
 export async function pushOptionBars(ctx: JobContext, symbol: string, contract: TwsContract, sessions: string[]): Promise<number> {
   const wanted = new Set(sessions);

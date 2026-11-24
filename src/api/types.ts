@@ -8,7 +8,7 @@ export type Right = "C" | "P";
 export type Pricing = "real" | "model";
 export type SymbolKind = "stock" | "etf" | "index";
 /** Where a value came from (INTEGRATION.md §5). */
-export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "live";
+export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "live" | "ibkr-adjusted" | "computed";
 
 export interface SymbolRef { symbol: string; name: string; kind: SymbolKind }
 
@@ -19,6 +19,10 @@ export interface Quote {
   source?: DataSource; delayed?: boolean;
   /** Collected after its session's close (IBKR frozen data: evening, weekend, before the open). */
   after_hours?: boolean;
+  /** The session's VWAP as the quote reported it (Questrade); null = not sent. */
+  vwap?: number | null;
+  /** Trading halted (Questrade isHalted, observed within 90 min); null = unknown. */
+  halted?: boolean | null;
 }
 
 export interface Bar {
@@ -30,7 +34,11 @@ export interface Bar {
 /** GET /bars?interval=… (INTEGRATION.md §5 "Intraday bars"). */
 export type IntradayInterval = "1m" | "5m" | "15m" | "1h";
 export type IntradayRange = "1d" | "5d" | "1m" | "3m";
-export interface IntradayBar { ts: ISODateTime; open: number; high: number; low: number; close: number; volume: number | null }   // ts: the bar's start
+export interface IntradayBar {
+  ts: ISODateTime; open: number; high: number; low: number; close: number; volume: number | null;   // ts: the bar's start
+  /** The session VWAP after this bar (regular hours only; null in extended hours / without volume). */
+  vwap?: number | null;
+}
 export interface TimeSpan { start: ISODateTime; end: ISODateTime }
 export interface IntradayBars {
   symbol: string; interval: IntradayInterval; range: IntradayRange; extended: boolean;
@@ -40,6 +48,7 @@ export interface IntradayBars {
   sources: DataSource[];            // of the bars shown, most bars first
   delayed: boolean | null;          // null: unknown or mixed
   missing: TimeSpan[];              // spans no engine-side source could fill (the desktop app asks the IBKR bridge)
+  vwap_source: DataSource | null;   // the bars' source when from their own VWAPs, "computed" from typical prices
   problem: string | null;           // why, when a configured source could not be used (e.g. "questrade: not connected")
   /** Seconds from the end of the source's newest bar to now (null: no source bars); the bars after it are built from
    * live quotes (source "live") while the symbol is live. Absent from older engines. */
@@ -158,12 +167,23 @@ export interface MarketOverview {
 // ---------------- symbol summary ----------------
 export interface ReturnsRow { d1: number | null; d5: number | null; m1: number | null; m3: number | null; m6: number | null; ytd: number | null; y1: number | null; y3: number | null }
 export interface NextEarnings { date: ISODate; timing: "bmo" | "amc" | "unknown"; days: number; implied_move_pct: number | null; avg_abs_move_pct: number | null }
-export interface NextDividend { ex_date: ISODate; amount: number; days: number; yield: number | null }
+export interface NextDividend { ex_date: ISODate; amount: number; days: number; yield: number | null; source: DataSource | null }
+/** GET /api/symbol/{sym}/key-stats (INTEGRATION.md §8 "Reference data"): one source of these figures for every page. */
+export interface KeyStats {
+  symbol: string; price: number | null;
+  pe: number | null; eps: number | null; market_cap: number | null; shares_outstanding: number | null;
+  high_52w: number | null; low_52w: number | null; avg_volume_20d: number | null; avg_volume_3m: number | null;
+  sector: string | null; industry_group: string | null; industry_subgroup: string | null;
+  dividend_yield: number | null;
+  asof: ISODate | null;                        // the reference snapshot's date
+  sources: Record<string, DataSource>;         // per figure
+}
 export interface SymbolSummary {
   symbol: string; name: string; kind: SymbolKind; sector: string | null; industry: string | null;
   market_cap: number | null; in_universe: boolean;
   optionable: boolean | null;   // true: a chain is stored; false: a chain source (IBKR) confirmed no listed options; null: unknown (not fetched yet)
   quote: Quote | null;
+  key_stats: KeyStats;
   avg_volume_30d: number | null; rel_volume: number | null;
   high_52w: number | null; low_52w: number | null; high_3y: number | null; low_3y: number | null;
   beta_1y: number | null; corr_spy_1y: number | null;
@@ -315,7 +335,9 @@ export interface Dividends {
   growth_1y: number | null; growth_3y: number | null; growth_5y: number | null;
   next: NextDividend | null;
   history: { ex_date: ISODate; amount: number; pay_date: ISODate | null; record_date: ISODate | null; declared_date: ISODate | null; kind: string;
-    one_off?: boolean }[];   // special / one-off: left out of annual_rate, yield, frequency and growth
+    one_off?: boolean;       // special / one-off: left out of annual_rate, yield, frequency and growth
+    source: DataSource | null;   // nasdaq | ibkr-adjusted (derived from IBKR adjusted closes) | questrade
+    discrepancy: boolean }[];    // the sources' amounts for this ex-date differ by more than $0.01
   capture: { ex_date: ISODate; amount: number; pre_close: number | null; ex_close: number | null; price_return: number | null; total_return: number | null; recovery_days: number | null }[];
   capture_stats: { count: number; avg_total_return: number | null; win_rate: number | null; avg_recovery_days: number | null };
 }
@@ -395,7 +417,7 @@ export interface CalcResult {
 export interface StrategyTemplate { id: string; label: string; family: string; description: string; legs: { kind: "stock" | "option"; right?: Right; qty: number; strike_offset_pct?: number; expiry_index?: number }[] }
 
 // ---------------- reports ----------------
-export type ColumnFmt = "symbol" | "text" | "int" | "num" | "num2" | "money" | "bigmoney" | "pct" | "pct_signed" | "vol" | "date" | "datetime" | "bool" | "osi" | "ratio" | "badge";
+export type ColumnFmt = "symbol" | "text" | "int" | "num" | "num2" | "money" | "bigmoney" | "pct" | "pct_signed" | "vol" | "date" | "datetime" | "bool" | "osi" | "ratio" | "badge" | "halt";
 export interface ColumnDef { key: string; label: string; fmt: ColumnFmt; group?: string; description?: string; default_hidden?: boolean }
 export interface ParamDef {
   key: string; label: string; type: "int" | "number" | "text" | "select" | "bool" | "date" | "symbols" | "watchlist";
@@ -455,7 +477,7 @@ export interface Watchlist { id: number; name: string; symbols: string[]; create
 export interface Preset { id: number; report_id: string; name: string; payload: PresetPayload; created_at: ISODateTime }
 export interface PresetPayload { params: Record<string, unknown>; filters: Record<string, ColumnFilter>; sort?: { key: string; dir: "asc" | "desc" } | null; hidden?: string[] }
 export type ColumnFilter = { min?: number | null; max?: number | null; text?: string | null; values?: string[] | null };
-export type AlertKind = "price_above" | "price_below" | "pct_change_abs" | "iv30_above" | "iv30_below" | "iv_rank_above" | "iv_rank_below" | "rel_option_volume_above" | "unusual_volume" | "earnings_within_days" | "ex_div_within_days";
+export type AlertKind = "price_above" | "price_below" | "pct_change_abs" | "iv30_above" | "iv30_below" | "iv_rank_above" | "iv_rank_below" | "rel_option_volume_above" | "unusual_volume" | "earnings_within_days" | "ex_div_within_days" | "halted" | "resumed";
 export interface Alert { id: number; kind: AlertKind; symbol: string | null; params: { value?: number; watchlist_id?: number }; enabled: boolean; cooldown_min: number; last_fired_at: ISODateTime | null; created_at: ISODateTime }
 export interface Notification { id: number; ts: ISODateTime; alert_id: number | null; title: string; body: string; link: string | null; read: boolean }
 

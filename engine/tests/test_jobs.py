@@ -73,7 +73,7 @@ def test_eod_and_daily_schedules():
 def test_all_spec_jobs_defined():
     spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
             "dividends", "dividends_history", "vix", "rates", "sweep", "sweep_final", "sweep_fill", "eod", "prune",
-            "splits"}
+            "splits", "extended_quotes"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests
     assert set(scheduler.JOBS) - {"digest_morning"} == spec
     # no CBOE collection; eod after the bridge's pushes
@@ -87,10 +87,16 @@ def test_server_source_schedules_sweeps(monkeypatch):
     assert jobs["sweep_final"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
     assert jobs["sweep_fill"].schedule.next_after(ny(2026, 11, 21, 12, 0)) == ny(2026, 11, 21, 12, 35)
     assert jobs["eod"].schedule.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 20, 5)
+    ext = jobs["extended_quotes"].schedule                         # pre-market and after-hours, every 5 min
+    assert ext.next_after(ny(2026, 11, 19, 3, 0)) == ny(2026, 11, 19, 4, 0)
+    assert ext.next_after(ny(2026, 11, 19, 9, 25)) == ny(2026, 11, 19, 16, 0)
+    assert ext.next_after(ny(2026, 11, 19, 19, 55)) == ny(2026, 11, 20, 4, 0)
+    assert ext.next_after(ny(2026, 11, 27, 13, 2)) == ny(2026, 11, 27, 13, 5)   # early close (day after Thanksgiving)
+    assert not jobs["extended_quotes"].catch_up
     from optionlens import config
     monkeypatch.setattr(chain_source, "get_settings", lambda: type("S", (), {"chain_sources": ("ibkr-bridge",)})())
     jobs = scheduler.build_jobs()                                  # bridge only: sweeps are manual
-    for name in ("sweep", "sweep_final", "sweep_fill"):
+    for name in ("sweep", "sweep_final", "sweep_fill", "extended_quotes"):
         assert jobs[name].schedule.next_after(ny(2026, 11, 19, 12, 0)) is None and not jobs[name].catch_up
     assert config  # noqa
 

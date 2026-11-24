@@ -12,8 +12,8 @@ from ..analytics.calendar import is_monthly_expiry
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
 from ..repo import metrics as metrics_repo
-from ..repo import quotes as quotes_repo
 from . import context as ctx
+from . import fundamentals as fundamentals_svc
 from . import symbol_earnings, symbol_options
 from .errors import BadRequest
 
@@ -60,9 +60,9 @@ def seasonality(symbol: str) -> dict:
 # ----------------------------------------------------------------------------- dividends / events
 def dividends(symbol: str) -> dict:
     sym = ctx.ensure_known(symbol)["symbol"]
-    q = quotes_repo.get_quote(sym)
     bars_ = ctx.load_bars(sym, live=False)
-    price = q.price if q and q.price else (bars_[-1].close if bars_ else None)
+    q = ctx.quote_dict(sym)   # the price every page's dividend yield uses (key stats too)
+    price = q["price"] if q else None
     return divs_a.dividend_summary(sym, div_repo.for_symbol(sym), bars_, price, ctx.today())
 
 
@@ -91,6 +91,16 @@ def events(symbol: str) -> dict:
                           "label": "Option expiry (monthly)" if is_monthly_expiry(e) else "Option expiry"})
     items.sort(key=lambda x: (x["date"], x["kind"]))
     return {"symbol": sym, "items": items}
+
+
+# ----------------------------------------------------------------------------- key stats
+def key_stats(symbol: str) -> dict:
+    """KeyStats (types.ts): the symbol's fundamental figures at its current price, each with its source
+    (services.fundamentals; the one source of these figures for every page)."""
+    row = ctx.ensure_known(symbol)
+    q = ctx.quote_dict(row["symbol"])
+    price = q["price"] if q else None
+    return {"symbol": row["symbol"], "price": price, **fundamentals_svc.for_symbol(row, price, ctx.today())}
 
 
 # ----------------------------------------------------------------------------- summary
@@ -141,13 +151,18 @@ def summary(symbol: str) -> dict:
     nxt = symbol_earnings.next_earnings(sym, ca, bars_)
     div_list = div_repo.for_symbol(sym)
     ideas = symbol_options.ideas(sym)["by_edge"][:3] if ca else []
+    quote = ctx.quote_dict(sym, bars_)
+    ks = {"symbol": sym, "price": quote["price"] if quote else None,
+          **fundamentals_svc.for_symbol(row, quote["price"] if quote else None, ctx.today())}
     return {
         "symbol": sym, "name": row["name"] or sym, "kind": row["kind"], "sector": row["sector"],
-        "industry": row["industry"], "market_cap": row["market_cap"], "optionable": row["optionable"],
-        "in_universe": bool(row["in_universe"]), "quote": ctx.quote_dict(sym, bars_),
+        "industry": row["industry"], "market_cap": ks["market_cap"], "optionable": row["optionable"],
+        "in_universe": bool(row["in_universe"]), "quote": quote, "key_stats": ks,
         "avg_volume_30d": stats.avg_volume(a.volume, 30, exclude_last=True),
         "rel_volume": stats.relative_volume(a.volume, 30),
-        "high_52w": h52, "low_52w": l52, "high_3y": h3, "low_3y": l3,
+        # the 52-week range is a key stat (Questrade's) when there is one; else from the stored daily bars
+        "high_52w": ks["high_52w"] if ks["high_52w"] is not None else h52,
+        "low_52w": ks["low_52w"] if ks["low_52w"] is not None else l52, "high_3y": h3, "low_3y": l3,
         "beta_1y": beta, "corr_spy_1y": corr,
         "iv30": iv30, "iv30_asof": rank["iv30_asof"], "iv_rank": rank["iv_rank"], "iv_percentile": rank["iv_percentile"],
         "iv_history_days": rank["history_days"],
@@ -157,7 +172,7 @@ def summary(symbol: str) -> dict:
             ("d1", "d5", "m1", "m3", "m6", "ytd", "y1", "y3")),
         "next_earnings": {k: nxt[k] for k in ("date", "timing", "days", "implied_move_pct", "avg_abs_move_pct")}
         if nxt else None,
-        "next_dividend": divs_a.next_dividend(div_list, spot, ctx.today()),
+        "next_dividend": divs_a.next_dividend(div_list, ks["price"] or spot, ctx.today()),   # the key stats' price
         "support": support, "resistance": resistance,
         "rsi14": stats.rsi(a.close, 14), "atr14_pct": stats.atr_pct(a.high, a.low, a.close, 14),
         "sma20": stats.sma(a.close, 20), "sma50": stats.sma(a.close, 50), "sma200": stats.sma(a.close, 200),

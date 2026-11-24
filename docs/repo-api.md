@@ -23,7 +23,7 @@ On-demand (jobs/ondemand.py): ensure_fresh(sym,max_age_s=120)->bool (raises Unkn
 
 Notes from ingestion:
 - Chain parser keeps only standard roots (symbol itself; BRK.B→BRKB root; SPX/SPXW, NDX/NDXP, RUT/RUTW, VIX/VIXW).
-- Nasdaq dividends (history+calendar) only cover Nasdaq-listed securities. NYSE/ARCA names have NO dividend data → services must estimate q from put-call parity (implied forward) when trailing dividends are missing, and the UI must say "dividend history unavailable for non-Nasdaq listings".
+- Nasdaq dividend histories only cover Nasdaq-listed securities; other listings get theirs from IBKR's adjusted closes (`dividends_derived`, source `ibkr-adjusted`) and Questrade's current dividend (source `questrade`). repo.dividends reads the merged set (Nasdaq, else IBKR, else Questrade; `discrepancy` when amounts differ > $0.01; INTEGRATION.md §6 "Dividends"). Without a trailing year of dividends, services estimate q from put-call parity (implied forward).
 - option_eod has no PK index (delete-then-insert per (date,symbol)).
 - Index history: SPX, RUT close-only; XSP OHLC; NDX starts at first EOD.
 - Extra table alert_fires (per-symbol cooldowns).

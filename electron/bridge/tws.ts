@@ -25,7 +25,8 @@ export interface HistBar { time: string; open: number; high: number; low: number
 
 export interface OptionParams { exchange: string; tradingClass: string; multiplier: string; expirations: string[]; strikes: number[] }
 
-export type WhatToShow = "OPTION_IMPLIED_VOLATILITY" | "HISTORICAL_VOLATILITY" | "TRADES";
+/** ADJUSTED_LAST: TRADES adjusted for dividends (CRSP method) and splits; daily bars only, no endDateTime. */
+export type WhatToShow = "OPTION_IMPLIED_VOLATILITY" | "HISTORICAL_VOLATILITY" | "TRADES" | "ADJUSTED_LAST";
 
 export type BarSize = "1 day" | "1 min" | "5 mins" | "15 mins" | "1 hour";
 

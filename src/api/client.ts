@@ -3,15 +3,7 @@
 // mutations invalidate the affected URL prefixes.
 // In the desktop app the engine's base URL and per-launch token come from the preload (memory only,
 // never persisted); in a plain browser requests are same-origin without a token.
-import type {
-  RefreshStatus,
-  Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain,
-  CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
-  Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, NewsItem, Notification, OpenInterest,
-  OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, ReportDef, ReportResult,
-  McpStatus, QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
-  SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist,
-} from "./types";
+import type { Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain, CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, KeyStats, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, McpStatus, NewsItem, Notification, OpenInterest, OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, QuestradeStatus, RefreshStatus, ReportDef, ReportResult, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef, SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist } from "./types";
 import type { CurrentView, DataRequest } from "../state/view";
 
 export class ApiError extends Error {
@@ -212,6 +204,7 @@ export const api = {
   startRefresh: (s: string) => request<RefreshStatus>("POST", `${sym(s)}/refresh`, undefined, GET_TIMEOUT_MS),
   refreshStatus: (s: string) => get<RefreshStatus>(`${sym(s)}/refresh`, 0),
   summary: (s: string) => get<SymbolSummary>(`${sym(s)}/summary`),
+  keyStats: (s: string) => get<KeyStats>(`${sym(s)}/key-stats`),
   bars: (s: string, range: string) => get<Bar[]>(`${sym(s)}/bars${qs({ range })}`),
   /** Not cached: the engine fetches the missing spans and serves the newest bars on every call. */
   intradayBars: (s: string, interval: IntradayInterval, range: IntradayRange, extended: boolean) =>

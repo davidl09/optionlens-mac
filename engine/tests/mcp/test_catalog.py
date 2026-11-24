@@ -50,7 +50,7 @@ EXCLUDED_NOW = [
     "DELETE /api/sources/questrade/token", "POST /api/live/subscribe", "GET /api/live/stream", "PUT /api/live/mode",
     "GET /api/mcp", "PUT /api/mcp", "POST /api/mcp/regenerate", "PUT /api/view",
     "GET /api/ingest/wants", "GET /api/ingest/live-wants", "POST /api/ingest/chain", "POST /api/ingest/heartbeat",
-    "POST /api/ingest/refresh-result", "POST /api/ingest/quotes",
+    "POST /api/ingest/refresh-result", "POST /api/ingest/quotes", "POST /api/ingest/dividend-history",
 ]
 
 
@@ -73,7 +73,7 @@ def test_names_are_unique_grouped_snake_case(tools):
 
 def test_the_expected_tools_exist(tools):
     by = {t.name: t for t in tools}
-    reads = ["symbol_summary", "symbol_chain", "symbol_volatility", "symbol_contract", "report_list", "report_run",
+    reads = ["symbol_summary", "symbol_key_stats", "symbol_chain", "symbol_volatility", "symbol_contract", "report_list", "report_run",
              "market_overview", "compare_volatility", "compare_straddle", "system_status", "source_questrade_status",
              "live_quotes", "live_status", "notification_list", "watchlist_list", "watchlist_table", "preset_list",
              "alert_list", "calc_strategy_templates", "calc_strategy", "backtest_stock", "backtest_options",
@@ -114,6 +114,8 @@ def test_report_run_is_typed_from_the_registry(tools):
 
 def test_requests_split_path_query_and_body(tools):
     by = {t.name: t for t in tools}
+    assert by["symbol_key_stats"].request({"sym": "KO"}) == ("/api/symbol/KO/key-stats", {}, None)
+    assert "P/E" in by["symbol_key_stats"].description and "sources" in by["symbol_key_stats"].description
     assert by["symbol_chain"].request({"sym": "AAPL", "expiry": "2026-12-18", "limit": 5}) == (
         "/api/symbol/AAPL/chain", {"expiry": "2026-12-18"}, None)
     assert by["alert_update"].request({"aid": 3, "enabled": False}) == ("/api/alerts/3", {}, {"enabled": False})

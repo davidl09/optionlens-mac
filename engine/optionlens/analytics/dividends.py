@@ -2,6 +2,10 @@
 
 Regular dividends exclude one-offs: a `kind` mentioning "special"/"extra"/"liquidat"/"return of capital", or
 an amount far above the symbol's usual payment (one_offs). Pure functions.
+
+Sources (docs/INTEGRATION.md §6 "Dividends"): per (symbol, ex-date) the merged set takes Nasdaq's row when there is one,
+else the one derived from IBKR's adjusted closes (from_adjusted_closes), else Questrade's current dividend
+(SOURCE_PRIORITY); amounts that differ between the sources by more than DISCREPANCY_TOLERANCE are flagged.
 """
 from __future__ import annotations
 
@@ -16,6 +20,12 @@ from optionlens.analytics.stats import bar_arrays
 from optionlens.models import Bar, Dividend
 
 _IRREGULAR = ("special", "extra", "liquidat", "return of capital")
+SOURCE_PRIORITY = ("nasdaq", "ibkr-adjusted", "questrade")   # per (symbol, ex-date): the first source present wins
+DISCREPANCY_TOLERANCE = 0.01   # $/share: sources disagreeing by more than this flag the merged row
+DERIVED_MIN_AMOUNT = 0.001     # $/share: smaller steps of the adjustment ratio are noise
+DERIVED_MAX_STEP = 0.25        # a ratio step removing a quarter of the price or more is a split one series lacks
+                               # (2:1 → 0.5, 3:2 → 0.33, 4:3 → 0.25), not a dividend
+CENT = 0.01
 ONE_OFF_FACTOR = 2.5       # an amount this many times the median of the symbol's other payments is a one-off
 ONE_OFF_WINDOW_DAYS = 730  # ... of the payments within two years either side
 ONE_OFF_MIN_PEERS = 3
@@ -48,6 +58,30 @@ def regular(divs: Sequence[Dividend]) -> list[Dividend]:
 
 def _regular_sorted(divs: Sequence[Dividend], asof: date | None = None) -> list[Dividend]:
     return sorted((d for d in regular(divs) if asof is None or d.ex_date <= asof), key=lambda d: d.ex_date)
+
+
+def from_adjusted_closes(raw: Sequence[tuple[date, float]], adjusted: Sequence[tuple[date, float]],
+                         min_amount: float = DERIVED_MIN_AMOUNT) -> list[tuple[date, float]]:
+    """[(ex_date, amount)] of the cash dividends behind IBKR's dividend adjustment (ADJUSTED_LAST vs TRADES daily
+    closes; both split-adjusted, so splits cancel in their ratio).
+
+    IBKR adjusts with the CRSP method: on an ex-date t every earlier price is multiplied by f_t = 1 − D_t / C_{t−1}
+    (C = the raw close), so the ratio r = adjusted / raw is constant between ex-dates and steps at t by
+    r_{t−1} / r_t = f_t. Hence D_t = C_{t−1} · (1 − r_{t−1} / r_t). Steps below `min_amount` are noise; so are
+    those within the rounding of a cent-rounded adjusted series (CENT/2 on either adjusted close) and steps the wrong
+    way; a step removing DERIVED_MAX_STEP of the price or more is a split one series lacks, not a dividend.
+    Amounts are in today's shares (split-adjusted), rounded to 0.0001."""
+    adj = {d: a for d, a in adjusted if a and a > 0}
+    pts = [(d, c, adj[d]) for d, c in sorted(raw) if c and c > 0 and d in adj]
+    rounded = bool(pts) and all(abs(a * 100 - round(a * 100)) < 1e-6 for _, _, a in pts)
+    out = []
+    for (_, c0, a0), (d1, c1, a1) in zip(pts, pts[1:]):
+        f = (a0 / c0) / (a1 / c1)
+        amount = c0 * (1.0 - f)
+        noise = c0 * f * (CENT / 2) * (1 / a0 + 1 / a1) if rounded else 0.0
+        if amount >= max(min_amount, noise) and 1.0 - f < DERIVED_MAX_STEP:
+            out.append((d1, round(amount, 4)))
+    return out
 
 
 def frequency(divs: Sequence[Dividend], asof: date | None = None) -> int | None:
@@ -150,15 +184,21 @@ def capture_stats(rows: Sequence[dict]) -> dict:
     }
 
 
+def indicated_yield(divs: Sequence[Dividend], price: float | None, asof: date) -> float | None:
+    """The dividend yield shown everywhere (symbol header, Summary, Dividends tab, screeners): the indicated annual
+    rate (annual_rate) / price; None when either is unknown."""
+    rate = annual_rate(divs, asof)
+    return rate / price if rate is not None and price and price > 0 else None
+
+
 def next_dividend(divs: Sequence[Dividend], price: float | None, asof: date) -> dict | None:
-    """NextDividend for the first ex-date ≥ asof; yield = indicated annual rate / price."""
+    """NextDividend for the first ex-date ≥ asof (with its source); yield = indicated_yield."""
     fut = sorted((d for d in divs if d.ex_date >= asof), key=lambda d: d.ex_date)
     if not fut:
         return None
     d = fut[0]
-    rate = annual_rate(divs, asof)
-    y = rate / price if rate and price and price > 0 else None
-    return {"ex_date": d.ex_date, "amount": d.amount, "days": (d.ex_date - asof).days, "yield": y}
+    return {"ex_date": d.ex_date, "amount": d.amount, "days": (d.ex_date - asof).days,
+            "yield": indicated_yield(divs, price, asof), "source": d.source}
 
 
 def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
@@ -170,7 +210,7 @@ def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
     return {
         "symbol": symbol,
         "annual_rate": rate,
-        "yield": rate / price if rate is not None and price and price > 0 else None,
+        "yield": indicated_yield(divs, price, asof),
         "frequency": frequency(divs, asof),
         "growth_1y": growth(divs, asof, 1),
         "growth_3y": growth(divs, asof, 3),
@@ -178,7 +218,7 @@ def dividend_summary(symbol: str, divs: Sequence[Dividend], bars: Sequence[Bar],
         "next": next_dividend(divs, price, asof),
         "history": [{"ex_date": d.ex_date, "amount": d.amount, "pay_date": d.pay_date,
                      "record_date": d.record_date, "declared_date": d.declared_date, "kind": d.kind,
-                     "one_off": (d.ex_date, d.amount) in odd}
+                     "one_off": (d.ex_date, d.amount) in odd, "source": d.source, "discrepancy": d.discrepancy}
                     for d in sorted(divs, key=lambda x: x.ex_date, reverse=True)],
         "capture": cap,
         "capture_stats": capture_stats(cap),

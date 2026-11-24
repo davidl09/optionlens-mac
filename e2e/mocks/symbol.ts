@@ -2,7 +2,7 @@
 import type {
   Activity, BacktestResult, BacktestTrade, Bar, Chain, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, ExpiryInfo,
   Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, NewsItem, OpenInterest, OptionRow, PriceAction, Profile, Quote, ReportResult, Seasonality, Skew,
-  StraddleInfo, SymbolSummary, TradeIdea, TradeIdeas, VolSeasonality, Volatility,
+  KeyStats, StraddleInfo, SymbolSummary, TradeIdea, TradeIdeas, VolSeasonality, Volatility,
 } from "../../src/api/types";
 import { addDays, between, NOW, pick, reseed, rnd, round, rowsFor, SYMBOLS, TODAY, tradingDays, walk } from "./gen";
 
@@ -28,16 +28,20 @@ export function intradayBars(sym: string, interval: IntradayInterval, range: Int
   const bars = days.flatMap((d) => {
     const out = [];
     const nowMin = d === TODAY ? 15 * 60 + 45 : 24 * 60;
+    let pv = 0, vol = 0;   // the session VWAP from typical prices, as the engine computes it (regular hours only)
     for (let m = extended ? 4 * 60 : 9 * 60 + 30; m < Math.min(extended ? 20 * 60 : 16 * 60, nowMin); m += step) {
       const o = p;
       p = round(p * (1 + (rnd() - 0.5) * 0.002));
-      out.push({ ts: new Date(Date.parse(`${d}T05:00:00Z`) + m * 60_000).toISOString(), open: round(o), high: round(Math.max(o, p) * 1.0005), low: round(Math.min(o, p) * 0.9995), close: p, volume: Math.round(between(1e4, 9e4) * step) });
+      const bar = { ts: new Date(Date.parse(`${d}T05:00:00Z`) + m * 60_000).toISOString(), open: round(o), high: round(Math.max(o, p) * 1.0005), low: round(Math.min(o, p) * 0.9995), close: p, volume: Math.round(between(1e4, 9e4) * step) };
+      const regular = m >= 9 * 60 + 30 && m < 16 * 60;
+      if (regular) { pv += ((bar.high + bar.low + bar.close) / 3) * bar.volume; vol += bar.volume; }
+      out.push({ ...bar, vwap: regular ? round(pv / vol) : null });
     }
     return out;
   });
   return {
     symbol: sym, interval, range, extended, start: `${days[0]}T09:00:00Z`, end: NOW, bars, has_extended: true,
-    sources: ["questrade"], delayed: false, missing: [], problem: null,
+    sources: ["questrade"], delayed: false, missing: [], problem: null, vwap_source: "computed",
   };
 }
 
@@ -182,7 +186,7 @@ function baseSummary(sym: string): SymbolSummary {
     call_volume: 412_300, put_volume: 288_100, avg_option_volume_20d: null, avg_option_volume_days: 0, rel_option_volume: null, pc_volume_ratio: 0.7, total_oi: 5_500_000,
     returns: { d1: 0.0126, d5: -0.018, m1: 0.041, m3: 0.083, m6: 0.12, ytd: 0.19, y1: 0.24, y3: null },
     next_earnings: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: null, avg_abs_move_pct: 0.038 },
-    next_dividend: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045 },
+    next_dividend: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045, source: "nasdaq" }, key_stats: keyStats(sym),
     support: [224.5, 218.2, 210.0], resistance: [236.8, 241.3, 248.1],
     rsi14: 58.2, atr14_pct: 0.0172, sma20: 228.4, sma50: 224.9, sma200: 211.7,
     price_1y: b.map((x) => ({ date: x.date, close: x.close })),
@@ -304,11 +308,24 @@ export function backtest(sym: string): BacktestResult {
   };
 }
 
+/** Key stats as the engine resolves them at the stored quote's price (P/E = price / EPS, market cap = price × shares). */
+export function keyStats(sym: string): KeyStats {
+  const price = quote(sym).price;
+  return {
+    symbol: sym, price, pe: round(price / 7.12), eps: 7.12, market_cap: round(price * 15.2e9), shares_outstanding: 15.2e9,
+    high_52w: 248.1, low_52w: 168.3, avg_volume_20d: 51_300_000, avg_volume_3m: 49_800_000, sector: "Technology",
+    industry_group: "Computer Hardware", industry_subgroup: "Computers", dividend_yield: 0.0045, asof: TODAY_NY,
+    sources: { pe: "questrade", eps: "questrade", market_cap: "questrade", shares_outstanding: "questrade", high_52w: "questrade",
+      low_52w: "questrade", avg_volume_20d: "questrade", avg_volume_3m: "questrade", sector: "questrade", industry_group: "questrade",
+      industry_subgroup: "questrade", dividend_yield: "nasdaq" },
+  };
+}
+
 export function dividends(sym: string): Dividends {
-  const history = Array.from({ length: 12 }, (_, i) => ({ ex_date: addDays("2026-08-11", -91 * i), amount: round(0.26 - Math.floor(i / 4) * 0.01), pay_date: addDays("2026-08-14", -91 * i), record_date: addDays("2026-08-11", -91 * i), declared_date: addDays("2026-07-31", -91 * i), kind: "Cash" }));
+  const history = Array.from({ length: 12 }, (_, i) => ({ ex_date: addDays("2026-08-11", -91 * i), amount: round(0.26 - Math.floor(i / 4) * 0.01), pay_date: addDays("2026-08-14", -91 * i), record_date: addDays("2026-08-11", -91 * i), declared_date: addDays("2026-07-31", -91 * i), kind: "Cash", source: "nasdaq" as const, discrepancy: false }));
   return {
     symbol: sym, annual_rate: 1.04, yield: 0.0045, frequency: 4, growth_1y: 0.04, growth_3y: 0.042, growth_5y: 0.051,
-    next: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045 }, history,
+    next: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045, source: "nasdaq" }, history,
     capture: history.map((h, i) => ({ ex_date: h.ex_date, amount: h.amount, pre_close: 220, ex_close: round(220 - 0.3 + i * 0.05), price_return: round(-0.0014 + i * 0.0002, 5), total_return: round(-0.0002 + i * 0.0002, 5), recovery_days: i === 3 ? null : i + 1 })),
     capture_stats: { count: 12, avg_total_return: 0.0009, win_rate: 0.58, avg_recovery_days: 4.2 },
   };

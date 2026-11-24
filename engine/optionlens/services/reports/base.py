@@ -19,7 +19,7 @@ from ...models import normalize_symbol
 from ..errors import BadRequest
 
 FMTS = frozenset({"symbol", "text", "int", "num", "num2", "money", "bigmoney", "pct", "pct_signed", "vol",
-                  "date", "datetime", "bool", "osi", "ratio", "badge"})
+                  "date", "datetime", "bool", "osi", "ratio", "badge", "halt"})
 CATEGORIES = ("Options", "Strategies", "Earnings", "Volatility", "Stocks", "Dividends")
 PARAM_TYPES = frozenset({"int", "number", "text", "select", "bool", "date", "symbols", "watchlist"})
 MAX_ROWS = 5000

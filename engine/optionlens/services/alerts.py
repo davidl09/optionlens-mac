@@ -1,7 +1,9 @@
 """Alert evaluation, delivery and digests (SPEC §9).
 
-Every AlertKind is evaluated against the universe frame (one row per symbol). Scope: the alert's
-symbol, or every symbol of params.watchlist_id. Cooldown is per alert per symbol
+Every AlertKind is evaluated against the universe frame (one row per symbol), except the halt kinds, which read the
+current halt flags (context.halt_flags): `halted` holds while trading is halted, `resumed` for RESUMED_WINDOW after a
+halt ended; they are also evaluated as soon as a halt starts or ends (jobs.hooks.on_halt_change: live quotes, the
+extended-hours collection). Scope: the alert's symbol, or every symbol of params.watchlist_id. Cooldown is per alert per symbol
 (repo.user.alert_fired_at / record_alert_fire). Delivery: in-app notification always; ntfy POST to
 NTFY_URL and SMTP email when configured (both in a background thread, failures logged).
 
@@ -22,11 +24,12 @@ from typing import Callable
 import httpx
 import numpy as np
 
-from ..analytics.calendar import now_ny
+from ..analytics.calendar import NY, now_ny
 from ..config import get_settings
 from ..jobs import hooks
 from ..repo import report_snapshots as snaps_repo
 from ..repo import user as user_repo
+from . import context
 from .reports import registry, universe
 from .reports.earnings import CAL_ID
 from .reports.options import UOV_ID
@@ -68,6 +71,28 @@ RULES: dict[str, Rule] = {
 }
 
 
+HALT_KINDS = frozenset({"halted", "resumed"})
+RESUMED_WINDOW = timedelta(minutes=30)
+
+
+def _hhmm(t: datetime | None) -> str:
+    return f" at {t.astimezone(NY):%H:%M} ET" if t is not None else ""
+
+
+def halt_matches(kind: str, symbols: list[str], halts: dict[str, dict], now: datetime) -> list[tuple[str, str]]:
+    """[(symbol, description)] of `symbols` whose halt state satisfies `kind` now (see module doc)."""
+    out = []
+    for sym in symbols:
+        h = halts.get(sym)
+        if h is None:
+            continue
+        if kind == "halted" and h["halted"]:
+            out.append((sym, "trading halted" + _hhmm(h["since"])))
+        elif kind == "resumed" and not h["halted"] and h["since"] is not None and now - h["since"] <= RESUMED_WINDOW:
+            out.append((sym, "trading resumed" + _hhmm(h["since"])))
+    return out
+
+
 def _targets(alert: dict) -> list[str]:
     if alert.get("symbol"):
         return [alert["symbol"]]
@@ -79,8 +104,12 @@ def _unusual_symbols() -> set[str]:
     return {r["symbol"] for r in registry.run_sync(UOV_ID)["rows"]}
 
 
-def matches(alert: dict, f: Frame, unusual: set[str] | None = None) -> list[tuple[str, str]]:
+def matches(alert: dict, f: Frame, unusual: set[str] | None = None, halts: dict[str, dict] | None = None,
+            now: datetime | None = None) -> list[tuple[str, str]]:
     """[(symbol, description)] of the alert's scope symbols whose condition holds now."""
+    if alert["kind"] in HALT_KINDS:
+        return halt_matches(alert["kind"], _targets(alert), halts if halts is not None else context.halt_flags(),
+                            now or datetime.now(timezone.utc))
     rule = RULES[alert["kind"]]
     x = (alert.get("params") or {}).get("value")
     pos = f.index()
@@ -100,20 +129,21 @@ def matches(alert: dict, f: Frame, unusual: set[str] | None = None) -> list[tupl
 
 
 def evaluate(day: date | None = None, symbols: list[str] | None = None, *, now: datetime | None = None,
-             frame: Frame | None = None) -> list[tuple[int, str]]:
-    """Evaluate every enabled alert; deliver and record fires outside their cooldown.
+             frame: Frame | None = None, kinds: frozenset[str] | None = None) -> list[tuple[int, str]]:
+    """Evaluate every enabled alert (of `kinds`, default all); deliver and record fires outside their cooldown.
     Hook signature fn(day, symbols). Returns [(alert_id, symbol)] fired."""
     now = now or datetime.now(timezone.utc)
-    alerts = user_repo.list_alerts(enabled=True)
+    alerts = [a for a in user_repo.list_alerts(enabled=True) if kinds is None or a["kind"] in kinds]
     if not alerts:
         return []
-    f = frame or universe.get_frame()
+    f = frame or (universe.get_frame() if any(a["kind"] not in HALT_KINDS for a in alerts) else None)
     unusual = _unusual_symbols() if any(a["kind"] == "unusual_volume" for a in alerts) else set()
+    halts = context.halt_flags(now=now) if any(a["kind"] in HALT_KINDS for a in alerts) else {}
     fired = []
     for a in alerts:
         last = user_repo.alert_fired_at(a["id"])
         cooldown = timedelta(minutes=int(a.get("cooldown_min") or 0))
-        for sym, desc in matches(a, f, unusual):
+        for sym, desc in matches(a, f, unusual, halts, now):
             t = last.get(sym)
             if t is not None and now - t < cooldown:
                 continue
@@ -123,8 +153,8 @@ def evaluate(day: date | None = None, symbols: list[str] | None = None, *, now: 
     return fired
 
 
-def _body(sym: str, desc: str, f: Frame) -> str:
-    i = f.index().get(sym)
+def _body(sym: str, desc: str, f: Frame | None) -> str:
+    i = f.index().get(sym) if f is not None else None
     if i is None:
         return desc
     px, ch, iv = f["price"][i], f["change_pct"][i], f["iv30"][i]
@@ -237,6 +267,11 @@ def on_eod(day: date, symbols: list[str]) -> None:
             log.exception("eod step %s failed", step.__name__)
 
 
+def on_halt_change(day: date, symbols: list[str]) -> None:
+    """on_halt_change hook: evaluate the halt alerts now (not only after the next sweep)."""
+    evaluate(day, symbols, kinds=HALT_KINDS)
+
+
 def on_sweep(day: date, symbols: list[str]) -> None:
     """on_sweep_complete hook: rebuild the frame, then evaluate alerts."""
     universe.invalidate()
@@ -275,6 +310,7 @@ def register_hooks() -> None:
     _registered = True
     hooks.on_sweep_complete.append(on_sweep)
     hooks.on_eod.append(on_eod)
+    hooks.on_halt_change.append(on_halt_change)
     from ..jobs import scheduler
     scheduler.JOBS.setdefault("digest_morning", scheduler.Job(
         "digest_morning", morning_digest, scheduler.daily(MORNING_DIGEST_AT, trading_only=True), catch_up=False))

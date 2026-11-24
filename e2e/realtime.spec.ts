@@ -67,6 +67,24 @@ test("header quote follows the live price", async ({ page }) => {
   await expect(page.locator(".qh-last [data-flashes]")).toHaveAttribute("data-flash-dir", "up");
 });
 
+test("header: VWAP and % vs VWAP, P/E and market cap follow the live price; a halt shows HALTED until it ends", async ({ page }) => {
+  const live = await setup(page);
+  live.serve(sse("status", STATUS.live));
+  await page.goto("/s/AAPL/summary");
+  await expect(page.locator(".qh-last")).toBeVisible();
+  await expect(page.locator(".halted-badge")).toHaveCount(0);
+  live.serve(sse("status", STATUS.live) + sse("patch", { quotes: { AAPL: { price: 240.5, vwap: 238.1, halted: true, source: "questrade" } } }));
+  await expect(page.locator(".qh-vwap")).toHaveText("VWAP $238.10 (+1.01% vs VWAP)");
+  await expect(page.locator(".quote-header .halted-badge")).toHaveText("HALTED");
+  const mini = page.locator(".qh-mini");
+  await expect(mini).toContainText(`P/E ${(240.5 / 7.12).toFixed(2)}`);              // price / EPS (mock EPS 7.12)
+  await expect(mini).toContainText(`Mkt cap ${((240.5 * 15.2e9) / 1e12).toFixed(2)}T`);   // price × shares
+  live.serve(sse("status", STATUS.live) + sse("patch", { quotes: { AAPL: { price: 236.0, halted: false } } }));
+  await expect(page.locator(".halted-badge")).toHaveCount(0);
+  await expect(page.locator(".qh-vwap")).toHaveText("VWAP $238.10 (-0.88% vs VWAP)");
+  expect(live.errors).toEqual([]);
+});
+
 test("report: visible rows patch in place without losing the sort", async ({ page }) => {
   const live = await setup(page);
   live.serve(sse("status", STATUS.live));

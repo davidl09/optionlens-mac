@@ -327,8 +327,9 @@ Required reports (id — columns highlights; params):
   and |chg| ≥ 2%), `gap-and-go` (param up|down: |gap| ≥ x% and close continues in gap direction),
   `outperformers` (vs SPY over 1m/3m/6m/1y), `performance-by-sector`, `performance-by-industry`,
   `seasonality-screener` (current/next month historic avg return & % positive over 10y),
-  `premarket-movers` and `afterhours-movers` (watchlist ∪ top 200 by volume; Nasdaq extended endpoint,
-  fetched on demand with 5-min cache), `event-driven` (upcoming earnings/ex-div within N days).
+  `premarket-movers` and `afterhours-movers` (every symbol from Questrade's extended-hours quotes, collected every
+  5 min in pre-market / after-hours, INTEGRATION.md §8; Nasdaq's extended endpoint as the fallback for watchlist ∪
+  top N by volume, 5-min cache), `event-driven` (upcoming earnings/ex-div within N days).
 - `splits-calendar` (Nasdaq splits calendar: ratio new:old, split factor, Forward/Reverse, universe join) and
   `new-listings` (Nasdaq IPO calendar, param status priced|upcoming|filed, months 1–6); both cached 6 h.
 **Dividends**

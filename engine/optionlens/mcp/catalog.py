@@ -98,9 +98,17 @@ CURATED: dict[str, Curated] = {
                                              "52w/3y range, beta, IV30 with IV rank/percentile, HV20, option volume, "
                                              f"next earnings / dividend, optionable (true/false/null=unknown). {U_PRICE} "
                                              f"{U_FRAC} {U_PROV}"),
+    "GET /api/symbol/{sym}/key-stats": Curated("symbol_key_stats", "Fundamental key stats at the current price: P/E "
+                                               "(price / EPS), EPS, market cap (price × shares), shares outstanding, "
+                                               "52-week high/low, 20-day and 3-month average volume, sector / industry "
+                                               "group / sub-group, dividend yield (fraction); `sources` names each "
+                                               "figure's source (questrade, nasdaq, ibkr-adjusted, computed), `asof` the "
+                                               f"snapshot date. {U_PRICE}"),
     "GET /api/symbol/{sym}/bars": Curated("symbol_bars", "Daily OHLCV bars (oldest first) with SMA20/50/200; with "
                                           "interval=1m|5m|15m|1h and range=1d|5d|1m|3m, intraday bars instead (ts = bar "
-                                          "start, regular hours unless extended=true; `missing` = spans not stored). "
+                                          "start, regular hours unless extended=true; `missing` = spans not stored; "
+                                          "`vwap` = the session VWAP after each regular-hours bar, `vwap_source` "
+                                          "'computed' when from typical prices). "
                                           f"{U_PRICE} {PAGING}"),
     "GET /api/symbol/{sym}/price-action": Curated("symbol_price_action", f"Daily moves (newest first), gap and "
                                                   f"intraday vs overnight statistics. {U_PRICE} {U_FRAC}"),
@@ -135,7 +143,10 @@ CURATED: dict[str, Curated] = {
     "GET /api/symbol/{sym}/earnings/strategies/{strategy}/trades": Curated(
         "symbol_earnings_strategy_trades", f"The individual trades of one earnings strategy backtest. {U_FRAC}"),
     "GET /api/symbol/{sym}/dividends": Curated("symbol_dividends", "Dividends: annual rate, yield, frequency, growth, "
-                                               f"next ex-date, history and dividend-capture results. {U_FRAC}"),
+                                               "next ex-date, history (each row's `source`: nasdaq, ibkr-adjusted = "
+                                               "derived from IBKR's dividend-adjusted closes, questrade = its current "
+                                               "dividend; `discrepancy` = the sources differ by > $0.01) and "
+                                               f"dividend-capture results. {U_FRAC}"),
     "GET /api/symbol/{sym}/seasonality": Curated("symbol_seasonality", f"Monthly / weekday return seasonality. {U_FRAC}"),
     "GET /api/symbol/{sym}/events": Curated("symbol_events", "Upcoming and past events: earnings, ex-dividend dates, "
                                             "option expiries."),

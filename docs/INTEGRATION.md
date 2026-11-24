@@ -60,7 +60,27 @@ Content-Type). No cookies.
 
 Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths, same JSON), except:
 - `ReportResult`, `Chain`, `Quote`, `ExpiryInfo` and per-row data may carry `source` where known:
-  `"vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed"`; `Chain.source` is the stored chain's.
+  `"vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "ibkr-adjusted" | "computed"`;
+  `Chain.source` is the stored chain's. `ibkr-adjusted`: dividends derived from IBKR's adjusted closes (§6
+  "Dividends"); `computed`: derived by the engine from the data shown (e.g. a VWAP from typical prices).
+- `Quote.vwap`: the session VWAP as the quote reported it (Questrade; null when not sent, e.g. IBKR pushes);
+  `Quote.halted`: the latest halt flag (Questrade `isHalted`) when observed within 90 min, else null (unknown). The
+  symbol header shows VWAP and "% vs VWAP" (live), and a HALTED badge; screeners, movers and watchlist tables have
+  `vwap`, `pct_vs_vwap` and `halted` (fmt `"halt"`) columns, live-patched. Alert kinds `halted` (holds while trading is
+  halted) and `resumed` (for 30 min after a halt ended), single symbol or watchlist, with the usual per-symbol
+  cooldown; they are evaluated after every sweep and at once when a halt starts or ends (live quotes persisted, the
+  extended-hours collection: `jobs.hooks.on_halt_change`).
+- **Key stats** (`GET /api/symbol/{sym}/key-stats` → `KeyStats`, also `SymbolSummary.key_stats`; §8 "Reference
+  data"): P/E, EPS, market cap, shares outstanding, 52-week high/low, 20-day / 3-month average volume, Questrade's
+  sector / industry group / sub-group and the dividend yield, each with `sources[figure]`. One resolution
+  (`analytics/fundamentals.py`) feeds the symbol header, Summary, the Fundamentals tab's key figures, peers and the
+  screener columns (`market_cap`, `pe`, `eps`, `shares_outstanding`, `avg_volume_20d`, `avg_volume_3m`,
+  `industry_*`, `div_yield`), so a figure has one value on every page. P/E = price / EPS (positive EPS only) and market
+  cap = price × shares at the stored quote's price; while quotes stream the app applies the same formula to the live
+  price (`src/lib/keyStats.ts`). Without a reference snapshot only the market cap is known (Nasdaq's screener figure,
+  source `nasdaq`). The dividend yield everywhere (header, Summary, Dividends tab, dividend reports, screeners) is
+  the indicated yield of the merged dividends (latest regular amount × payments per year / price), else Questrade's
+  yield. The Fundamentals tab keeps Nasdaq's statements and its other key statistics, without the figures above.
 - `Status` gains `sources: { name: string; ok: boolean | null; last_success_at: string | null; detail: string | null }[]`
   and `bridge: { connected: boolean; last_push_at: string | null; client: string | null; farms: {...} | null;
   options_subscription: string | null }` (`farms` and `options_subscription` as the last heartbeat sent them, §6;
@@ -127,7 +147,12 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   at the interval boundary; its volume grows by the quote's day-volume deltas, or stays the source's bar volume
   without them. The live candles (closed ones too) are kept per symbol and interval for the window's lifetime, so a
   reload or remount of the chart keeps them: merged with the loaded bars by start (a loaded bar replaces a closed live
-  one; the forming one replaces the loaded bar of its start). Intraday SMAs are over the loaded bars
+  one; the forming one replaces the loaded bar of its start). **VWAP**: `bars[].vwap` is the session VWAP after each
+  regular-hours bar (null in extended hours), Σ(price × volume) / Σ volume from 09:30 that day with price = the bar's
+  own VWAP when its source sent one (Questrade candles' `VWAP`, stored in `intraday_bars.vwap`), else the typical
+  price (high + low + close) / 3; `vwap_source` is the bars' source, or `"computed"` when any bar used the typical
+  price (the chart labels the line "VWAP (computed)"). While quotes flow, the live bars take the live quote's VWAP.
+  Intraday SMAs are over the loaded bars
   ("SMA 20 (bars)"); earnings / dividend markers are drawn on daily ranges only; the time axis has one slot per bar
   (nights and weekends collapsed).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
@@ -268,7 +293,7 @@ within IBKR pacing: on-demand refreshes (user-triggered) first — they even run
 batches of a longer task, and a running historical request (IV/HV history, index bars, option bars) is
 aborted and re-queued (no attempt used) so the refresh does not wait behind a long download — and every other kind gets a weighted share of TWS time (eod_chains 8,
 chain_universe 4, underlying_stats 3, index quotes/bars 2, option_bars 1, iv_history 1), so each kind with
-work makes progress in every cycle.
+work makes progress in every cycle (dividend_history 2, between option_bars and iv_history in tie-breaks).
 ```
 { "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // IV30 series to fetch (see below)
   "hv_history": [ {"symbol": "AAPL", "from": "2026-11-20"} ],   // HV30 series, same rule per series
@@ -289,8 +314,39 @@ work makes progress in every cycle.
   "index_bars": [ {"symbol": "SPX", "from": "2016-11-21"} ],            // daily history of SPX, NDX, RUT, XSP and
                                                                 // the VIX family: 10 years when missing, else from
                                                                 // the day after the last stored bar
+  "dividend_history": [ {"symbol": "KO", "from": "2016-11-01"} ],     // daily adjusted + raw closes (§ Dividends)
   "chains_on_demand_max_age_s": 120 }
 ```
+**Dividends** (every US listing; Nasdaq has per-symbol histories for Nasdaq listings only). Three sources, merged per
+(symbol, ex-date) on read (`repo/dividends.py`): **Nasdaq** (calendar + histories, table `dividends`) when it has the
+row, else **IBKR-derived** (`ibkr-adjusted`), else **Questrade's current dividend** (`questrade`); the merged row takes
+its missing pay / record / declared dates from the other sources, and `discrepancy` is true when the sources' amounts
+for the ex-date differ by more than $0.01. Every dividend consumer reads the merged set (`Dividends.history[].source` /
+`discrepancy`, the dividend calendar, future ex-dates, announcements, increases, best dividends, capture, REITs, the
+screeners' yield, the event lists and the trailing yield used as q in Black-Scholes). Specials (≥ 2.5 × the usual
+payment, or typed so) are flagged as before, whatever the source.
+`dividend_history` lists the universe and watchlist stocks / ETFs never fetched (from 10 years back) or last fetched 7
+days ago (from 10 days before the last close the fetch covered); the bridge runs one task per symbol (job kind
+`dividend-history`: after on-demand / closing chains, before the IV backfill; weight 2) of two paced daily-bar requests
+— whatToShow `ADJUSTED_LAST` and `TRADES`, 1 day bars, useRTH, duration up to 10 Y — and pushes the closes:
+```
+POST /api/ingest/dividend-history
+{ "source": "ibkr", "symbol": "KO", "adjusted": [ {"date": "2026-11-18", "close": 59.49} ],
+                                    "trades":   [ {"date": "2026-11-18", "close": 60.0} ] }
+→ 200 {"stored": n_dividends, "symbol": "KO"}
+```
+IBKR adjusts with the CRSP method: on each ex-date t every earlier close is multiplied by f = 1 − D / C(t−1), C the raw
+close. So the ratio r = adjusted / raw is constant between ex-dates and steps up at t by r(t−1) / r(t) = f, and the
+engine derives **D(t) = C(t−1) · (1 − r(t−1) / r(t))** (`analytics.dividends.from_adjusted_closes`). Both series are
+split-adjusted, so splits cancel and amounts are in today's shares; steps under $0.001, within the rounding of a
+cent-rounded adjusted series, the wrong way, or removing 25% of the price or more (a split one series lacks) are
+ignored. The derived rows replace what an earlier fetch derived over the same span; the fetch is recorded also when
+nothing was paid. Backfill: ~1,150 universe symbols × 2 requests at the historical pacer's ≥ 1 s spacing (plus IBKR's
+answer time, ~1–2 s for 10 years of daily bars), sharing TWS with the IV/HV backfill — roughly 1.5–3 hours on the
+first connection, minutes a week afterwards.
+Questrade's current dividend (`dividend`: one payment, see §8) with `exDate` / `dividendDate` is stored once per
+symbol per day with the reference snapshot.
+
 **After-hours fills.** Outside those hours (evening, weekend, weekday before the open) the engine asks for the current
 session's data (`session_date`: the last completed session) when it is missing — so a first launch on a weekend
 populates the universe reports, dashboard, IV rankings and screeners instead of waiting for Monday:
@@ -347,8 +403,8 @@ computed values appear only where no source has an IV.
 connected, not needing attention (§8 "Errors"), and not failing (more than half of its last 50 fetches failed,
 jobs/source_health.py) — it sweeps the whole universe itself, so `chain_universe` (also its after-hours fill) and
 `eod_chains` ask the bridge only for the symbols that source did not cover: its last attempt for the symbol failed, or
-it does not list the symbol (a symbol it was not asked yet counts as covered). IV/HV history, underlying stats, index
-quotes / bars and option-bar catch-up stay the bridge's: only IBKR provides them. When Questrade is unavailable or
+it does not list the symbol (a symbol it was not asked yet counts as covered). IV/HV history, dividend history, underlying
+stats, index quotes / bars and option-bar catch-up stay the bridge's: only IBKR provides them. When Questrade is unavailable or
 failing, the wants give the bridge the full lists again at the next poll.
 
 The underlying-stats pass also posts each stock's quote (last or mid, bid/ask, open/high/low, previous close,
@@ -533,6 +589,26 @@ band is stored, unquoted ones with null fields; prices ≤ 0 are no price, a 0 b
 volume / OI as reported (null when absent); `volatility` / 100; greeks null without a volatility; `delayed` when the
 underlying's or any option's `delay` is set. A closing snapshot takes the underlying's `lastTradePriceTrHrs`. Rows
 are tagged `source: "questrade"`; missing IV / greeks are borrowed or computed as for pushed chains.
+
+**Reference data** (`services/reference.py`, `analytics/fundamentals.py`). The daily `symbols/:id` the sweeps already
+fetch per symbol (cached per New York day) is stored after every sweep without another call: one
+`fundamentals_snapshot` per symbol per day — `pe`, `eps`, `marketCap`, `outstandingShares`, `highPrice52` /
+`lowPrice52`, `averageVol20Days` / `averageVol3Months`, `industrySector` / `industryGroup` / `industrySubGroup`
+(the sample's spelling), `yield` (percent → fraction), `prevDayClosePrice` — and the current dividend into the dividends
+model (source `questrade`). `dividend` is ONE payment, not the annual rate: the documented AAPL sample has dividend
+0.47 and yield 1.84 at prevDayClosePrice 102.5, and 4 × 0.47 / 102.5 = 1.83%; `exDate` is its ex-date, `dividendDate`
+its pay date. The snapshot is the single source of those figures (§5 "Key stats").
+
+**Extended hours** (`jobs/extended.py`): during a trading day's pre-market (04:00–09:30 ET) and after-hours (close–20:00
+ET) the `extended_quotes` job asks every 5 min for the universe and watchlist symbols' Level 1 quotes
+(`markets/quotes?ids=`, 100 ids per call, ids the sweeps cached — no searches: ~12 calls a round) and stores the latest
+per symbol and market (`lastTradePrice`, `lastTradePriceTrHrs`, `volume` as reported for the day, `lastTradeTime`)
+plus the halt flags. The pre-market / after-hours movers reports show every symbol whose last trade falls in the window
+(change = lastTradePrice − lastTradePriceTrHrs), `source` per row; Nasdaq's extended-hours quotes remain the fallback for
+the watchlist and most active symbols Questrade has no quote for (not connected, no cached id).
+
+**Quotes**: `VWAP` is read when Questrade sends it (it is not in the documented quote sample; null otherwise),
+`isHalted` as is (halt_status keeps the state and when it changed).
 
 **Schedule** (jobs/scheduler.py; each run skips Questrade when it is not connected): `sweep` every
 `SWEEP_INTERVAL_MIN` (60) from 09:45 to the close; `sweep_final` at close + 20 min (until 20:00 ET, also as a

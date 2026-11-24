@@ -15,7 +15,7 @@ import { barLabel, barTitle, CHART_RANGES, chartView, inRegularHours, INTERVAL_L
 import { todayNY } from "../../lib/dates";
 import { fmt } from "../../lib/format";
 import { isFlowing, liveStore, useLive, useLiveInterval, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
-import { nextCandle, withLiveCandle, type LiveCandle } from "../../live/candles";
+import { nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "../../live/candles";
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 
@@ -77,11 +77,11 @@ function useBridgeFill(sym: string, data: IntradayBars | null, reload: () => voi
 }
 
 /**
- * The last bar following the live price while quotes flow (at most once a second; regular hours unless extended).
- * The live candles are kept in the live store per series, so a reload of the bars or a remount continues them (merged
- * with the loaded bars by start, live/candles.ts).
+ * The last bar following the live price while quotes flow (at most once a second; regular hours unless extended), and
+ * the live quote's VWAP (null when not flowing or not sent). The live candles are kept in the live store per series, so
+ * a reload of the bars or a remount continues them (merged with the loaded bars by start, live/candles.ts).
  */
-function useLiveCandle(sym: string, bars: IntradayBar[], intervalMs: number, extended: boolean): IntradayBar[] {
+function useLiveCandle(sym: string, bars: IntradayBar[], intervalMs: number, extended: boolean): { bars: IntradayBar[]; vwap: number | null } {
   useLive({ symbols: [sym] });
   const flowing = isFlowing(useLiveStatus());
   const patch = useThrottled(useLiveQuote(sym), 1000);
@@ -96,24 +96,31 @@ function useLiveCandle(sym: string, bars: IntradayBar[], intervalMs: number, ext
     liveStore.keepCandle(series, next);
     setCandle(next);
   }, [patch, flowing, extended, intervalMs, bars, series]);
-  return useMemo(() => withLiveCandle(bars, flowing ? candle : null), [bars, candle, flowing]);
+  const shown = useMemo(() => withLiveCandle(bars, flowing ? candle : null), [bars, candle, flowing]);
+  return { bars: shown, vwap: flowing ? patch?.vwap ?? null : null };
 }
 
 /** The source's newest bar lags this much (s) and live-built bars follow it: say so. */
 const LAG_NOTE_S = 120;
 
-function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[]): CandleSeries {
+/** "VWAP" (from the source's VWAPs, and the live quote's), "VWAP (computed)" (typical price × volume of the bars). */
+function vwapLabel(d: IntradayBars): string {
+  return d.vwap_source === "computed" ? "VWAP (computed)" : "VWAP";
+}
+
+function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[], vwap: { label: string; values: (number | null)[] } | null): CandleSeries {
   return {
     labels: bars.map((b) => barLabel(b.ts, range)), titles: bars.map((b) => barTitle(b.ts)), bars,
     smas: smas.filter((n) => bars.length >= n).map((n) => ({ label: `SMA ${n} (bars)`, length: n, values: smaOf(bars, n) })),
-    markers: [],
+    markers: [], lines: vwap && vwap.values.some((v) => v !== null) ? [vwap] : [],
   };
 }
 
 function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; smas: SmaLength[]; fill: IntradayResult | "fetching" | null }) {
-  const shown = useLiveCandle(sym, d.bars, INTERVAL_MS[d.interval], d.extended);
+  const live = useLiveCandle(sym, d.bars, INTERVAL_MS[d.interval], d.extended);
+  const shown = live.bars;
   const liveBuilt = (d.lag_s ?? 0) > LAG_NOTE_S && (d.sources.includes("live") || shown.length > d.bars.length);
-  const series = useMemo(() => intradaySeries(shown, d.range, smas), [shown, d.range, smas]);
+  const series = useMemo(() => intradaySeries(shown, d.range, smas, { label: vwapLabel(d), values: vwapValues(shown, live.vwap) }), [shown, d, smas, live.vwap]);
   const short = smas.filter((n) => shown.length < n);
   const bridge = fill === "fetching" ? "Fetching the missing bars from IBKR…"
     : fill && fill.status !== "fetched" ? `IBKR: ${fill.message}` : null;
@@ -126,6 +133,7 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
         {d.sources.length > 0 && <> · Source {d.sources.map((s) => <SourceBadge key={s} source={s} />)}{d.delayed && <SourceBadge source={null} delayed />}</>}
         {liveBuilt && <> · <span className="live-built" title={`The source's newest bar ended ${Math.round((d.lag_s ?? 0) / 60)} min ago; the minutes since are built from live quotes until its own bars arrive`}>latest minutes built from live quotes</span></>}
         {smas.length > 0 && <> · SMAs over the loaded bars</>}
+        {series.lines?.length ? <> · {d.vwap_source === "computed" ? "VWAP computed from the bars (typical price × volume)" : "Session VWAP"}{live.vwap !== null && " · live point from the quote's VWAP"}</> : null}
         {short.length > 0 && <> · {short.map((n) => `SMA ${n}`).join(", ")}: fewer than {short[0]} bars loaded</>}
         {d.bars.length > 0 && bridge && <> · {bridge}</>}
         {d.bars.length > 0 && d.problem && !bridge && d.missing.length > 0 && <> · Some bars missing ({d.problem})</>}
@@ -260,6 +268,8 @@ const DIV_COLUMNS: ColumnDef[] = [
   { key: "declared_date", label: "Declared", fmt: "date" },
   { key: "record_date", label: "Record", fmt: "date" },
   { key: "pay_date", label: "Pay date", fmt: "date" },
+  { key: "source", label: "Source", fmt: "text", description: "Nasdaq; IBKR adj. = derived from IBKR's dividend-adjusted closes (amounts in today's shares); Questrade = its current dividend" },
+  { key: "discrepancy", label: "Sources differ", fmt: "bool", description: "Another source's amount for this ex-date differs by more than $0.01" },
 ];
 const CAPTURE_COLUMNS: ColumnDef[] = [
   { key: "ex_date", label: "Ex-date", fmt: "date" },
@@ -277,7 +287,8 @@ export function DividendsTab() {
   return (
     <Async state={st}>{(d) => (
       <div className="stack">
-        {!d.history.length && <InfoBox>No dividend history for {sym}. The free source (Nasdaq) has dividend history for Nasdaq-listed securities only, so NYSE / NYSE Arca listings show none here even when they pay dividends.</InfoBox>}
+        {!d.history.length && <InfoBox>No dividends stored for {sym} yet. They come from Nasdaq, from IBKR's dividend-adjusted price history (collected by the IBKR bridge in the desktop app) and from Questrade's daily symbol info; a symbol that pays none stays empty.</InfoBox>}
+        {d.history.some((h) => h.discrepancy) && <InfoBox>Some ex-dates have amounts that differ between sources by more than $0.01 (marked below); the amount shown is Nasdaq's, else IBKR's, else Questrade's.</InfoBox>}
         <Card title="Dividend profile">
           <StatGrid items={[
             { label: "Annual rate", value: d.annual_rate, fmt: "money" },

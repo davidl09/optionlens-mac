@@ -23,6 +23,8 @@ export interface Wants {
   indexSymbols: string[];
   /** Index daily history (SPX, NDX, ..., VIX family) the engine is missing, from `from` (YYYY-MM-DD). */
   indexBars: { symbol: string; from: string }[];
+  /** Daily adjusted + raw closes for the dividends of these stocks / ETFs, from `from` (absent = none). */
+  dividendHistory: { symbol: string; from: string }[];
   onDemandMaxAgeS: number;
 }
 
@@ -107,6 +109,7 @@ export function parseWants(raw: unknown): Wants {
     optionBars,
     indexSymbols: present(w.index_symbols) ? symbols(w.index_symbols, "index_symbols") : [],
     indexBars: symbolsFrom(w.index_bars, "index_bars"),
+    dividendHistory: symbolsFrom(w.dividend_history, "dividend_history"),
     onDemandMaxAgeS: present(w.chains_on_demand_max_age_s) ? num(w.chains_on_demand_max_age_s, "chains_on_demand_max_age_s", 0, 86_400) : 120,
   };
 }
@@ -137,12 +140,14 @@ export interface Plan {
   indexBars: { symbol: string; from: string }[];
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
   volHistory: { symbol: string; from: string; kind: "iv30" | "hv30" }[];
+  dividendHistory: { symbol: string; from: string }[];
 }
 
 export const ledgerKey = {
   eod: (day: string, s: string) => `eod:${day}:${s}`,
   vol: (kind: "iv30" | "hv30", s: string) => `${kind}:${s}`,
   indexBars: (s: string) => `bars:${s}`,
+  dividends: (s: string) => `divs:${s}`,
   optionBars: (s: string, sessions: string[]) => `obars:${s}:${[...sessions].sort().join(",")}`,
   /** One contract of an option-bars plan. */
   optionBar: (c: TwsContract, sessions: string[]) => `obar:${c.conId ?? `${c.symbol}${c.lastTradeDateOrContractMonth}${c.right}${c.strike}`}:${[...sessions].sort().join(",")}`,
@@ -173,6 +178,7 @@ export function planWants(w: Wants, c: PlanContext): Plan {
     volHistory: ([["iv30", w.ivHistory], ["hv30", w.hvHistory]] as const).flatMap(([kind, list]) => list
       .filter((x) => !c.attemptedWithin(ledgerKey.vol(kind, x.symbol), HIST_RETRY_MS))
       .map((x) => ({ symbol: x.symbol, from: x.from, kind }))),
+    dividendHistory: w.dividendHistory.filter((x) => !c.attemptedWithin(ledgerKey.dividends(x.symbol), HIST_RETRY_MS)),
   };
 }
 

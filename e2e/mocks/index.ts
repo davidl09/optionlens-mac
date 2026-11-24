@@ -88,6 +88,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
     }
     switch (parts[3]) {
       case "summary": return ok(s.summary(sym));
+      case "key-stats": return ok(s.keyStats(sym));
       case "bars":
         if (q.get("interval")) return ok(s.intradayBars(sym, q.get("interval") as IntradayInterval, (q.get("range") ?? "1d") as IntradayRange, q.get("extended") === "1"));
         return ok(s.bars(sym, q.get("range") ?? "1y"));

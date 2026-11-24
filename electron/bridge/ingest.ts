@@ -28,6 +28,8 @@ export interface IngestChain {
 }
 export interface VolBars { source: "ibkr"; symbol: string; kind: "iv30" | "hv30"; bars: { date: string; value: number }[] }
 export interface IndexBars { source: "ibkr"; symbol: string; bars: { date: string; open: N; high: N; low: N; close: number }[] }
+/** Daily closes for the dividends behind IBKR's adjustment (INTEGRATION.md §6 "Dividends"): ADJUSTED_LAST and TRADES. */
+export interface DividendHistory { source: "ibkr"; symbol: string; adjusted: { date: string; close: number }[]; trades: { date: string; close: number }[] }
 export interface IngestQuote {
   symbol: string; price: N; change: N; change_pct: N; ts: string;
   /** Session fields where TWS sent them (stock quotes of the underlying-stats pass); absent = not sent. */
@@ -75,6 +77,7 @@ export interface IngestApi {
   noOptions(b: NoOptions): Promise<unknown>;
   volHistory(b: VolBars): Promise<unknown>;
   indexBars(b: IndexBars): Promise<unknown>;
+  dividendHistory(b: DividendHistory): Promise<unknown>;
   quotes(b: IngestQuotes): Promise<unknown>;
   underlyingStats(b: UnderlyingStats): Promise<unknown>;
   optionBars(b: OptionBars): Promise<unknown>;
@@ -92,6 +95,7 @@ export function ingestApi(http: JsonHttp): IngestApi {
     noOptions: (b) => http.post("/api/ingest/no-options", b),
     volHistory: (b) => http.post(b.kind === "iv30" ? "/api/ingest/iv-history" : "/api/ingest/hv-history", b),
     indexBars: (b) => http.post("/api/ingest/index-bars", b),
+    dividendHistory: (b) => http.post("/api/ingest/dividend-history", b),
     quotes: (b) => http.post("/api/ingest/quotes", b),
     underlyingStats: (b) => http.post("/api/ingest/underlying-stats", b),
     optionBars: (b) => http.post("/api/ingest/option-bars", b),

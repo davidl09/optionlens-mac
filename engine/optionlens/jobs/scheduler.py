@@ -18,7 +18,8 @@ from ..analytics.calendar import NY, close_time, is_trading_day, now_ny
 from ..config import get_settings
 from ..repo import jobs as jobs_repo
 from ..sources import chain_source
-from . import calendars, chains, maintenance, marketdata, prices, universe
+from ..analytics.intraday import extended_window
+from . import calendars, chains, extended, maintenance, marketdata, prices, universe
 from ._util import EOD_DEADLINE, FINAL_DELAY_MIN, current_run_id
 
 log = logging.getLogger("optionlens.scheduler")
@@ -86,6 +87,22 @@ def intraday(interval_min: int, first: time = time(9, 45)) -> Schedule:
     return Schedule(times, f"trading days every {interval_min}m {first:%H:%M}-close")
 
 
+def extended_hours(interval_min: int) -> Schedule:
+    """Trading days every interval_min inside the pre-market and after-hours windows (analytics.intraday.extended_window,
+    start inclusive, end exclusive)."""
+    def times(d: date) -> list[time]:
+        if not is_trading_day(d):
+            return []
+        out = []
+        for market in ("pre", "post"):
+            a, b = (t.astimezone(NY).replace(tzinfo=None) for t in extended_window(d, market))
+            while a < b:
+                out.append(a.time())
+                a += timedelta(minutes=interval_min)
+        return out
+    return Schedule(times, f"trading days every {interval_min}m in pre-market and after-hours")
+
+
 def manual() -> Schedule:
     """Never fires on its own: the job only runs when asked (CLI `run-job`)."""
     return Schedule(lambda d: [], "manual only")
@@ -144,6 +161,8 @@ def build_jobs() -> dict[str, Job]:
         Job("sweep", chains.sweep, intraday(s.sweep_interval_min) if server else manual(), catch_up=server),
         Job("sweep_final", chains.sweep_final, after_close(FINAL_DELAY_MIN) if server else manual(), catch_up=server),
         Job("sweep_fill", chains.sweep_fill, hourly(FILL_MINUTE) if server else manual(), catch_up=server),
+        Job("extended_quotes", extended.collect,
+            extended_hours(extended.COLLECT_EVERY_MIN) if server else manual(), catch_up=False),
         Job("eod", chains.eod, daily(EOD_AFTER_PUSHES, trading_only=True)),
         Job("prune", maintenance.prune, daily(time(3, 0))),
     ]

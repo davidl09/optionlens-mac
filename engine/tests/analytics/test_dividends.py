@@ -104,9 +104,10 @@ def test_dividend_summary_shape():
                       "next", "history", "capture", "capture_stats"}
     assert s["yield"] == pytest.approx(1.04 / 100)
     assert s["next"] == {"ex_date": date(2026, 2, 10), "amount": 0.27, "days": (date(2026, 2, 10) - ASOF).days,
-                         "yield": pytest.approx(0.0104)}
+                         "yield": pytest.approx(0.0104), "source": None}
     assert s["history"][0]["ex_date"] == date(2026, 2, 10)
-    assert set(s["history"][0]) == {"ex_date", "amount", "pay_date", "record_date", "declared_date", "kind", "one_off"}
+    assert set(s["history"][0]) == {"ex_date", "amount", "pay_date", "record_date", "declared_date", "kind", "one_off",
+                                    "source", "discrepancy"}
     assert all(r["ex_date"] <= ASOF for r in s["capture"])
     nov = next(r for r in s["capture"] if r["ex_date"] == date(2025, 11, 10))
     assert nov["total_return"] == pytest.approx(0.0026)

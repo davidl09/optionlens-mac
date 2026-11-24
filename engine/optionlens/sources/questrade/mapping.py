@@ -5,6 +5,13 @@ operations, market calls); where a page's field table and its sample JSON disagr
   name under "optionRoot" (table) / "root" (sample);
 - POST v1/markets/quotes/options: quotes under "optionQuotes" (sample) / "quotes" (table).
 
+GET v1/symbols/:id (reference data, docs/INTEGRATION.md §8): `dividend` is the amount of ONE payment, not the annual
+rate — the sample's AAPL has dividend 0.47 and yield 1.84 at prevDayClosePrice 102.5: 4 × 0.47 / 102.5 = 1.83%, so
+`yield` (percent) is the annualized current dividend over the price; `exDate` / `dividendDate` are its ex-date and pay
+date. The sub-group is spelled `industrySubGroup` (sample). Equity quotes: `VWAP` is read when Questrade sends it (it
+is not in the documented sample; null otherwise), `isHalted` as is, and lastTradePrice (any session) vs
+lastTradePriceTrHrs (regular hours) gives the extended-hours move.
+
 Values: prices <= 0 are "no price" (None); a 0 bid counts only against a real ask; volume and open interest are
 kept as reported (None when absent, never invented); `volatility` is in percent (sample: 52.374257) and becomes
 a fraction; without a volatility the greeks (model outputs of it) are None. `delay` (> 0 / true) marks delayed
@@ -20,7 +27,8 @@ from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
 from ...analytics.calendar import NY
-from ...models import ChainSnapshot, IntradayBar, OptionContract, Quote, Right, normalize_symbol
+from ...models import (ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar, OptionContract, Quote, Right,
+                       normalize_symbol)
 from ..osi import PM_ROOTS, format_osi, standard_roots
 
 STANDARD_MULTIPLIER = 100
@@ -53,6 +61,21 @@ def _ts(v: Any) -> datetime | None:
         return None
 
 
+def _day(v: Any) -> date | None:
+    """A documented date-time ("2014-08-07T00:00:00.000000-04:00") -> its calendar date."""
+    t = _ts(v)
+    return t.date() if t else None
+
+
+def _text(v: Any) -> str | None:
+    s = str(v).strip() if v is not None else ""
+    return s or None
+
+
+def _flag(v: Any) -> bool | None:
+    return None if v is None else bool(v)
+
+
 def is_delayed(item: Mapping) -> bool:
     """`delay`: minutes (option quotes) or a boolean (equity quotes); 0 / false = real-time."""
     return bool(item.get("delay"))
@@ -74,14 +97,55 @@ def pick_symbol_id(payload: Mapping, symbol: str) -> int | None:
 
 @dataclass(frozen=True)
 class SymbolInfo:
+    """GET v1/symbols/:id of one symbol: what the chain needs plus the reference data (module doc)."""
     has_options: bool
     prev_close: float | None
+    pe: float | None = None
+    eps: float | None = None
+    market_cap: float | None = None
+    shares_outstanding: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    avg_volume_20d: float | None = None
+    avg_volume_3m: float | None = None
+    sector: str | None = None
+    industry_group: str | None = None
+    industry_subgroup: str | None = None
+    dividend: float | None = None          # one payment, $/share
+    dividend_yield: float | None = None    # fraction (Questrade: percent)
+    ex_date: date | None = None
+    pay_date: date | None = None
 
 
 def symbol_info(payload: Mapping) -> SymbolInfo:
-    """GET v1/symbols/:id -> hasOptions and prevDayClosePrice of its one symbol."""
+    """GET v1/symbols/:id -> SymbolInfo of its one symbol (exact sample field names; 0 / absent = unknown, except
+    eps and pe which may be negative / zero as reported)."""
     s = payload["symbols"][0]
-    return SymbolInfo(bool(s.get("hasOptions")), _price(s.get("prevDayClosePrice")))
+    y = s.get("yield")
+    return SymbolInfo(
+        bool(s.get("hasOptions")), _price(s.get("prevDayClosePrice")),
+        pe=_num(s.get("pe")), eps=_num(s.get("eps")), market_cap=_price(s.get("marketCap")),
+        shares_outstanding=_price(s.get("outstandingShares")), high_52w=_price(s.get("highPrice52")),
+        low_52w=_price(s.get("lowPrice52")), avg_volume_20d=_price(s.get("averageVol20Days")),
+        avg_volume_3m=_price(s.get("averageVol3Months")), sector=_text(s.get("industrySector")),
+        industry_group=_text(s.get("industryGroup")), industry_subgroup=_text(s.get("industrySubGroup")),
+        dividend=_price(s.get("dividend")), dividend_yield=None if y is None else float(y) / 100.0,
+        ex_date=_day(s.get("exDate")), pay_date=_day(s.get("dividendDate")))
+
+
+def fundamentals(info: SymbolInfo, symbol: str, day: date) -> Fundamentals:
+    """The day's reference snapshot of `symbol` from its SymbolInfo (source 'questrade')."""
+    return Fundamentals(symbol, day, "questrade", info.pe, info.eps, info.market_cap, info.shares_outstanding,
+                        info.high_52w, info.low_52w, info.avg_volume_20d, info.avg_volume_3m, info.sector,
+                        info.industry_group, info.industry_subgroup, info.dividend_yield, info.prev_close)
+
+
+def current_dividend(info: SymbolInfo, symbol: str) -> Dividend | None:
+    """The current dividend (one payment) with its ex-date and pay date (source 'questrade'); None without an
+    amount or an ex-date."""
+    if info.dividend is None or info.ex_date is None:
+        return None
+    return Dividend(symbol, info.ex_date, info.dividend, info.pay_date, None, None, "cash", source="questrade")
 
 
 # ----------------------------------------------------------------------------- chain structure
@@ -152,7 +216,15 @@ def parse_quote(q: Mapping, symbol: str, prev_close: float | None, fetched_at: d
                  change_pct=change / prev_close if change is not None else None,
                  open=_price(q.get("openPrice")), high=_price(q.get("highPrice")), low=_price(q.get("lowPrice")),
                  prev_close=prev_close, volume=_count(q.get("volume")), bid=bid, ask=ask, iv30=None,
-                 delayed=is_delayed(q))
+                 delayed=is_delayed(q), vwap=_price(q.get("VWAP")), halted=_flag(q.get("isHalted")))
+
+
+def extended_quote(q: Mapping, symbol: str, fetched_at: datetime) -> ExtendedQuote:
+    """An equity Level 1 quote collected in extended hours: lastTradePrice (any session) and lastTradePriceTrHrs (the
+    last regular-hours trade), the day's volume, the last trade's time, isHalted, delay."""
+    return ExtendedQuote(symbol, fetched_at, _price(q.get("lastTradePrice")), _price(q.get("lastTradePriceTrHrs")),
+                         _count(q.get("volume")), _ts(q.get("lastTradeTime")), _flag(q.get("isHalted")),
+                         is_delayed(q))
 
 
 def option_quotes(payload: Mapping) -> dict[int, Mapping]:
@@ -188,7 +260,8 @@ def snapshot(quote: Quote, listed: Iterable[Listed], quotes: Mapping[int, Mappin
 
 
 # ----------------------------------------------------------------------------- live quotes (live/questrade.py)
-QUOTE_LIVE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
+QUOTE_LIVE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume",
+                     "vwap", "halted")
 OPTION_LIVE_FIELDS = ("bid", "ask", "mid", "last", "volume", "oi", "iv", "delta", "gamma", "theta", "vega")
 
 
@@ -219,12 +292,13 @@ def candle_time(ts: datetime) -> str:
 
 
 def candles(payload: Mapping) -> list[IntradayBar]:
-    """`candles` -> IntradayBar (start = the candle's `start`); candles without a positive OHLC are dropped."""
+    """`candles` -> IntradayBar (start = the candle's `start`, `VWAP` when the candle has one); candles without a
+    positive OHLC are dropped."""
     out = []
     for c in payload.get("candles") or []:
         ts = _ts(c.get("start"))
         o, h, l, cl = (_price(c.get(k)) for k in ("open", "high", "low", "close"))
         if ts is None or ts.tzinfo is None or None in (o, h, l, cl):
             continue
-        out.append(IntradayBar(ts, o, h, l, cl, _count(c.get("volume"))))
+        out.append(IntradayBar(ts, o, h, l, cl, _count(c.get("volume")), _price(c.get("VWAP"))))
     return out

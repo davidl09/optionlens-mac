@@ -56,9 +56,8 @@ def _allowed(f: Frame, p: RunParams, sym: str, pos: dict) -> bool:
 
 
 def _rate_fields(divs: list[Dividend], price: float | None, asof: date) -> dict:
-    rate = div_a.annual_rate(divs, asof)
-    return {"annual_rate": rate, "frequency": div_a.frequency(divs, asof),
-            "yield": rate / price if rate and price else None}
+    return {"annual_rate": div_a.annual_rate(divs, asof), "frequency": div_a.frequency(divs, asof),
+            "yield": div_a.indicated_yield(divs, price, asof)}
 
 
 # ============================================================================ event lists
@@ -70,7 +69,11 @@ EVENT_COLS = (
                         Col("annual_rate", "Annual rate", "money"), Col("yield", "Yield", "pct"),
                         Col("frequency", "Payments / yr", "int", default_hidden=True),
                         Col("declared_date", "Declared", "date"), Col("record_date", "Record", "date", default_hidden=True),
-                        Col("pay_date", "Pay date", "date"), Col("days_to_ex", "Days to ex", "int"))),
+                        Col("pay_date", "Pay date", "date"), Col("days_to_ex", "Days to ex", "int"),
+                        Col("source", "Source", "text", description="Where the amount came from: Nasdaq, derived "
+                            "from IBKR's dividend-adjusted closes (ibkr-adjusted) or Questrade's current dividend"),
+                        Col("discrepancy", "Sources differ", "bool", default_hidden=True,
+                            description="The sources' amounts for this ex-date differ by more than $0.01"))),
     Col("price", "Price", "money", C.G_QUOTE), Col("change_pct", "% Chg", "pct_signed", C.G_QUOTE),
     Col("iv30", "IV30", "vol", C.G_VOL),
 )
@@ -91,6 +94,7 @@ def _event_rows(p: RunParams, by: str, start: date, end: date) -> Output:
                      "market_cap": _fval(f, i, "market_cap"), "sector": _fval(f, i, "sector"),
                      "amount": d.amount, "kind": d.kind, "declared_date": d.declared_date, "record_date": d.record_date,
                      "pay_date": d.pay_date, "days_to_ex": (d.ex_date - t).days, "price": price,
+                     "source": d.source, "discrepancy": d.discrepancy,
                      "change_pct": _fval(f, i, "change_pct"), "iv30": _fval(f, i, "iv30"),
                      "one_off": (d.ex_date, d.amount) in odd.get(d.symbol, div_a.one_offs([d])),
                      **_rate_fields(hist.get(d.symbol, [d]), price, max(t, d.ex_date))})

@@ -128,10 +128,14 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
     has_extended = any(not intraday.is_regular(r["ts"]) for r in rows)
     shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"])]
     sources, delayed = _summary(shown)
+    vwap, vwap_how = intraday.day_vwap(shown)
     return {
         "symbol": sym, "interval": interval, "range": rng, "extended": extended,
         "start": want[0], "end": want[1], "has_extended": has_extended,
-        "bars": [{k: r[k] for k in ("ts", "open", "high", "low", "close", "volume")} for r in shown],
+        "bars": [{**{k: r[k] for k in ("ts", "open", "high", "low", "close", "volume")}, "vwap": v}
+                 for r, v in zip(shown, vwap)],
+        # the day VWAP from the candles' own VWAPs carries their source; from typical prices it is 'computed'
+        "vwap_source": "computed" if vwap_how == "computed" else (sources[0] if vwap_how and sources else None),
         "sources": sources, "delayed": delayed,
         "missing": [{"start": a, "end": b} for a, b in missing], "problem": problem,
         "lag_s": _lag_s(source, interval, now),
@@ -156,7 +160,7 @@ def store_pushed(body: dict, now: datetime | None = None) -> dict:
     if any(e <= s for s, e in spans):
         raise BadRequest("every span needs start < end")
     bars = [IntradayBar(b["ts"], b["open"], b["high"], b["low"], b["close"],
-                        int(b["volume"]) if b.get("volume") is not None else None) for b in body["bars"]]
+                        int(b["volume"]) if b.get("volume") is not None else None, b.get("vwap")) for b in body["bars"]]
     n = _store(sym, interval, bars, spans, body["source"], body.get("delayed"), now or datetime.now(timezone.utc),
                live.pending_bars(sym))
     return {"stored": n, "symbol": sym}

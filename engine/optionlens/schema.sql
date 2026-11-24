@@ -220,3 +220,46 @@ ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS delayed BOOLEAN;
 ALTER TABLE option_latest ADD COLUMN IF NOT EXISTS final BOOLEAN;
 ALTER TABLE metrics_daily ADD COLUMN IF NOT EXISTS chain_fetched_at TIMESTAMP;
 ALTER TABLE option_eod ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP;
+-- Questrade quote fields (docs/INTEGRATION.md §8 "Reference data"): the session VWAP as the quote reported it (NULL =
+-- not sent, e.g. IBKR pushes) and each intraday bar's own VWAP (Questrade candles; NULL = not sent).
+ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS vwap DOUBLE;
+ALTER TABLE intraday_bars ADD COLUMN IF NOT EXISTS vwap DOUBLE;
+
+-- Dividends from sources other than Nasdaq (docs/INTEGRATION.md §6 "Dividends"): 'ibkr-adjusted' (derived from IBKR's
+-- dividend-adjusted vs raw daily closes) and 'questrade' (the current dividend of GET v1/symbols/:id). Nasdaq's rows
+-- stay in `dividends`; readers see the merge of both (repo/dividends.py, analytics.dividends.SOURCE_PRIORITY).
+CREATE TABLE IF NOT EXISTS dividends_derived (
+    symbol VARCHAR NOT NULL, ex_date DATE NOT NULL, source VARCHAR NOT NULL, amount DOUBLE NOT NULL, pay_date DATE,
+    kind VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (symbol, ex_date, source)
+);
+-- The IBKR dividend-history fetches (also of symbols that paid nothing): the span of closes they covered.
+CREATE TABLE IF NOT EXISTS dividend_history_fetches (
+    symbol VARCHAR PRIMARY KEY, source VARCHAR NOT NULL, first_date DATE, last_date DATE, dividends INTEGER NOT NULL,
+    fetched_at TIMESTAMP NOT NULL
+);
+
+-- One reference snapshot per symbol per day (Questrade GET v1/symbols/:id, docs/INTEGRATION.md §8): the single source of
+-- P/E, EPS, market cap, shares, 52-week range, average volumes and Questrade's sector classification.
+CREATE TABLE IF NOT EXISTS fundamentals_snapshot (
+    symbol VARCHAR NOT NULL, date DATE NOT NULL, source VARCHAR NOT NULL,
+    pe DOUBLE, eps DOUBLE, market_cap DOUBLE, shares_outstanding DOUBLE, high_52w DOUBLE, low_52w DOUBLE,
+    avg_volume_20d DOUBLE, avg_volume_3m DOUBLE, sector VARCHAR, industry_group VARCHAR, industry_subgroup VARCHAR,
+    dividend_yield DOUBLE, prev_close DOUBLE, fetched_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (symbol, date)
+);
+
+-- The latest extended-hours quote per symbol and market ('pre' 04:00-09:30, 'post' close-20:00 ET) of session_date.
+CREATE TABLE IF NOT EXISTS extended_quotes (
+    symbol VARCHAR NOT NULL, market VARCHAR NOT NULL, session_date DATE NOT NULL, ts TIMESTAMP NOT NULL,
+    price DOUBLE, regular_price DOUBLE, volume BIGINT, last_trade_at TIMESTAMP, source VARCHAR NOT NULL,
+    delayed BOOLEAN,
+    PRIMARY KEY (symbol, market)
+);
+
+-- Trading halts as the quotes report them (Questrade isHalted): the current state, when it last changed (NULL: no
+-- change observed yet) and when it was last observed.
+CREATE TABLE IF NOT EXISTS halt_status (
+    symbol VARCHAR PRIMARY KEY, halted BOOLEAN NOT NULL, changed_at TIMESTAMP, observed_at TIMESTAMP NOT NULL,
+    source VARCHAR NOT NULL
+);

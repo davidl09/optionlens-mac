@@ -2,11 +2,11 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api/client";
-import type { ColumnDef, FinTable, Insiders, ReportRow } from "../../api/types";
+import type { ColumnDef, FinTable, Insiders, KeyStats, ReportRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
-import { AsOf, Async, Card, Empty, NullValue, Segmented } from "../../components/ui";
+import { AsOf, Async, Card, Empty, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmtDateTime, fundamentalText } from "../../lib/format";
 import { sellSplit } from "../../lib/insiders";
 import { useSym } from "./shared";
@@ -27,18 +27,37 @@ function FinTableView({ t }: { t: FinTable | null }) {
   );
 }
 
+/** OptionLens's key figures (the symbol header and Summary show the same ones). */
+function KeyStatsCard({ ks }: { ks: KeyStats }) {
+  const v = (label: string, k: keyof KeyStats, kind: "num2" | "money" | "bigmoney" | "int" | "pct" | "text") => ({
+    label, node: <span><StatValue value={ks[k]} kind={kind} hint="Not reported for this symbol yet." /> <SourceBadge source={ks.sources[k]} /></span>,
+  });
+  return (
+    <Card title="Key figures" subtitle={<>OptionLens · Questrade's daily symbol info{ks.asof ? ` of ${ks.asof}` : ""}</>}>
+      <StatGrid items={[
+        v("Market cap", "market_cap", "bigmoney"), v("P/E", "pe", "num2"), v("EPS", "eps", "money"),
+        v("Shares outstanding", "shares_outstanding", "bigmoney"), v("52w high", "high_52w", "money"), v("52w low", "low_52w", "money"),
+        v("Avg volume 20d", "avg_volume_20d", "int"), v("Avg volume 3m", "avg_volume_3m", "int"), v("Dividend yield", "dividend_yield", "pct"),
+        v("Sector (Questrade)", "sector", "text"), v("Industry group", "industry_group", "text"), v("Industry sub-group", "industry_subgroup", "text"),
+      ]} />
+    </Card>
+  );
+}
+
 export function FundamentalsTab() {
   const sym = useSym();
   const [period, setPeriod] = useState<"annual" | "quarterly">("annual");
   const [statement, setStatement] = useState<"income" | "balance" | "cashflow" | "ratios">("income");
   const st = useApi(() => api.fundamentals(sym, period), [sym, period]);
   const peers = useApi(() => api.peers(sym), [sym]);
+  const ks = useApi(() => api.keyStats(sym), [sym]);
   return (
     <div className="stack">
+      <Async state={ks}>{(k) => <KeyStatsCard ks={k} />}</Async>
       <Async state={st}>{(f) => (
         <>
           <Card title="Key statistics" subtitle={<>Nasdaq company data · <AsOf ts={f.fetched_at} label="fetched" /></>}>
-            <p className="muted small">Figures as Nasdaq reports them; the Summary tab's market cap, yield and other values are OptionLens's own, from its latest prices.</p>
+            <p className="muted small">Nasdaq's other figures; market cap, P/E, EPS, yield, 52-week range, average volume and dividend dates are the key figures above (one value on every page).</p>
             <StatGrid items={[
               ...f.key_stats.map((k) => ({ label: k.label, value: k.value !== null ? fundamentalText(k.label, k.value) : null, fmt: "text" as const, hint: "Not provided by Nasdaq for this symbol." })),
               { label: "Payback period", node: <StatValue value={f.payback_years} kind="num" hint="Needs positive trailing free cash flow." />, sub: "market cap ÷ trailing FCF (years)" },

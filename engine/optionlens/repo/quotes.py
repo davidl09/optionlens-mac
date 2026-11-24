@@ -8,7 +8,7 @@ from ..models import Quote
 from ._sql import insert_arrow, query, scalar, to_columns, utc_naive
 
 _FIELDS = ("symbol", "ts", "price", "change", "change_pct", "open", "high", "low", "prev_close",
-           "volume", "bid", "ask", "iv30", "delayed")
+           "volume", "bid", "ask", "iv30", "delayed", "vwap")   # Quote.halted lives in halt_status (repo.halts)
 _SELECT = ", ".join(_FIELDS)
 
 
@@ -22,7 +22,7 @@ def upsert_quotes(quotes: Iterable[Quote], source: str | None = None) -> int:
         return insert_arrow(cur, "quotes_latest", data, "INSERT OR REPLACE")
 
 
-MERGE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
+MERGE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume", "vwap")
 
 
 def merge_quotes(rows: Iterable[Mapping[str, Any]], source: str | None, delayed: bool | None) -> int:

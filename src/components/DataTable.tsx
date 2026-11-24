@@ -9,7 +9,7 @@ import { applyTable, emptyColumnKeys, filterActive, humanize } from "../lib/tabl
 import { Flash, isFlowing, useLive, useLiveCell, useLiveStatus } from "../live";
 import { liveKeyOf, rowKeys } from "../live/merge";
 import { useViewTable, type DataRequest } from "../state/view";
-import { isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
+import { HaltedBadge, isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
 export type { SortState, TableState } from "../lib/table";
 import type { SortState, TableState } from "../lib/table";
@@ -98,6 +98,8 @@ export function Cell({ col, row }: { col: ColumnDef; row: ReportRow }) {
     }
     case "badge":
       return <span className={`badge ${badgeTone(v)}`}>{String(v)}</span>;
+    case "halt":
+      return <HaltedBadge halted={v === true} />;
     case "pct_signed":
       return <span className={signClass(v)}>{fmt(v, col.fmt)}</span>;
     default:

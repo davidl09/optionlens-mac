@@ -61,6 +61,9 @@ describe("merge", () => {
     const r = withLiveOption(row, { bid: 10, ask: 10.4, iv: 0.27, source: "questrade" }, 351);
     expect(r).toMatchObject({ bid: 10, ask: 10.4, mid: 10.2, iv: 0.27, iv_source: "questrade", greeks_source: "ibkr", itm: true, oi: 100 });
     expect(withLiveOption(row, null)).toBe(row);
+    // the session VWAP and the halt flag follow the live quote (a false halt clears the badge)
+    const h = withLiveQuote({ price: 1, vwap: 0.9, halted: true }, { vwap: 1.01, halted: false });
+    expect(h).toMatchObject({ vwap: 1.01, halted: false });
   });
 
   it("picks the live key of a report cell: contract fields of osi rows, quote fields of symbol rows, nothing for history metrics", () => {
@@ -68,6 +71,8 @@ describe("merge", () => {
     const opt = { symbol: "AAPL", osi: "AAPL261218C00350000", bid: 1, price: 350 };
     expect(liveKeyOf(stock, "price")).toEqual(["q", "AAPL"]);
     expect(liveKeyOf(stock, "iv_rank")).toBeNull();
+    expect(liveKeyOf(stock, "vwap")).toEqual(["q", "AAPL"]);
+    expect(liveKeyOf(stock, "halted")).toEqual(["q", "AAPL"]);
     expect(liveKeyOf(opt, "bid")).toEqual(["o", "AAPL261218C00350000"]);
     expect(liveKeyOf(opt, "price")).toEqual(["q", "AAPL"]);
     expect(liveKeyOf(opt, "oi_change")).toBeNull();

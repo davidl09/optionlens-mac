@@ -10,7 +10,7 @@ import { ContractCache, type ContractStore } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { FailureLog } from "./failures";
 import type { IngestApi, RefreshResultBody } from "./ingest";
-import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushIntradayBars, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushDividendHistory, pushIndexBars, pushIndexQuotes, pushIntradayBars, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
@@ -55,6 +55,7 @@ const group = {
   optionBars: (s: string): Group => ({ id: `option-bars:${s}`, label: `${s} option bars` }),
   volHistory: (s: string): Group => ({ id: `iv-history:${s}`, label: `${s} IV/HV history` }),
   indexBars: (s: string): Group => ({ id: `index-bars:${s}`, label: `${s} daily bars` }),
+  dividends: (s: string): Group => ({ id: `dividend-history:${s}`, label: `${s} dividend history` }),
 };
 
 interface ChainGaps { symbol: string; coverage: number; noQuotes: string[]; noContracts: string[] }
@@ -439,6 +440,10 @@ export class Bridge {
     if (accepted.length) {
       void this.d.ingest.ackWants({ kind: "option_bars", items: accepted.map((o) => ({ symbol: o.symbol, sessions: o.sessions })) })
         .catch((e: unknown) => this.d.log.warn(`bridge ack-wants: ${(e as Error).message}`));
+    }
+    for (const { symbol: s, from } of plan.dividendHistory) {
+      this.enqueue(this.task("dividend-history", `divs:${s}`, `${s} dividend history`, async (ctx) => { await pushDividendHistory(ctx, s, from); this.pushed(); },
+        { gate: this.pacer, ledgerKey: ledgerKey.dividends(s), maxAttempts: 6, group: group.dividends(s) }));
     }
     for (const v of plan.volHistory) {
       this.enqueue(this.task("iv-history", `vol:${v.kind}:${v.symbol}`, `${v.symbol} ${v.kind === "iv30" ? "IV" : "HV"} history`,

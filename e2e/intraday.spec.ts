@@ -29,6 +29,7 @@ test("range and interval selector: intraday ranges offer their intervals and loa
   await expect(summary(page)).toHaveAttribute("data-bars", String(4 * 64 + 47));     // 04:00..20:00, today 04:00..15:30
   await expect(page.locator(".legend-note")).toContainText("including pre-market and after-hours");
   await expect(page.locator(".legend-note")).toContainText("SMAs over the loaded bars");
+  await expect(page.locator(".legend-note")).toContainText("VWAP computed from the bars (typical price × volume)");
   await expect(page.locator("label.chip", { hasText: "SMA 20 (bars)" })).toBeVisible();
   await radio(page, "Range", "3M").click();
   await expect(page.getByRole("radiogroup", { name: "Interval" }).getByRole("radio")).toHaveText(["1h", "D"]);

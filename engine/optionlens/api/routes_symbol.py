@@ -34,6 +34,13 @@ async def summary(sym: str = Sym):
     return await respond(symbol.summary, sym)
 
 
+@router.get("/key-stats")
+async def key_stats(sym: str = Sym):
+    """KeyStats: P/E, EPS, market cap, shares, 52-week range, average volumes, Questrade's sector / industry group /
+    sub-group and the dividend yield at the current price, each with its source (docs/INTEGRATION.md §8)."""
+    return await respond(symbol.key_stats, sym)
+
+
 @router.get("/bars")
 async def bars(sym: str = Sym, range: BarsRange = "1y", interval: Interval | None = None, extended: bool = False):
     """Daily bars (Bar[]) of `range` (1m..max); with `interval`, intraday bars (IntradayBars) of `range` 1d|5d|1m|3m

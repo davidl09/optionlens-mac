@@ -20,6 +20,8 @@ export const ALERT_KINDS: Record<AlertKind, { label: string; unit: string | null
   unusual_volume: { label: "Appears in unusual option volume", unit: null, scale: 1 },
   earnings_within_days: { label: "Earnings within", unit: "days", scale: 1 },
   ex_div_within_days: { label: "Ex-dividend within", unit: "days", scale: 1 },
+  halted: { label: "Trading halted", unit: null, scale: 1 },
+  resumed: { label: "Trading resumed after a halt", unit: null, scale: 1 },
 };
 
 function describe(a: Alert, lists: Watchlist[]): string {

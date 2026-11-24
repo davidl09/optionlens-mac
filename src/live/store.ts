@@ -25,6 +25,8 @@ export interface LiveFields {
   open?: number; high?: number; low?: number; prev_close?: number; volume?: number; oi?: number;
   iv?: number; delta?: number; gamma?: number; theta?: number; vega?: number;
   delayed?: boolean; source?: "questrade" | "ibkr"; ts?: string;
+  /** Underlyings: the session VWAP and the halt flag as Questrade reports them. */
+  vwap?: number; halted?: boolean;
 }
 
 export interface LivePatch { quotes?: Record<string, LiveFields>; options?: Record<string, LiveFields> }

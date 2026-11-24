@@ -359,7 +359,8 @@ def test_index_history_is_wanted_and_becomes_the_index_daily_bars(client):
 def test_ingest_wants(client):
     w = client.get("/api/ingest/wants").json()
     assert set(w) == {"iv_history", "hv_history", "history_symbols", "underlying_stats", "chain_universe",
-                      "eod_chains", "option_bars", "index_symbols", "index_bars", "chains_on_demand_max_age_s"}
+                      "eod_chains", "option_bars", "index_symbols", "index_bars", "chains_on_demand_max_age_s",
+                      "dividend_history"}
     assert w["history_symbols"] >= len(w["iv_history"]) and "AAPL" in {x["symbol"] for x in w["hv_history"]}
     fill = {"as_of_session"}                                # present outside the live hours (after-hours fill)
     assert set(w["chain_universe"]) - fill == {"symbols", "max_age_s", "expiries", "moneyness"}

@@ -11,6 +11,7 @@ from ..jobs import ondemand
 from ..repo import bars as bars_repo
 from ..repo import symbols as symbols_repo
 from . import context as ctx
+from . import fundamentals as fundamentals_svc
 from .errors import BadRequest
 
 FIN_TITLES = {"income": "Income statement", "balance": "Balance sheet", "cashflow": "Cash flow",
@@ -25,6 +26,10 @@ KEY_STAT_LABELS = {
     "DividendPaymentDate": "Dividend pay date", "Yield": "Dividend yield", "Beta": "Beta",
 }
 PEERS = 10
+# Nasdaq summary figures with an OptionLens key stat (services.fundamentals) or a merged dividend: not repeated here,
+# so every page shows one value of each.
+OWN_FIGURES = frozenset({"MarketCap", "PERatio", "EarningsPerShare", "Yield", "FiftTwoWeekHighLow", "AverageVolume",
+                         "AnnualizedDividend", "ExDividendDate", "DividendPaymentDate"})
 
 
 def _num(v: Any) -> float | None:
@@ -96,10 +101,12 @@ def fundamentals(symbol: str, period: str = "annual") -> dict:
     summ, fetched = _cached("summary", sym)
     fin, fin_fetched = _cached("financials", sym, quarterly=period == "quarterly")   # None for ETFs
     fetched = fin_fetched or fetched
-    out["key_stats"] = [{"label": _label(k), "value": None if v is None else str(v)} for k, v in (summ or {}).items()]
+    out["key_stats"] = [{"label": _label(k), "value": None if v is None else str(v)} for k, v in (summ or {}).items()
+                        if k not in OWN_FIGURES]
     for name in FIN_TITLES:
         out[name] = _fin_table(name, (fin or {}).get(name))
-    mcap = row["market_cap"] or _num((summ or {}).get("MarketCap"))
+    q = ctx.quote_dict(sym)
+    mcap = fundamentals_svc.for_symbol(row, q["price"] if q else None, ctx.today())["market_cap"]
     fcf = trailing_fcf((fin or {}).get("cashflow"), period == "quarterly")
     out["payback_years"] = mcap / fcf if mcap and fcf and fcf > 0 else None
     out["fetched_at"] = fetched
@@ -173,8 +180,8 @@ PEER_COLUMNS = [
     {"key": "ret_ytd", "label": "YTD", "fmt": "pct_signed", "group": "Performance"},
     {"key": "ret_1y", "label": "1y", "fmt": "pct_signed", "group": "Performance"},
     {"key": "iv30", "label": "IV30", "fmt": "vol"}, {"key": "iv_rank", "label": "IV rank", "fmt": "pct"},
-    {"key": "pe", "label": "P/E", "fmt": "num2",
-     "description": "From cached Nasdaq summaries only (shown when the peer's page was visited)."},
+    {"key": "pe", "label": "P/E", "fmt": "num2", "description": "Price / EPS (Questrade's daily symbol info)"},
+    {"key": "fundamentals_source", "label": "Fundamentals source", "fmt": "text", "default_hidden": True},
 ]
 
 
@@ -184,19 +191,24 @@ def peers(symbol: str) -> dict:
     syms = [r["symbol"] for r in group]
     closes = bars_repo.last_closes(260, syms)
     ranks = ctx.iv_rank_all()
-    rows = []
+    base = []
     for r in group:
         s = r["symbol"]
         c = closes.get(s)
         ret = stats.returns_row([ctx.as_date(d) for d in c["date"]], c["close"]) if c is not None and len(c["date"]) else {}
         q = ctx.quote_dict(s)
-        summ = ondemand.peek_cached("summary", s)
-        rows.append({"symbol": s, "name": r["name"], "market_cap": r["market_cap"],
-                     "price": q["price"] if q else (float(c["close"][-1]) if c is not None and len(c["close"]) else None),
+        price = q["price"] if q else (float(c["close"][-1]) if c is not None and len(c["close"]) else None)
+        base.append((r, q, ret, price))
+    ks = fundamentals_svc.for_symbols({r["symbol"]: p for r, _, _, p in base},
+                                      {r["symbol"]: r["market_cap"] for r, _, _, _ in base}, ctx.today())
+    rows = []
+    for r, q, ret, price in base:
+        s, k = r["symbol"], ks[r["symbol"]]
+        rows.append({"symbol": s, "name": r["name"], "market_cap": k["market_cap"], "price": price,
                      "change_pct": q["change_pct"] if q else ret.get("d1"),
                      "ret_1m": ret.get("m1"), "ret_3m": ret.get("m3"), "ret_ytd": ret.get("ytd"), "ret_1y": ret.get("y1"),
                      "iv30": (ranks.get(s) or {}).get("iv30"), "iv_rank": (ranks.get(s) or {}).get("iv_rank"),
-                     "pe": _num((summ[0] or {}).get("PERatio")) if summ else None})
+                     "pe": k["pe"], "fundamentals_source": k["sources"].get("pe") or k["sources"].get("market_cap")})
     notes = ["Peers = same industry, largest market caps (symbols table)."]
     if not row.get("industry"):
         notes.append("No industry known for this symbol: no peers.")

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IntradayBar } from "../api/types";
 import { barLabel, chartView, inRegularHours, smaOf } from "../lib/chartRange";
-import { bucketStart, nextCandle, withLiveCandle, type LiveCandle } from "./candles";
+import { bucketStart, nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "./candles";
 import { LiveStore } from "./store";
 
 const M5 = 300_000;
@@ -118,5 +118,17 @@ describe("chart ranges", () => {
 
   it("SMA over the series itself", () => {
     expect(smaOf([1, 2, 3, 4].map((close) => ({ close })), 3)).toEqual([null, null, 2, 3]);
+  });
+});
+
+describe("vwapValues", () => {
+  it("keeps the stored session VWAP and gives the live bars the quote's", () => {
+    const stored: IntradayBar[] = [
+      { ts: "2026-11-20T14:30:00Z", open: 1, high: 1, low: 1, close: 1, volume: 1, vwap: 1.0 },
+      { ts: "2026-11-20T14:35:00Z", open: 1, high: 1, low: 1, close: 1, volume: 1, vwap: null },
+    ];
+    const live: IntradayBar = { ts: "2026-11-20T14:40:00Z", open: 1, high: 1, low: 1, close: 1, volume: 1 };
+    expect(vwapValues([...stored, live], 1.02)).toEqual([1.0, null, 1.02]);
+    expect(vwapValues([...stored, live], null)).toEqual([1.0, null, null]);
   });
 });

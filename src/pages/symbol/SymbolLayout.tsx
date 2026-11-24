@@ -4,8 +4,9 @@ import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "../../api/client";
 import { useApi } from "../../api/useApi";
 import { AddToWatchlist } from "../../components/AddToWatchlist";
-import { AfterHoursBadge, AsOf, ErrorBox, SourceBadge, Spinner } from "../../components/ui";
+import { AfterHoursBadge, AsOf, ErrorBox, HaltedBadge, SourceBadge, Spinner } from "../../components/ui";
 import { fmt, signClass } from "../../lib/format";
+import { atPrice, vsVwap } from "../../lib/keyStats";
 import { Flash, isFlowing, useLive, useLiveQuote, useLiveStatus } from "../../live";
 import { withLiveQuote } from "../../live/merge";
 import { LegsProvider } from "../../state/legs";
@@ -76,6 +77,8 @@ function QuoteHeader({ sym }: { sym: string }) {
   if (st.error) return <ErrorBox error={st.error} onRetry={st.refetch} />;
   const s = st.data && st.data.symbol === sym ? st.data : null;
   const q = s?.quote ? withLiveQuote(s.quote, patch) : null;
+  const ks = s ? atPrice(s.key_stats, q?.price) : null;   // P/E and market cap follow the live price
+  const gap = vsVwap(q?.price, q?.vwap);
   const ivDate = ivAsOf(s?.iv30_asof ?? null);
   return (
     <div className="quote-header">
@@ -90,6 +93,7 @@ function QuoteHeader({ sym }: { sym: string }) {
           <AsOf ts={q.ts} />
           <SourceBadge source={q.source} delayed={q.delayed === true} />
           <AfterHoursBadge show={q.after_hours} />
+          <HaltedBadge halted={q.halted} />
         </div>
       )}
       {s && (
@@ -97,6 +101,9 @@ function QuoteHeader({ sym }: { sym: string }) {
           <span title={s.iv30_asof ? `Latest stored IV30, as of ${s.iv30_asof}` : undefined}>IV30 <b>{fmt(s.iv30, "vol")}</b>{ivDate && <small> ({ivDate})</small>}</span>
           <span>IV rank <b>{fmt(s.iv_rank, "pct")}</b></span>
           <span>HV20 <b>{fmt(s.hv20, "vol")}</b></span>
+          {q?.vwap != null && <span className="qh-vwap" title="The session's volume-weighted average price (Questrade) and the price against it">VWAP <b>{fmt(q.vwap, "money")}</b> <small className={signClass(gap)}>({fmt(gap, "pct_signed")} vs VWAP)</small></span>}
+          {ks?.market_cap != null && <span title={`Market cap: ${ks.sources.market_cap === "questrade" ? "price × shares outstanding (Questrade)" : "Nasdaq"}`}>Mkt cap <b>{fmt(ks.market_cap, "bigmoney")}</b></span>}
+          {ks?.pe != null && <span title="Price / EPS (Questrade's EPS)">P/E <b>{fmt(ks.pe, "num2")}</b></span>}
           {s.next_earnings && <span>Earnings <b>{s.next_earnings.date}</b> <small>({s.next_earnings.days}d)</small></span>}
         </div>
       )}

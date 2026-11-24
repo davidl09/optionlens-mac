@@ -395,6 +395,14 @@ test("symbol page: fundamentals as numbers, insider sells split, IV30 legend onl
   await expect(page.getByText(/Of the \d+ sells listed below: \d+ automatic \(10b5-1 plan\), \d+ open market/)).toBeVisible();
   await page.goto("/s/AAPL/dividends");
   await expect(page.getByText("Ex-dates measured")).toBeVisible();
+  const history = page.locator("section.card", { has: page.getByRole("heading", { name: "History", exact: true }) });
+  await expect(history.locator("th", { hasText: /^Source(?!s)/ })).toBeVisible();
+  await expect(history.locator(".source-badge").first()).toHaveText("Nasdaq");     // provenance on every row
+  await expect(page.getByText(/Nasdaq-listed securities only/)).toHaveCount(0);
+  await page.goto("/s/AAPL/fundamentals");
+  const key = page.locator("section.card", { has: page.getByRole("heading", { name: "Key figures" }) });
+  await expect(key).toContainText("P/E");
+  await expect(key.locator(".source-badge").first()).toHaveText("Questrade");
   clean(p);
 });
 

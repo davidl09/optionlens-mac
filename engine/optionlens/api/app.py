@@ -17,7 +17,7 @@ from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
-from ..services import alerts, ingest, mcp_access
+from ..services import alerts, ingest, mcp_access, reference
 from ..services.errors import BadRequest, NotFound
 from . import (
     routes_agents,
@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     db.connect()
     alerts.register_hooks()  # alert evaluation, EOD report snapshots and digests
     ingest.register_hooks()  # IV / greeks of server-side sources' chains
+    reference.register_hooks()  # reference data (fundamentals, current dividends) after sweeps
     if scheduler_enabled():
         await scheduler.start()
     await live.start()

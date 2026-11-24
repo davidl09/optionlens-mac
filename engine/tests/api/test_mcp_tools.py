@@ -44,6 +44,12 @@ async def test_symbol_summary(tools):
     assert s["symbol"] == "AAPL" and s["name"] == "Apple Inc."
 
 
+async def test_symbol_key_stats(tools):
+    k = await tools.call("symbol_key_stats", {"sym": "AAPL"})
+    assert k["symbol"] == "AAPL" and k["market_cap"] == 5.07e12 and k["sources"]["market_cap"] == "nasdaq"
+    assert k["pe"] is None                                    # no reference snapshot: never invented
+
+
 async def test_report_run_with_params_columns_and_paging(tools):
     full = await tools.call("report_run", {"report_id": "large-volume-contracts", "params": {"min_volume": 1},
                                            "limit": 1000})

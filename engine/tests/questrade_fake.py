@@ -52,6 +52,9 @@ class FakeQuestrade:
         self.candle_cap = 2000      # candles per response (documented limit)
         self.candle_hours = (4, 20)  # ET hours candles exist (pre-market to after-hours)
         self.candle_until: datetime | None = None   # candles start before this only (the source's lag behind now)
+        self.info_extra: dict = {}  # more GET v1/symbols/1000 fields (reference data)
+        self.quote_extra: dict = {}  # more equity quote fields (VWAP, isHalted, lastTradeTime, ...)
+        self.candle_vwap = False    # candles carry their own VWAP
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -80,7 +83,7 @@ class FakeQuestrade:
             return httpx.Response(200, json={"symbols": hits}, headers=h)
         if path == "/v1/symbols/1000":
             return httpx.Response(200, json={"symbols": [{"symbol": "XYZ", "symbolId": 1000, "hasOptions": True,
-                                                          "prevDayClosePrice": 98.0}]}, headers=h)
+                                                          "prevDayClosePrice": 98.0, **self.info_extra}]}, headers=h)
         if path == "/v1/markets/quotes":
             if request.url.params.get("stream") == "true":
                 return httpx.Response(200, json={"streamPort": self.stream_port}, headers=h)
@@ -116,7 +119,8 @@ class FakeQuestrade:
                 p = 100 + (t.timestamp() % 86400) / 8640
                 out.append({"start": ny.isoformat(timespec="microseconds"), "end": (ny + step).isoformat(timespec="microseconds"),
                             "low": round(p - 0.2, 2), "high": round(p + 0.3, 2), "open": round(p, 2),
-                            "close": round(p + 0.1, 2), "volume": 1000})
+                            "close": round(p + 0.1, 2), "volume": 1000,
+                            **({"VWAP": round(p + 0.05, 2)} if self.candle_vwap else {})})
             t += step
         return out
 
@@ -138,7 +142,7 @@ class FakeQuestrade:
     def equity_quote(self) -> dict:
         return {"symbol": "XYZ", "symbolId": 1000, "bidPrice": 99.9, "askPrice": 100.1, "lastTradePriceTrHrs": 100.0,
                 "lastTradePrice": self.price, "volume": 1_000_000, "openPrice": 98.5, "highPrice": 101.0,
-                "lowPrice": 98.0, "delay": bool(self.delay), "isHalted": False}
+                "lowPrice": 98.0, "delay": bool(self.delay), "isHalted": False, **self.quote_extra}
 
     def _option_quotes(self, body: dict) -> list[dict]:
         wanted = [(f["expiryDate"][:10], k, right) for f in body.get("filters") or [] for k in STRIKES

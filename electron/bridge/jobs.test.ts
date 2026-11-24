@@ -4,7 +4,7 @@ import type { IngestApi } from "./ingest";
 import { ContractCache } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { OptionsFeed } from "./options-feed";
-import { collectQuotes, ContractsUnavailable, OPTION_PARAMS_RETRY_MS, OptionQuotesClosed, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushLiveQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { collectQuotes, ContractsUnavailable, OPTION_PARAMS_RETRY_MS, OptionQuotesClosed, pacedHistorical, pushChain, pushDividendHistory, pushIndexBars, pushIndexQuotes, pushLiveQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
 import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -14,7 +14,7 @@ import { CODE, TwsRequestError, TwsTimeoutError, type TwsContract } from "./tws"
 function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
-  return { calls, wants: async () => ({}), liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
+  return { calls, wants: async () => ({}), liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), dividendHistory: rec("dividendHistory"), quotes: rec("quotes"),
     underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), intradayBars: rec("intradayBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat"), refreshResult: rec("refreshResult") };
 }
 
@@ -295,6 +295,25 @@ describe("index history", () => {
     expect(call.contract).toMatchObject({ symbol: "SPX", secType: "IND", exchange: "CBOE" });
     expect(call.req).toEqual({ duration: "10 Y", whatToShow: "TRADES", useRth: true });
     expect(ctx.ingest.calls.indexBars[0]).toEqual({ source: "ibkr", symbol: "SPX", bars: [{ date: "2026-11-20", open: 6600, high: 6650, low: 6550, close: 6602.1 }] });
+  });
+
+  it("pushes a symbol's adjusted and raw daily closes (two paced requests) for its dividends", async () => {
+    const m = emptyMarket();
+    const reqs: string[] = [];
+    m.historical = (c, r) => {
+      reqs.push(`${c.symbol}:${c.secType}:${r.whatToShow}:${r.duration}:${r.useRth}:${r.barSize ?? "1 day"}`);
+      const adj = r.whatToShow === "ADJUSTED_LAST";
+      return [{ time: "20151231", open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { time: "20261118", open: 60, high: 60, low: 60, close: adj ? 59.49 : 60, volume: 1 },
+        { time: "20261119", open: 60, high: 60, low: 60, close: adj ? 59.5 : 59.5, volume: 1 }];
+    };
+    const pacer = new HistoricalPacer({ minSpacingMs: 0 });
+    const ctx = ctxFor(new FakeSession(m), { pacer });
+    expect(await pushDividendHistory(ctx, "KO", "2016-11-01")).toBe(2);
+    expect(reqs).toEqual(["KO:STK:ADJUSTED_LAST:10 Y:true:1 day", "KO:STK:TRADES:10 Y:true:1 day"]);
+    expect(ctx.ingest.calls.dividendHistory[0]).toEqual({ source: "ibkr", symbol: "KO",
+      adjusted: [{ date: "2026-11-18", close: 59.49 }, { date: "2026-11-19", close: 59.5 }],
+      trades: [{ date: "2026-11-18", close: 60 }, { date: "2026-11-19", close: 59.5 }] });   // the 2015 bar is before `from`
   });
 });
 

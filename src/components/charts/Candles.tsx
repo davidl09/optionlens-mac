@@ -21,6 +21,8 @@ export interface CandleSeries {
   bars: CandleBar[];
   smas: { label: string; length: SmaLength; values: (number | null)[] }[];
   markers: { index: number; kind: "E" | "D"; label: string }[];
+  /** More price lines over the candles (e.g. the session VWAP), dashed. */
+  lines?: { label: string; values: (number | null)[] }[];
 }
 
 /** The engine's full-history SMA of each bar (null before enough history). */
@@ -52,6 +54,8 @@ export function CandlesVolume({ series, height = 460, live = false }: { series: 
   const p = usePalette();
   const option = useMemo(() => {
     const { labels, titles, bars, smas } = series;
+    const lines = series.lines ?? [];
+    const legend = [...smas.map((s) => s.label), ...lines.map((l) => l.label)];
     const smaColor = (n: SmaLength) => [p.series[3], p.series[4], p.series[6]][SMA_LENGTHS.indexOf(n)];
     const markPoints = series.markers.map((m) => {
       const b = bars[m.index];
@@ -64,7 +68,7 @@ export function CandlesVolume({ series, height = 460, live = false }: { series: 
     });
     return {
       animation: false,
-      legend: smas.length ? { ...legendStyle(p), data: smas.map((s) => s.label) } : undefined,
+      legend: legend.length ? { ...legendStyle(p), data: legend } : undefined,
       tooltip: {
         trigger: "axis", ...tooltipStyle(p), axisPointer: { type: "cross", lineStyle: { color: p.muted } },
         formatter: (items: { dataIndex: number }[]) => {
@@ -101,6 +105,10 @@ export function CandlesVolume({ series, height = 460, live = false }: { series: 
         ...smas.map((s) => ({
           name: s.label, type: "line", data: s.values, showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.5, color: smaColor(s.length) }, itemStyle: { color: smaColor(s.length) },
+        })),
+        ...lines.map((l) => ({
+          name: l.label, type: "line", data: l.values, showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.5, type: "dashed", color: p.series[1] }, itemStyle: { color: p.series[1] },
         })),
         {
           name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,

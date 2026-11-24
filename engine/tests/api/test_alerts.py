@@ -71,6 +71,35 @@ def test_every_kind_fires_and_respects_threshold(clean, seeded):
     assert n["alert_id"] == u["id"] and n["link"] == "/s/AAPL" and "Unusual" in n["title"]
 
 
+def test_halted_and_resumed_alerts_follow_the_halt_flags_with_cooldown(clean, seeded):
+    from optionlens.live import persist
+    from optionlens.repo import halts
+
+    wid = user_repo.create_watchlist("Halts", ["ZZZ"])["id"]
+    a = user_repo.create_alert("halted", "AAPL", {}, True, 30)
+    w = user_repo.create_alert("resumed", None, {"watchlist_id": wid}, True, 30)
+    assert alerts.evaluate(now=T0) == []                                             # no halt observed
+    assert halts.record([("AAPL", False, T0), ("ZZZ", True, T0)], "questrade") == ["ZZZ"]   # a first halt is news
+    assert alerts.evaluate(now=T0) == []                    # AAPL trades; ZZZ is halted (no `halted` alert for it)
+    assert halts.record([("AAPL", True, T0 + timedelta(minutes=1))], "questrade") == ["AAPL"]
+    assert alerts.evaluate(now=T0 + timedelta(minutes=2), kinds=alerts.HALT_KINDS) == [(a["id"], "AAPL")]
+    n = user_repo.list_notifications(unread_only=True)[0]
+    assert n["title"].startswith("AAPL: trading halted at ") and n["link"] == "/s/AAPL"
+    assert alerts.evaluate(now=T0 + timedelta(minutes=3)) == []                      # cooling down
+    # live quotes resume ZZZ: persisting them records the change and reports it for on_halt_change
+    at = (T0 + timedelta(minutes=4)).timestamp()
+    assert persist.store([{"symbol": "ZZZ", "halted": False, "price": 50.0, "_at": at, "source": "questrade"}], []) == ["ZZZ"]
+    assert alerts.evaluate(now=T0 + timedelta(minutes=5)) == [(w["id"], "ZZZ")]
+    assert "trading resumed" in user_repo.list_notifications(unread_only=True)[0]["title"]
+    # 35 min on: ZZZ resumed too long ago; AAPL is still halted and its cooldown is over: it fires again
+    assert alerts.evaluate(now=T0 + timedelta(minutes=4 + 31)) == [(a["id"], "AAPL")]
+    assert halts.record([("AAPL", True, T0)], "questrade") == []                     # older than stored: ignored
+    assert alerts.evaluate(now=T0 + timedelta(hours=3)) == []                        # flags stale: unknown
+    from optionlens.services import user as user_svc
+    assert user_svc.create_alert("resumed", "AAPL")["kind"] == "resumed"                # valueless kinds
+    user_repo.delete_watchlist(wid)
+
+
 def test_cooldown_per_alert_per_symbol(clean, seeded):
     wid = seeded["watchlist_id"]
     a = user_repo.create_alert("price_above", None, {"value": 0.01, "watchlist_id": wid}, True, 30)
@@ -155,18 +184,20 @@ def test_morning_digest(clean, seeded):
 
 
 def test_register_hooks_is_idempotent():
-    before = (list(hooks.on_sweep_complete), list(hooks.on_eod), dict(scheduler.JOBS))
+    before = (list(hooks.on_sweep_complete), list(hooks.on_eod), dict(scheduler.JOBS), list(hooks.on_halt_change))
     try:
         alerts._registered = False
         alerts.register_hooks()
         alerts.register_hooks()
         assert hooks.on_sweep_complete.count(alerts.on_sweep) == 1 and hooks.on_eod.count(alerts.on_eod) == 1
+        assert hooks.on_halt_change.count(alerts.on_halt_change) == 1
         job = scheduler.JOBS["digest_morning"]
         assert job.fn is alerts.morning_digest and job.catch_up is False
         assert scheduler.next_run_at("digest_morning").hour == 8
     finally:
         hooks.on_sweep_complete[:] = before[0]
         hooks.on_eod[:] = before[1]
+        hooks.on_halt_change[:] = before[3]
         scheduler.JOBS.clear()
         scheduler.JOBS.update(before[2])
         alerts._registered = False

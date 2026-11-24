@@ -10,14 +10,16 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ..analytics import computed_iv
+from ..analytics import dividends as divs_a
 from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
 from ..analytics.chain import ChainArrays
 from ..jobs import bridge_plan, catchup, chains, hooks
 from ..jobs._util import eod_deadline, session_close, session_date
 from ..jobs.marketdata import VIX_FAMILY
-from ..models import Bar, ChainSnapshot, OptionContract, Quote, normalize_symbol
+from ..models import Bar, ChainSnapshot, Dividend, OptionContract, Quote, normalize_symbol
 from ..repo import bars as bars_repo
 from ..repo import bridge as bridge_repo
+from ..repo import dividends as div_repo
 from ..repo import market as market_repo
 from ..repo import options as options_repo
 from ..repo import quotes as quotes_repo
@@ -203,6 +205,29 @@ def option_bars(body: dict, now: datetime | None = None) -> dict:
     return {"stored": n}
 
 
+DERIVED_SOURCE = "ibkr-adjusted"
+
+
+def dividend_history(body: dict, now: datetime | None = None) -> dict:
+    """POST /api/ingest/dividend-history: IBKR's dividend-adjusted (ADJUSTED_LAST) and raw (TRADES) daily closes of a
+    symbol -> the dividends behind the adjustment (analytics.dividends.from_adjusted_closes), stored with source
+    'ibkr-adjusted' over the span the closes cover (replacing what an earlier fetch derived there), and the fetch
+    recorded (also when nothing was paid) so dividend_history_want does not ask again for a while."""
+    now = now or datetime.now(timezone.utc)
+    sym = normalize_symbol(body["symbol"])
+    raw = [(b["date"], b["close"]) for b in body["trades"]]
+    adjusted = [(b["date"], b["close"]) for b in body["adjusted"]]
+    common = sorted({d for d, _ in raw} & {d for d, _ in adjusted})
+    found = [Dividend(sym, d, amt, None, None, None, "cash", source=DERIVED_SOURCE)
+             for d, amt in divs_a.from_adjusted_closes(raw, adjusted)]
+    n = div_repo.replace_derived(sym, DERIVED_SOURCE, common[1], common[-1], found, now) if len(common) > 1 else 0
+    div_repo.record_history_fetch(sym, DERIVED_SOURCE, common[0] if common else None,
+                                  common[-1] if common else None, n, now)
+    bridge_repo.record_push(now)
+    ctx.invalidate()   # dividend yields (q) and the universe frame
+    return {"stored": n, "symbol": sym}
+
+
 def ack_wants(body: dict, now: datetime | None = None) -> dict:
     """POST /api/ingest/ack-wants: the bridge accepted (queued) these wants of `kind`; only accepted
     option_bars offers count towards bridge_plan.MAX_OFFERS."""
@@ -239,6 +264,7 @@ def wants(now: datetime | None = None) -> dict:
         "option_bars": bridge_plan.option_bars_want(now),
         "index_symbols": list(VIX_FAMILY),
         "index_bars": index_bars_want(now.date(), last),
+        "dividend_history": dividend_history_want(now),
         "chains_on_demand_max_age_s": int(ctx.REFRESH_MIN_INTERVAL_S),
     }
 
@@ -259,6 +285,32 @@ def history_want(kind: str, symbols: list[str], start: date, last_session: date)
             out.append({"symbol": s, "from": start})
         elif c[1] < last_session:
             out.append({"symbol": s, "from": c[1] + timedelta(days=1)})
+    return out
+
+
+DIVIDEND_HISTORY_YEARS = 10
+DIVIDEND_REFRESH_DAYS = 7     # a symbol's dividend history is fetched again this long after the last fetch ...
+DIVIDEND_OVERLAP_DAYS = 10    # ... from this many days before the last close it covered (the step needs the day before)
+
+
+def dividend_history_want(now: datetime) -> list[dict]:
+    """[{symbol, from}] the bridge should fetch daily adjusted + raw closes for (dividends of every US listing,
+    docs/INTEGRATION.md §6 "Dividends"): watchlist and universe stocks / ETFs never fetched (from
+    DIVIDEND_HISTORY_YEARS back) or last fetched DIVIDEND_REFRESH_DAYS ago (from DIVIDEND_OVERLAP_DAYS before the
+    last close covered); watchlist symbols first."""
+    rows = {r["symbol"]: r for r in symbols_repo.list_symbols()}
+    syms = [s for s in dict.fromkeys([*user_repo.watchlist_symbols(),
+                                      *symbols_repo.universe_symbols(include_unoptionable=True)])
+            if s in rows and rows[s]["kind"] in ("stock", "etf")]
+    done = div_repo.history_fetches(syms)
+    start = date(now.year - DIVIDEND_HISTORY_YEARS, now.month, 1)
+    out = []
+    for s in syms:
+        f = done.get(s)
+        if f is not None and now - f["fetched_at"] < timedelta(days=DIVIDEND_REFRESH_DAYS):
+            continue
+        last = f["last_date"] if f is not None else None
+        out.append({"symbol": s, "from": start if last is None else last - timedelta(days=DIVIDEND_OVERLAP_DAYS)})
     return out
 
 

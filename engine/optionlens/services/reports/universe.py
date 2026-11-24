@@ -26,12 +26,14 @@ from ...repo import quotes as quotes_repo
 from ...repo import symbols as symbols_repo
 from ...repo import user as user_repo
 from .. import context
+from .. import fundamentals as fundamentals_svc
 
 FRAME_TTL_S = 900
 BARS_LOOKBACK_DAYS = 400          # calendar days of bars (52w highs, SMA200, 1y return, beta)
 HISTORY_ROWS = vol.IV_RANK_ROWS   # stored metrics rows per symbol (IV rank window)
 SENTIMENT_THRESHOLD = 0.70
 BENCH = "SPY"
+_QUOTE_COLS = ("price", "change", "change_pct", "prev_close", "open", "high", "low", "volume", "bid", "ask", "vwap")
 
 _TEXT = ("symbol", "name", "kind", "sector", "industry", "sentiment", "earnings_timing")
 _DATES = ("next_earnings", "last_earnings", "next_ex_div", "last_bar_date", "metrics_date")
@@ -135,7 +137,7 @@ def build_frame(today: date | None = None) -> Frame:
     C["optionable"] = np.array([r.get("optionable") is not False for r in syms_rows], dtype=bool)
 
     # ---- quote
-    for k in ("price", "change", "change_pct", "prev_close", "open", "high", "low", "volume", "bid", "ask"):
+    for k in _QUOTE_COLS:
         C[k] = _nan(n)
     C["quote_ts"] = _obj(n)
     asof = None
@@ -143,7 +145,7 @@ def build_frame(today: date | None = None) -> Frame:
         i = pos.get(s)
         if i is None:
             continue
-        for k in ("price", "change", "change_pct", "prev_close", "open", "high", "low", "volume", "bid", "ask"):
+        for k in _QUOTE_COLS:
             v = getattr(q, k)
             if v is not None:
                 C[k][i] = float(v)
@@ -152,6 +154,8 @@ def build_frame(today: date | None = None) -> Frame:
     _bars_block(C, syms, pos, quotes, today)
     mdate = _metrics_block(C, syms, pos)
     _events_block(C, syms, pos, today)
+    _fundamentals_block(C, syms, pos, today)
+    _halts_block(C, syms, pos)
     iv_days = int(np.nanmax(C["iv_history_days"])) if n and np.isfinite(C["iv_history_days"]).any() else 0
     opt_days = int(np.nanmax(C["opt_history_days"])) if n and np.isfinite(C["opt_history_days"]).any() else 0
     return Frame(today, mdate, asof, C, iv_days, opt_days, time.monotonic())
@@ -204,7 +208,7 @@ def _bars_block(C: dict, syms: list[str], pos: dict, quotes: dict, today: date) 
     # a quote older than the last stored bar (e.g. an on-demand visit long ago) is stale: use the bars
     stale = np.array([ts is not None and d is not None and ts.astimezone(NY).date() < d
                       for ts, d in zip(C["quote_ts"], C["last_bar_date"])], dtype=bool)
-    for k in ("price", "change", "change_pct", "open", "high", "low", "volume", "prev_close", "bid", "ask"):
+    for k in _QUOTE_COLS:
         C[k][stale] = np.nan
     # quote fields without a (fresh) quote value: the latest daily bar's (one rule with context.quote_dict)
     for s, (dates, o, h, lo, c, v, live) in series.items():
@@ -221,6 +225,7 @@ def _bars_block(C: dict, syms: list[str], pos: dict, quotes: dict, today: date) 
         C["pct_from_low_52w"] = px / C["low_52w"] - 1.0
         for w in (20, 50, 200):
             C[f"pct_vs_sma{w}"] = px / C[f"sma{w}"] - 1.0
+        C["pct_vs_vwap"] = C["price"] / C["vwap"] - 1.0
 
 
 def with_live_bar(b: dict, q) -> tuple:
@@ -356,8 +361,41 @@ def _events_block(C: dict, syms: list[str], pos: dict, today: date) -> None:
         i = pos.get(s)
         if i is not None:
             C["div_ttm"][i] = amt
-    with np.errstate(divide="ignore", invalid="ignore"):
-        C["div_yield"] = np.where((C["price"] > 0) & np.isfinite(C["div_ttm"]), C["div_ttm"] / C["price"], np.nan)
+
+
+_FUND_NUM = ("pe", "eps", "shares_outstanding", "avg_volume_20d", "avg_volume_3m")
+_FUND_TEXT = {"industry_sector": "sector", "industry_group": "industry_group", "industry_subgroup": "industry_subgroup"}
+
+
+def _fundamentals_block(C: dict, syms: list[str], pos: dict, today: date) -> None:
+    """Key stats (services.fundamentals: the one source of these figures) at the frame's price: market cap (replacing
+    the symbols table's), P/E, EPS, shares, average volumes, Questrade's classification, the dividend yield."""
+    n = len(syms)
+    px = np.where(np.isfinite(C["price"]), C["price"], C["last_close"])
+    prices = {s: (float(px[i]) if np.isfinite(px[i]) else None) for s, i in pos.items()}
+    caps = {s: (float(C["market_cap"][i]) if np.isfinite(C["market_cap"][i]) else None) for s, i in pos.items()}
+    stats_ = fundamentals_svc.for_symbols(prices, caps, today)
+    for k in (*_FUND_NUM, "market_cap", "div_yield"):
+        C[k] = _nan(n)
+    for k in (*_FUND_TEXT, "fundamentals_source"):
+        C[k] = _obj(n)
+    for s, st in stats_.items():
+        i = pos[s]
+        for k in _FUND_NUM:
+            C[k][i] = _f(st[k])
+        C["market_cap"][i] = _f(st["market_cap"])
+        C["div_yield"][i] = _f(st["dividend_yield"])
+        for k, src in _FUND_TEXT.items():
+            C[k][i] = st[src]
+        C["fundamentals_source"][i] = st["sources"].get("pe") or st["sources"].get("market_cap")
+
+
+def _halts_block(C: dict, syms: list[str], pos: dict) -> None:
+    """halted: True / False from a fresh halt observation (context.halt_flags), None = unknown."""
+    C["halted"] = _obj(len(syms))
+    for s, h in context.halt_flags(syms).items():
+        if s in pos:
+            C["halted"][pos[s]] = h["halted"]
 
 
 def _f(x) -> float:

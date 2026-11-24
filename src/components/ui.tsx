@@ -94,6 +94,8 @@ const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutr
   cboe: { label: "CBOE", tone: "neutral", title: "CBOE" },
   nasdaq: { label: "Nasdaq", tone: "neutral", title: "Nasdaq public data" },
   live: { label: "live quotes", tone: "neutral", title: "Built from live quotes: the latest minutes, until the source's own bars for them arrive" },
+  "ibkr-adjusted": { label: "IBKR adj.", tone: "neutral", title: "Derived from IBKR's dividend-adjusted vs raw daily closes (amounts in today's shares)" },
+  computed: { label: "computed", tone: "neutral", title: "Computed by OptionLens from the data shown (e.g. a VWAP from typical prices × volume)" },
 };
 
 export function isDataSource(v: unknown): v is DataSource {
@@ -110,6 +112,11 @@ export function SourceBadge({ source, delayed = false }: { source: DataSource | 
       {delayed && <span className="badge info source-badge" title="15-minute delayed data (no real-time subscription for this contract class)">delayed</span>}
     </>
   );
+}
+
+/** Trading in the symbol is halted (the quote source says so); nothing otherwise. */
+export function HaltedBadge({ halted }: { halted: boolean | null | undefined }) {
+  return halted ? <span className="badge neg halted-badge" role="status" title="Trading is halted (Questrade reports a trading halt)">HALTED</span> : null;
 }
 
 export const AFTER_HOURS_TEXT = "Last session's close (collected after hours)";

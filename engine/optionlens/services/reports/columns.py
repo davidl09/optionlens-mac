@@ -6,13 +6,15 @@ from .base import Col, group
 
 G_DESC, G_QUOTE, G_PERF, G_TECH = "Description", "Quote", "Performance", "Technicals"
 G_VOL, G_OPT, G_MONEY, G_CAT, G_DIV = "Volatility", "Option activity", "Volume by moneyness", "Catalysts", "Dividends"
+G_FUND = "Fundamentals"
 
 # ---- stock description
 SYMBOL = Col("symbol", "Symbol", "symbol")
 DESC = group(G_DESC, (
     SYMBOL,
     Col("name", "Name", "text"),
-    Col("market_cap", "Market Cap", "bigmoney"),
+    Col("market_cap", "Market Cap", "bigmoney", description="Price × shares outstanding (Questrade's daily symbol "
+        "info), else Questrade's or Nasdaq's figure"),
     Col("kind", "Type", "badge"),
     Col("sector", "Sector", "text", default_hidden=True),
     Col("industry", "Industry", "text", default_hidden=True),
@@ -21,11 +23,31 @@ DESC = group(G_DESC, (
 DESC_SHORT = tuple(c for c in DESC if c.key in ("symbol", "name", "market_cap", "sector"))
 
 # ---- quote
+HALTED = Col("halted", "Halt", "halt", G_QUOTE, "HALTED while the quote source reports a trading halt (Questrade)")
 QUOTE = group(G_QUOTE, (
     Col("price", "Price", "money"),
     Col("change_pct", "% Chg", "pct_signed"),
     Col("prev_close", "Prev Close", "money", default_hidden=True),
     Col("volume", "Volume", "int"),
+))
+VWAP = group(G_QUOTE, (
+    Col("vwap", "VWAP", "money", description="The session's volume-weighted average price as the quote reports it "
+        "(Questrade)"),
+    Col("pct_vs_vwap", "% vs VWAP", "pct_signed", description="Price / VWAP − 1"),
+))
+
+# ---- fundamentals (services.fundamentals: one source for every page)
+FUNDAMENTALS = group(G_FUND, (
+    Col("pe", "P/E", "num2", description="Price / EPS (Questrade's daily symbol info; positive EPS only)"),
+    Col("eps", "EPS", "money", description="Earnings per share (Questrade)"),
+    Col("shares_outstanding", "Shares Out", "int", default_hidden=True, description="Questrade"),
+    Col("avg_volume_20d", "Avg Vol 20d", "int", default_hidden=True, description="Questrade's 20-day average volume"),
+    Col("avg_volume_3m", "Avg Vol 3m", "int", default_hidden=True, description="Questrade's 3-month average volume"),
+    Col("industry_sector", "Sector (Questrade)", "text", default_hidden=True),
+    Col("industry_group", "Industry group", "text", default_hidden=True),
+    Col("industry_subgroup", "Industry sub-group", "text", default_hidden=True),
+    Col("fundamentals_source", "Fundamentals source", "text", default_hidden=True,
+        description="questrade = the daily symbol info; nasdaq = market cap only (no Questrade data yet)"),
 ))
 
 # ---- performance
@@ -108,12 +130,14 @@ CATALYSTS = group(G_CAT, (
     Col("next_ex_div", "Next Ex-Div", "date"),
     Col("days_to_ex_div", "Days To Ex-Div", "int", default_hidden=True),
 ))
-DIV_YIELD = Col("div_yield", "Div Yield", "pct", G_DIV, "Trailing-12m dividends / price (Nasdaq-listed only)")
+DIV_YIELD = Col("div_yield", "Div Yield", "pct", G_DIV, "Indicated annual dividend (latest regular × payments per "
+                "year) / price; Questrade's yield while the history is too short")
 
 # The 30+ stock-screener metric columns (stock-screener, etf-screener, watchlist tables).
-STOCK_SCREENER = (*DESC, *QUOTE, Col("ret_1d", "% Chg 1d", "pct_signed", G_PERF, default_hidden=True), *PERF,
-                  *TECH, DIV_YIELD, *CATALYSTS, *VOL_CORE, *OPT)
-MOVERS = (*DESC, *QUOTE, Col("rel_volume", "Rel Vol", "ratio", G_TECH), Col("avg_volume_30d", "Avg Vol 30d", "int", G_TECH),
+STOCK_SCREENER = (*DESC, *QUOTE, *VWAP, HALTED, Col("ret_1d", "% Chg 1d", "pct_signed", G_PERF, default_hidden=True),
+                  *PERF, *TECH, *FUNDAMENTALS, DIV_YIELD, *CATALYSTS, *VOL_CORE, *OPT)
+MOVERS = (*DESC, *QUOTE, *VWAP, HALTED, Col("rel_volume", "Rel Vol", "ratio", G_TECH),
+          Col("avg_volume_30d", "Avg Vol 30d", "int", G_TECH),
           Col("gap_pct", "Gap %", "pct_signed", G_PERF), Col("ret_5d", "% Chg 5d", "pct_signed", G_PERF),
           Col("ret_1m", "% Chg 1m", "pct_signed", G_PERF), Col("iv30", "IV30", "vol", G_VOL),
           Col("iv_rank", "IV Rank", "pct", G_VOL), *CATALYSTS[:2])
@@ -124,7 +148,8 @@ NOTE_CHAIN_UNIVERSE = ("Covers the chain universe only: watchlist symbols, recen
 NOTE_IV_RANK = "IV rank and IV percentile stay blank until 20 days of IV30 are stored."
 NOTE_OPT_AVG = ("Average option volume uses up to 20 prior collected days (fewer while history builds) and is blank "
                 "before the first one; it is never estimated.")
-NOTE_DIVS = "Dividend data covers Nasdaq-listed securities only; NYSE and NYSE Arca listings show blanks."
+NOTE_DIVS = ("Dividends of every US listing: Nasdaq's where it has them, else derived from IBKR's dividend-adjusted "
+             "closes, else Questrade's current dividend; blank until one of them has data.")
 NOTE_DELAY = ("Prices are IBKR quotes (real-time or 15-minute delayed, per your market-data subscriptions); "
               "outside the session, the last daily close.")
 

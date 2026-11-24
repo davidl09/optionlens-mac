@@ -164,3 +164,19 @@ async def test_an_unusable_questrade_is_named(tmpdb, tmp_path, monkeypatch):
     monkeypatch.setattr(chain_source, "REGISTRY", {"questrade": lambda: src})
     r = await service.bars("AAPL", "1h", "3m", False, now=SAT)
     assert r["problem"].startswith("questrade: ") and len(r["missing"]) == 1
+
+
+# ----------------------------------------------------------------------------- session VWAP
+def test_day_vwap_uses_candle_vwaps_else_typical_prices_and_resets_each_session():
+    from optionlens.analytics.calendar import NY as _NY
+
+    def bar(d, hh, mm, vol, vwap=None, h=11.0, lo=9.0, c=10.0):
+        return {"ts": datetime(2026, 11, d, hh, mm, tzinfo=_NY), "high": h, "low": lo, "close": c, "volume": vol,
+                "vwap": vwap}
+    own = [bar(17, 9, 30, 100, 10.0), bar(17, 9, 35, 300, 12.0), bar(17, 16, 5, 50, 99.0)]    # 16:05: after hours
+    vals, how = intraday.day_vwap(own)
+    assert vals == [10.0, pytest.approx((1000 + 3600) / 400), None] and how == "candles"
+    mixed = [bar(17, 9, 30, 100, 10.0), bar(17, 9, 35, 100, None, h=13.0, lo=11.0, c=12.0), bar(18, 9, 30, 10, 20.0)]
+    vals, how = intraday.day_vwap(mixed)
+    assert vals == [10.0, pytest.approx(11.0), 20.0] and how == "computed"                    # a new session restarts
+    assert intraday.day_vwap([bar(17, 9, 30, None)]) == ([None], None)                         # no volume: unknown

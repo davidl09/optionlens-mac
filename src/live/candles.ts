@@ -58,6 +58,14 @@ export function nextCandle(state: LiveCandle | null, tick: LiveTick, intervalMs:
 export const MAX_CLOSED = 2000;
 
 /**
+ * The session VWAP per bar: the loaded bars' (engine: day-cumulative, null outside regular hours), the live quote's
+ * VWAP for the live candles (they carry none), null without it.
+ */
+export function vwapValues(bars: IntradayBar[], liveVwap: number | null | undefined): (number | null)[] {
+  return bars.map((b) => (b.vwap === undefined ? liveVwap ?? null : b.vwap));
+}
+
+/**
  * The loaded bars with the live ones, merged by start: the forming candle replaces the loaded bar of its start; a
  * closed live candle replaces the loaded last bar or follows it, and inside the loaded bars only fills a start they
  * lack (a reloaded bar there is the engine's own: the source's, or one it built from the same live quotes). Closed

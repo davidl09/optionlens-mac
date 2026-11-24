@@ -76,6 +76,7 @@ const formatters: Record<ColumnFmt, (v: unknown) => string> = {
   date: (v) => String(v).slice(0, 10),
   datetime: (v) => fmtDateTime(String(v)),
   bool: (v) => (v === true || v === "true" || v === 1 ? "Yes" : v === false || v === "false" || v === 0 ? "No" : String(v)),
+  halt: (v) => (v === true || v === "true" ? "HALTED" : v === false || v === "false" ? "" : String(v)),
   osi: (v) => {
     const p = parseOsi(String(v));
     return p ? `${p.root} ${p.expiry} ${p.right} ${NF_UP2.format(p.strike)}` : String(v);

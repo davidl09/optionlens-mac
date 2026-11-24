@@ -35,7 +35,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
   const quoteBodies: unknown[] = [];
   const intraday: IntradayBarsPush[] = [];
-  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), dividendHistory: rec("divs"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
     underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), intradayBars: async (b) => { intraday.push(b); return rec("intraday")(b); }, heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
     refreshResult: async (b) => { reports.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
@@ -57,6 +57,7 @@ const WANTS = {
   eod_chains: { session_date: "2026-11-20", symbols: ["AAPL"], not_before: "2026-11-20T16:20:00-05:00", deadline: "2026-11-20T20:00:00-05:00" },
   index_symbols: ["VIX"],
   index_bars: [{ symbol: "SPX", from: "2016-11-21" }],
+  dividend_history: [{ symbol: "KO", from: "2016-11-01" }],
   chains_on_demand_max_age_s: 120,
 };
 
@@ -70,7 +71,8 @@ describe("Bridge", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const work = h.calls.filter((c) => c !== "heartbeat");
     expect(work[0]).toBe("chain:MSFT");
-    expect([...work].sort()).toEqual(["bars:SPX", "chain:MSFT", "quotes", "quotes", "stats", "vol:AAPL", "vol:AAPL"]);   // quotes: VIX family + the stats pass
+    expect([...work].sort()).toEqual(["bars:SPX", "chain:MSFT", "divs:KO", "quotes", "quotes", "stats", "vol:AAPL", "vol:AAPL"]);   // quotes: VIX family + the stats pass
+    expect(work.indexOf("divs:KO")).toBeLessThan(work.indexOf("vol:AAPL"));          // dividend history before the IV backfill
     expect(h.calls.filter((c) => c === "heartbeat").length).toBeGreaterThanOrEqual(1);
     const last = h.statuses[h.statuses.length - 1];
     expect(last).toMatchObject({ tws: "connected", endpoint: "IB Gateway (live)", accountType: "paper", current: null });

@@ -179,3 +179,60 @@ def test_option_filters_send_whole_cent_bounds():
     assert f[0]["minstrikePrice"] == 37.96 and f[0]["maxstrikePrice"] == 63.28
     body = json.dumps({"filters": f})
     assert "37.96," in body and "999999" not in body
+
+
+# ----------------------------------------------------------------------------- reference data, VWAP, halts
+def test_symbol_info_sample_reference_data():
+    """GET v1/symbols/:id sample (AAPL): every reference field by its exact sample name; `dividend` is one payment
+    (4 × 0.47 / prevDayClosePrice 102.5 = 1.83 % ≈ the sample's yield 1.84), `yield` percent -> fraction."""
+    i = mapping.symbol_info(doc("symbols_id"))
+    assert (i.pe, i.eps, i.market_cap, i.shares_outstanding) == (16.54, 6.2, 613756367500, 5987867000)
+    assert (i.high_52w, i.low_52w, i.avg_volume_20d, i.avg_volume_3m) == (102.9, 63.89, 12860370, 43769680)
+    assert (i.sector, i.industry_group, i.industry_subgroup) == ("BasicMaterials", "Steel", "Steel")
+    assert i.dividend == 0.47 and i.dividend_yield == pytest.approx(0.0184)
+    assert 4 * i.dividend / i.prev_close == pytest.approx(i.dividend_yield, abs=0.0002)    # per payment, annualized
+    assert (i.ex_date, i.pay_date) == (date(2014, 8, 7), date(2014, 8, 14))
+    f = mapping.fundamentals(i, "AAPL", date(2026, 11, 19))
+    assert (f.source, f.pe, f.market_cap, f.prev_close, f.dividend_yield) == ("questrade", 16.54, 613756367500, 102.5,
+                                                                              pytest.approx(0.0184))
+    d = mapping.current_dividend(i, "AAPL")
+    assert (d.ex_date, d.amount, d.pay_date, d.source, d.kind) == (date(2014, 8, 7), 0.47, date(2014, 8, 14),
+                                                                   "questrade", "cash")
+    bare = mapping.symbol_info({"symbols": [{"hasOptions": False, "dividend": 0, "yield": None, "exDate": None}]})
+    assert mapping.current_dividend(bare, "X") is None and bare.dividend_yield is None and bare.pe is None
+
+
+def test_equity_quote_sample_halt_vwap_and_extended_hours():
+    q = doc("markets_quotes")["quotes"][0]
+    p = mapping.parse_quote(q, "THI", 82.0, NOW, final=False)
+    assert p.halted is False and p.vwap is None                    # VWAP is not in the documented sample
+    assert mapping.parse_quote({**q, "VWAP": 83.71, "isHalted": True}, "THI", 82.0, NOW, False).vwap == 83.71
+    live = mapping.live_quote({**q, "VWAP": 83.71, "isHalted": True}, "THI", 82.0, NOW)
+    assert live["vwap"] == 83.71 and live["halted"] is True
+    x = mapping.extended_quote({**q, "lastTradePrice": 84.5}, "THI", NOW)
+    assert (x.price, x.regular_price, x.volume, x.halted, x.delayed) == (84.5, 83.66, 80483500, False, False)
+    assert x.last_trade_at == datetime(2014, 10, 24, 20, 6, 40, 131000, tzinfo=x.last_trade_at.tzinfo)
+
+
+def test_candles_keep_their_vwap_when_sent():
+    c = {"start": "2026-11-19T09:30:00.000000-05:00", "end": "2026-11-19T09:31:00.000000-05:00", "low": 1.0,
+         "high": 2.0, "open": 1.5, "close": 1.6, "volume": 10}
+    assert mapping.candles({"candles": [c]})[0].vwap is None
+    assert mapping.candles({"candles": [{**c, "VWAP": 1.55}]})[0].vwap == 1.55
+
+
+async def test_reference_data_is_cached_with_the_chains_and_extended_quotes_use_cached_ids(qt):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    fake.info_extra = {k: v for k, v in doc("symbols_id")["symbols"][0].items() if k not in ("symbol", "symbolId")}
+    await src.fetch_chain("XYZ")
+    today = date(2026, 11, 19)
+    ref = src.cached_reference(today)
+    f, d = ref["XYZ"]
+    assert (f.symbol, f.date, f.eps, f.industry_subgroup) == ("XYZ", today, 6.2, "Steel") and d.amount == 0.47
+    assert src.cached_reference(date(2026, 11, 20)) == {}
+    n = len(fake.requests)
+    fake.quote_extra = {"lastTradePrice": 101.5, "isHalted": True, "lastTradeTime": "2026-11-19T17:00:00.000000-05:00"}
+    got = await src.fetch_extended(["XYZ", "NOPE", "SPY"])                       # NOPE / SPY: no cached id
+    assert [(x.symbol, x.price, x.regular_price, x.halted) for x in got] == [("XYZ", 101.5, 100.0, True)]
+    assert len(fake.requests) - n == 1 and fake.path_count("/v1/symbols/search") == 1       # no searches

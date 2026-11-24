@@ -88,7 +88,7 @@ def remove_symbol(wid: int, symbol: str) -> dict:
 
 
 WATCHLIST_COLS = (
-    *pick(C.DESC, "symbol", "name"), *C.QUOTE[:2], *pick(C.QUOTE, "volume"),
+    *pick(C.DESC, "symbol", "name"), *C.QUOTE[:2], C.HALTED, *pick(C.QUOTE, "volume"), *pick(C.VWAP, "pct_vs_vwap"),
     *pick(C.PERF, "ret_5d", "ret_1m"), *pick(C.VOL_CORE, "iv30", "iv_rank", "hv20", "iv_hv_ratio"),
     *pick(C.OPT, "option_volume", "pc_volume_ratio"), *pick(C.CATALYSTS, "next_earnings", "days_to_earnings", "next_ex_div"),
     Col("market_cap", "Market Cap", "bigmoney", C.G_DESC, default_hidden=True),
@@ -140,8 +140,8 @@ def delete_preset(pid: int) -> dict:
 # ============================================================================ alerts
 ALERT_KINDS = ("price_above", "price_below", "pct_change_abs", "iv30_above", "iv30_below", "iv_rank_above",
                "iv_rank_below", "rel_option_volume_above", "unusual_volume", "earnings_within_days",
-               "ex_div_within_days")
-VALUELESS = frozenset({"unusual_volume"})
+               "ex_div_within_days", "halted", "resumed")
+VALUELESS = frozenset({"unusual_volume", "halted", "resumed"})
 DEFAULT_COOLDOWN = 240
 
 

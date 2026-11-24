@@ -11,6 +11,7 @@ const RAW = {
   option_bars: [{ symbol: "AAPL", sessions: ["2026-11-18"], expiries: 6, moneyness: 0.15 }],
   index_symbols: ["VIX", "VIX9D"],
   index_bars: [{ symbol: "SPX", from: "2016-11-21" }, { symbol: "vix", from: "2026-11-19" }],
+  dividend_history: [{ symbol: "KO", from: "2016-11-01" }, { symbol: "brk.b", from: "2026-11-10" }],
   chains_on_demand_max_age_s: 120,
 };
 
@@ -29,6 +30,15 @@ describe("parseWants", () => {
     expect(w.indexBars).toEqual([{ symbol: "SPX", from: "2016-11-21" }, { symbol: "VIX", from: "2026-11-19" }]);
     expect(w.hvHistory[1]).toEqual({ symbol: "MSFT", from: "2026-11-01" });
     expect(w.historySymbols).toBe(5);
+    expect(w.dividendHistory).toEqual([{ symbol: "KO", from: "2016-11-01" }, { symbol: "BRK.B", from: "2026-11-10" }]);
+  });
+
+  it("plans dividend history per symbol, not again while the ledger has a recent attempt", () => {
+    const w = parseWants(RAW);
+    const p = planWants(w, ctx(Date.parse("2026-11-21T15:00:00Z"), { attemptedWithin: (k) => k === ledgerKey.dividends("KO") }));
+    expect(p.dividendHistory).toEqual([{ symbol: "BRK.B", from: "2026-11-10" }]);
+    expect(parseWants({}).dividendHistory).toEqual([]);                                  // older engines: none
+    expect(() => parseWants({ dividend_history: [{ symbol: "KO", from: "2016" }] })).toThrow(/dividend_history\[0\]\.from/);
   });
 
   it("plans IV and HV history per series: a current HV series is not fetched again from 10 years back", () => {
