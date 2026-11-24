@@ -26,14 +26,15 @@ function market() {
   return m;
 }
 
-function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer; batchTimeoutMs?: number; contractStore?: ContractStore; optionsFeedStore?: OptionsFeedStore } = {}) {
+function harness(wants: unknown, sessionMarket = market(), o: { pacer?: HistoricalPacer; batchTimeoutMs?: number; contractStore?: ContractStore; optionsFeedStore?: OptionsFeedStore; live?: () => unknown } = {}) {
   const calls: string[] = [];
   const statsBodies: UnderlyingStats[] = [];
   const chains: IngestChain[] = [];
   const heartbeats: Heartbeat[] = [];
   const reports: RefreshResultBody[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
-  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async () => { calls.push("quotes"); return {}; },
+  const quoteBodies: unknown[] = [];
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
     underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
     refreshResult: async (b) => { reports.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
@@ -44,7 +45,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
     contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
   });
-  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports };
+  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies };
 }
 
 const WANTS = {
@@ -74,6 +75,24 @@ describe("Bridge", () => {
     expect(last).toMatchObject({ tws: "connected", endpoint: "IB Gateway (live)", accountType: "paper", current: null });
     expect(last.lastPushAt).not.toBeNull();
     expect(last.backfill).toEqual({ total: 2, done: 2, failed: 0 });
+    h.bridge.stop();
+  });
+
+  it("live fallback: snapshots the symbols the engine names every few seconds, nothing when it names none", async () => {
+    let live: unknown = { symbols: [], interval_s: 5 };
+    const h = harness({}, market(), { live: () => live });
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(h.quoteBodies).toHaveLength(0);
+    live = { symbols: ["AAPL", "KO"], interval_s: 5 };
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(h.quoteBodies).toHaveLength(1);
+    expect(h.quoteBodies[0]).toMatchObject({ source: "ibkr", quotes: [{ symbol: "AAPL", price: 100, prev_close: 99 }, { symbol: "KO", price: 100 }] });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.quoteBodies.length).toBe(2);
+    live = { symbols: [], interval_s: 5 };
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.quoteBodies.length).toBe(2);
     h.bridge.stop();
   });
 

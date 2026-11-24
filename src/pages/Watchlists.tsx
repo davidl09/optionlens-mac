@@ -53,7 +53,7 @@ function ListDetail({ w, onChanged, onDeleted }: { w: Watchlist; onChanged: () =
         {err && <ErrorBox error={err} />}
       </Card>
       <Card className="flush">
-        <Async state={table}>{(r) => <DataTable columns={r.columns} rows={r.rows} csvName={`watchlist-${w.name}`}
+        <Async state={table}>{(r) => <DataTable live columns={r.columns} rows={r.rows} csvName={`watchlist-${w.name}`}
           emptyState={w.symbols.length ? "No data stored for these symbols yet." : "This list is empty. Add symbols above to see their prices here."} />}</Async>
       </Card>
     </div>

@@ -4,7 +4,7 @@ import type { IngestApi } from "./ingest";
 import { ContractCache } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { OptionsFeed } from "./options-feed";
-import { collectQuotes, ContractsUnavailable, OPTION_PARAMS_RETRY_MS, OptionQuotesClosed, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
+import { collectQuotes, ContractsUnavailable, OPTION_PARAMS_RETRY_MS, OptionQuotesClosed, pacedHistorical, pushChain, pushIndexBars, pushIndexQuotes, pushLiveQuotes, pushUnderlyingStats, pushVolHistory, type JobContext } from "./jobs";
 import { LineBudget } from "./line-budget";
 import { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -14,7 +14,7 @@ import { CODE, TwsRequestError, TwsTimeoutError, type TwsContract } from "./tws"
 function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
-  return { calls, wants: async () => ({}), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
+  return { calls, wants: async () => ({}), liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), quotes: rec("quotes"),
     underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat"), refreshResult: rec("refreshResult") };
 }
 
@@ -261,6 +261,17 @@ describe("index quotes", () => {
     const body = ctx.ingest.calls.quotes[0] as { quotes: { symbol: string; price: number; change: number; change_pct: number }[] };
     expect(body.quotes).toHaveLength(1);
     expect(body.quotes[0]).toMatchObject({ symbol: "VIX", price: 27.8, change: expect.closeTo(3.26, 6), change_pct: expect.closeTo(3.26 / 24.54, 6) });
+  });
+});
+
+describe("live snapshots (INTEGRATION.md §9 IBKR fallback)", () => {
+  it("posts the quotes of the symbols on screen (bid/ask/OHLC/volume, change vs. the close); unpriced ones are skipped", async () => {
+    const m = emptyMarket();
+    m.ticks = (id) => id === "AAPL:STK" ? [{ kind: "price", field: TICK.LAST, value: 101 }, { kind: "price", field: TICK.CLOSE, value: 100 },
+      { kind: "price", field: TICK.BID, value: 100.9 }, { kind: "price", field: TICK.ASK, value: 101.1 }] : undefined;
+    const ctx = ctxFor(new FakeSession(m), { batchTimeoutMs: 100 });
+    expect(await pushLiveQuotes(ctx, ["AAPL", "NONE"])).toBe(1);
+    expect(ctx.ingest.calls.quotes[0]).toMatchObject({ source: "ibkr", delayed: false, quotes: [{ symbol: "AAPL", price: 101, bid: 100.9, ask: 101.1, prev_close: 100, change: expect.closeTo(1, 9) }] });
   });
 });
 

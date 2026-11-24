@@ -92,6 +92,16 @@ function setConnectivity(next: Connectivity): void {
   emit();
 }
 
+/**
+ * fetch() against the engine with its base URL and token, the response left to the caller (the live channel reads
+ * a streamed body, src/live/connection.ts). Never puts the token in the URL.
+ */
+export function engineFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (conn?.token) headers.set("Authorization", `Bearer ${conn.token}`);
+  return fetch(`${conn?.baseUrl ?? ""}${path}`, { ...init, headers });
+}
+
 /** A GET the engine has not answered by then fails with a retryable error instead of loading forever. */
 export const GET_TIMEOUT_MS = 45_000;
 

@@ -25,6 +25,7 @@ from starlette.types import ASGIApp
 
 from .config import Settings
 
+GRACEFUL_S = 5   # open connections get this long after a stop (the app kills the engine after 8 s)
 log = logging.getLogger("optionlens.sidecar")
 PARENT_POLL_S = 1.0
 
@@ -130,6 +131,12 @@ class SidecarServer(uvicorn.Server):
                 return
             await asyncio.sleep(PARENT_POLL_S)
 
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        # Open live streams (Server-Sent Events) never finish on their own: end them first, else uvicorn waits.
+        from . import live
+        live.close_streams()
+        await super().shutdown(sockets)
+
     def request_exit(self, why: str) -> None:
         """Graceful shutdown, callable from any thread (uvicorn checks should_exit every 0.1 s)."""
         log.info("%s: shutting down", why)
@@ -139,7 +146,8 @@ class SidecarServer(uvicorn.Server):
 def server_config(app: ASGIApp, settings: Settings) -> uvicorn.Config:
     """uvicorn config of the sidecar: one worker on loopback, no access log (the app polls the API all day
     and keeps engine output in its own log; per-request lines only made that log grow)."""
-    return uvicorn.Config(app, host=settings.host, port=settings.port, workers=1, log_level="info", access_log=False)
+    return uvicorn.Config(app, host=settings.host, port=settings.port, workers=1, log_level="info", access_log=False,
+                          timeout_graceful_shutdown=GRACEFUL_S)
 
 
 def serve(app: ASGIApp, settings: Settings, exit_on_stdin_eof: bool = False) -> int:

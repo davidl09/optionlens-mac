@@ -1,7 +1,7 @@
 """quotes_latest: last underlying quote per symbol."""
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 from .. import db
 from ..models import Quote
@@ -20,6 +20,28 @@ def upsert_quotes(quotes: Iterable[Quote], source: str | None = None) -> int:
     data["source"] = [source] * len(uniq)
     with db.write() as cur:
         return insert_arrow(cur, "quotes_latest", data, "INSERT OR REPLACE")
+
+
+MERGE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
+
+
+def merge_quotes(rows: Iterable[Mapping[str, Any]], source: str | None, delayed: bool | None) -> int:
+    """Field-wise upsert: each row ({symbol, ts, <MERGE_FIELDS>...}) replaces the stored quote's fields it carries
+    (not None), others are kept; a row older than the stored quote is ignored. Returns rows written."""
+    stored = all_quotes()
+    out = []
+    for q in rows:
+        old = stored.get(q["symbol"])
+        if old is not None and old.ts > q["ts"]:
+            continue
+        base: dict[str, Any] = {f: None for f in Quote.__slots__} if old is None else \
+            {f: getattr(old, f) for f in Quote.__slots__}
+        base.update(symbol=q["symbol"], ts=q["ts"], delayed=delayed,
+                    **{f: q.get(f) for f in MERGE_FIELDS if q.get(f) is not None})
+        if q.get("volume") is not None:
+            base["volume"] = int(q["volume"])
+        out.append(Quote(**base))
+    return upsert_quotes(out, source) if out else 0
 
 
 def get_quote(symbol: str) -> Quote | None:

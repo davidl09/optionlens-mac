@@ -184,3 +184,28 @@ def test_engine_stops_gracefully_when_stdin_closes(tmp_path):
     log = (data / "engine.log").read_text()
     assert "stdin closed: shutting down" in log and "Application shutdown complete" in log
     assert (data / "optionlens.duckdb").exists()
+
+
+def test_engine_stops_gracefully_with_an_open_live_stream(tmp_path):
+    """An open SSE stream (docs §9) never ends by itself: the shutdown ends it instead of waiting for it."""
+    p, port = _start(tmp_path, "--exit-on-stdin-eof", stdin=subprocess.PIPE)
+    got: list[str] = []
+
+    def read() -> None:
+        with httpx.stream("GET", f"http://127.0.0.1:{port}/api/live/stream?client_id=window-sidecar",
+                          headers={"Authorization": f"Bearer {TOKEN}"}, timeout=30) as r:
+            for line in r.iter_lines():
+                got.append(line)
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    for _ in range(100):
+        if got:
+            break
+        time.sleep(0.05)
+    assert got and got[0] == "event: status"
+    started = time.monotonic()
+    p.stdin.close()
+    assert _wait(p) == 0 and time.monotonic() - started < 4
+    t.join(5)
+    assert not t.is_alive()                                        # the stream was ended, not cut by a kill
+    assert "Application shutdown complete" in (tmp_path / "engine.log").read_text()

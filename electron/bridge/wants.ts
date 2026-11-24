@@ -183,3 +183,11 @@ export function durationFor(from: string, now: Date): string {
   if (days <= 365) return `${days} D`;
   return `${Math.min(10, Math.ceil(days / 365))} Y`;
 }
+
+/** GET /api/ingest/live-wants (INTEGRATION.md §9): the symbols on screen to snapshot while the bridge is the live fallback. */
+export interface LiveWants { symbols: string[]; intervalMs: number }
+
+export function parseLiveWants(raw: unknown): LiveWants {
+  const w = obj(raw, "live-wants");
+  return { symbols: symbols(w.symbols ?? [], "live-wants.symbols").slice(0, 50), intervalMs: num(w.interval_s, "live-wants.interval_s", 1, 3600) * 1000 };
+}

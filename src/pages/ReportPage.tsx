@@ -13,6 +13,10 @@ import { AfterHoursBadge, AsOf, Async, Card, EmptyNotice, ErrorBox, NotesBox, Sp
 import { humanize } from "../lib/table";
 import { todayNY } from "../lib/dates";
 import { ParamStrings, resolveParams, stringToValue, valueToString } from "../lib/params";
+import { useLiveInterval } from "../live";
+
+/** While quotes are live, a visible report re-runs this often (quietly: sort, filters, page and scroll stay). */
+export const LIVE_RERUN_MS = 45_000;
 
 const K_SORT = "_sort", K_FILTER = "_f", K_HIDE = "_hide", K_WL = "_wl";
 
@@ -125,6 +129,7 @@ function ReportView({ def }: { def: ReportDef }) {
   useEffect(() => setForm(applied), [appliedKey]);
 
   const result = useApi(() => api.report(def.id, applied), [def.id, appliedKey]);
+  useLiveInterval(result.reload, LIVE_RERUN_MS);
   const columns = result.data?.columns?.length ? result.data.columns : def.columns;
   const table = useMemo(() => readTableState(sp, columns, def), [sp, columns, def]);
   const setTable = useCallback((t: TableState) => setSp(writeTableState(sp, t), { replace: true }), [sp, setSp]);
@@ -183,7 +188,7 @@ function ReportView({ def }: { def: ReportDef }) {
       {!result.data && result.loading && <Spinner label="Running report…" />}
       {result.data && (
         <Card className={`flush ${result.loading ? "refetching" : ""}`}>
-          <DataTable columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${todayNY()}`}
+          <DataTable live columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${todayNY()}`}
             emptyState={rows.length === 0 && (result.data.rows.length ? <EmptyNotice>None of these rows is in the chosen watchlist.</EmptyNotice> : <ReportEmpty result={result.data} chainBased={coverage.length > 0} />)}
             toolbar={<><WatchlistFilter value={wl} onChange={setWl} /><PresetBar def={def} params={applied} table={table} onApply={applyPreset} /></>} maxHeight="70vh" />
         </Card>

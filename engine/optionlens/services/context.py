@@ -18,7 +18,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Sequence
 
 import anyio.from_thread
 import numpy as np
@@ -158,6 +158,13 @@ def invalidate(_day: date | None = None, _symbols: list[str] | None = None) -> N
 
 
 hooks.on_sweep_complete.append(invalidate)
+
+
+def forget_chains(symbols: Iterable[str]) -> None:
+    """Drop these symbols' cached ChainArrays (their served rows changed in place: live quotes, live/persist.py)."""
+    with _chain_lock:
+        for s in symbols:
+            _chains.pop(s, None)
 
 
 # ============================================================================ rates / dividends

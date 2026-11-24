@@ -227,6 +227,18 @@ provides (IV/HV history, index history, option-bar catch-up) plus the symbols Qu
 is unavailable, IBKR takes over its chains. If Questrade refuses access (e.g. a missing permission), it stops at once
 and Settings → Data sources says what to fix.
 
+## Live quotes
+
+While the market is open, what is on screen updates by itself: the symbol header, the option chain (the expiry and
+strikes you are looking at), the calculator, watchlists, the dashboard and report rows (price, change, bid/ask/last,
+volume; reports also re-run every 45 s), and the chart's last candle. The header says where the data comes from:
+**LIVE · Questrade**, **DELAYED** (your data package is delayed), **MARKET CLOSED** (nothing is fetched; stored values
+are shown) or **NOT CONNECTED**. Changed values are briefly tinted. With Questrade connected the engine polls only
+what is visible, every 2–10 s depending on how much is on screen, within 70% of Questrade's limits together with the
+background sweeps; without Questrade, IB Gateway snapshots the visible symbols. A hidden or minimized window stops
+live updates. Questrade's Level 1 streaming can be turned on instead of polling (`OPTIONLENS_QUESTRADE_LIVE=stream`),
+but Questrade says it freezes the market data of any other Questrade platform you have open at the same time.
+
 ## Notifications
 
 The app checks your alerts' notifications every minute and shows each new one as a system notification

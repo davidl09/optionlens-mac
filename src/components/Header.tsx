@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { ReportDef } from "../api/types";
 import { useApi } from "../api/useApi";
 import { useTheme } from "../state/theme";
+import { LiveIndicator } from "../live";
 import { SourcesIndicator } from "./Desktop";
 import { NotificationBell } from "./NotificationBell";
 import { SymbolSearch } from "./SymbolSearch";
@@ -105,6 +106,7 @@ export function Header() {
         </nav>
         <div className="header-tools">
           <SymbolSearch onNavigate={closeAll} />
+          <LiveIndicator />
           <SourcesIndicator />
           <NotificationBell />
           <button className="icon-btn" onClick={toggle} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title="Toggle theme">

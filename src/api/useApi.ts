@@ -16,6 +16,8 @@ export interface ApiState<T> {
   loading: boolean;
   /** Re-run, bypassing the GET cache. */
   refetch: () => void;
+  /** Re-run quietly: no loading state, the current data stays until the new data replaces it (live re-runs). */
+  reload: () => void;
 }
 
 /**
@@ -27,6 +29,7 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: DependencyList): 
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState<boolean>(fn !== null);
   const [nonce, setNonce] = useState(0);
+  const quiet = useRef(false);
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const epoch = useReloadEpoch();
@@ -35,18 +38,23 @@ export function useApi<T>(fn: (() => Promise<T>) | null, deps: DependencyList): 
     const run = fnRef.current;
     if (!run) { setLoading(false); return; }
     let alive = true;
-    setLoading(true);
-    setError(null);
+    const silent = quiet.current;
+    quiet.current = false;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     run().then(
       (d) => { if (alive) { setData(d); setLoading(false); } },
-      (e: unknown) => { if (alive) { setError(e instanceof Error ? e : new Error(String(e))); setLoading(false); } },
+      (e: unknown) => { if (alive && !silent) { setError(e instanceof Error ? e : new Error(String(e))); setLoading(false); } },
     );
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce, epoch]);
 
   const refetch = useCallback(() => { invalidate(); setNonce((n) => n + 1); }, []);
-  return { data, error, loading, refetch };
+  const reload = useCallback(() => { quiet.current = true; setNonce((n) => n + 1); }, []);
+  return { data, error, loading, refetch, reload };
 }
 
 /** Value that only updates after `ms` of no changes. */

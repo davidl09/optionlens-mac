@@ -10,6 +10,7 @@ import { AsOf, Async, Card, Empty, ErrorBox, Spinner } from "../../components/ui
 import { addDays, daysBetween, todayNY } from "../../lib/dates";
 import { fmt, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
+import { isFlowing, liveStore, useLive, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
 import { useLegs } from "../../state/legs";
 import { useSym } from "./shared";
 
@@ -159,19 +160,49 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   const [evalDays, setEvalDays] = useState(0);
   const [ivShift, setIvShift] = useState(0);
   const today = todayNY();
-  const spot = chain.underlying.price;
+  const storedSpot = chain.underlying.price;
 
   const optionExpiries = legs.filter((l) => l.kind === "option" && l.expiry).map((l) => l.expiry as string).sort();
   const maxDays = optionExpiries.length ? Math.max(0, daysBetween(today, optionExpiries[0])) : 0;
   const days = Math.min(evalDays, maxDays);
   const evalDate = addDays(today, days);
 
-  const liveKey = JSON.stringify({ symbol: sym, legs, iv_shift: ivShift / 100, eval_date: evalDate });
+  // Live: the underlying and the legs' contracts (OSIs from the last result). While quotes flow, the request carries
+  // the live spot and, for legs without a typed price / IV, the live mid / IV: recomputed at most once a second.
+  const [priced, setPriced] = useState<{ osi: string; right?: string; strike?: number; expiry?: string }[]>([]);
+  const legOsis = useMemo(() => priced.map((l) => l.osi).filter(Boolean), [priced]);
+  useLive({ symbols: [sym], contracts: legOsis });
+  const flowing = isFlowing(useLiveStatus());
+  const livePrice = useLiveQuote(sym)?.price;
+  const spot = livePrice ?? storedSpot;
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!flowing) return undefined;
+    const offs = legOsis.map((o) => liveStore.onKey("o", o, () => setTick((n) => n + 1)));
+    return () => offs.forEach((off) => off());
+  }, [flowing, legOsis]);
+  const livePart = useThrottled(flowing ? JSON.stringify({ spot: livePrice ?? null, tick }) : "", 1000);
+  const liveLegs = useMemo(() => {
+    if (!livePart) return legs;
+    return legs.map((l, i) => {
+      const was = priced[i];   // the contract the last result priced for this leg, if it is still the same one
+      const same = was && l.kind === "option" && was.right === l.right && was.strike === l.strike && was.expiry === l.expiry;
+      const f = same && was.osi ? liveStore.get("o", was.osi) : null;
+      if (l.kind !== "option" || !f) return l;
+      return { ...l, price: l.price ?? f.mid ?? null, iv: l.iv ?? f.iv ?? null };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legs, livePart, priced]);
+  const liveSpot = livePart ? (JSON.parse(livePart) as { spot: number | null }).spot : null;
+
+  const liveKey = JSON.stringify({ symbol: sym, legs: liveLegs, iv_shift: ivShift / 100, eval_date: evalDate, ...(liveSpot ? { spot: liveSpot } : {}) });
   const reqKey = useDebounced(liveKey, 300);
   const req = useMemo(() => JSON.parse(reqKey) as CalcRequest, [reqKey]);   // the debounced request decides (not the live legs)
   // price only a settled, complete position (debounced == live, every option leg has a strike)
   const ready = reqKey === liveKey && legs.length > 0 && legs.every((l) => l.kind === "stock" || l.strike !== undefined);
   const calc = useApi(ready ? () => api.calcStrategy(req) : null, [req, ready]);
+  const pricedKey = JSON.stringify(calc.data?.legs.map((l) => ({ osi: l.osi ?? "", right: l.right, strike: l.strike, expiry: l.expiry })) ?? []);
+  useEffect(() => setPriced(JSON.parse(pricedKey) as typeof priced), [pricedKey]);
   const [templateMsg, setTemplateMsg] = useState<string | null>(null);
 
   const applyTemplate = (id: string) => {

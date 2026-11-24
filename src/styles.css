@@ -530,6 +530,8 @@ table.chain td a:hover { color: var(--accent); }
   .tl-label { grid-column: 1 / -1; }
   .w-wide { width: 100%; }
   .bell-pop { position: fixed; top: var(--header-h); right: 8px; left: 8px; width: auto; }
+  .live-pill { padding: 3px 7px; }
+  .live-pill .live-text { display: none; }   /* the dot and its tone stay; the label is in aria-label / title */
 }
 
 /* ---- desktop app: engine gate, connection banner, IBKR indicator, settings ---- */
@@ -574,3 +576,16 @@ code.wrap { word-break: break-all; font-size: 11.5px; }
 .failure-list li + li { margin-top: 2px; }
 .pos-text { color: var(--up); }
 .warn-text { color: var(--warn); }
+
+/* ---------------- live quotes (src/live) ---------------- */
+.live-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; border: 1px solid var(--border); color: var(--fg-2); background: var(--panel-2); }
+.live-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.live-pill.pos { color: var(--up); background: var(--up-soft); border-color: color-mix(in srgb, var(--up) 35%, transparent); }
+.live-pill.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.live-pill.neg { color: var(--down); background: var(--down-soft); border-color: color-mix(in srgb, var(--down) 35%, transparent); }
+.live-pill.neutral { color: var(--muted); }
+/* A changed live value: a static tint for FLASH_MS (src/live/index.tsx; no animation, so no per-frame repaints and
+   nothing moves for prefers-reduced-motion); background only: no layout shift. */
+.live-flash { border-radius: 2px; }
+.live-flash-up { background-color: var(--up-soft); }
+.live-flash-down { background-color: var(--down-soft); }

@@ -30,6 +30,7 @@ class CalcRequest(BaseModel):
     eval_date: date | None = None
     price_range: tuple[float, float] | None = None
     points: int | None = None
+    spot: float | None = Field(default=None, gt=0)   # live underlying price (else the stored chain's)
 
 
 @router.post("/calc/strategy")

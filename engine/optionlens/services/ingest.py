@@ -25,6 +25,7 @@ from ..repo import symbols as symbols_repo
 from ..repo import user as user_repo
 from ..repo import vol_history as vol_history_repo
 from ..sources.osi import format_osi
+from .. import live
 from . import context as ctx
 from .errors import BadRequest
 
@@ -166,27 +167,12 @@ def index_bars(body: dict, now: datetime | None = None) -> dict:
     return {"stored": n}
 
 
-_QUOTE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
-
-
 def quotes(body: dict, now: datetime | None = None) -> dict:
-    """Upsert quotes field-wise: pushed fields replace the stored quote's, others are kept; a push
-    older than the stored quote is ignored."""
-    stored = quotes_repo.all_quotes()
-    out = []
-    for q in body["quotes"]:
-        sym = normalize_symbol(q["symbol"])
-        old = stored.get(sym)
-        if old is not None and old.ts > q["ts"]:
-            continue
-        base: dict[str, Any] = {f: None for f in Quote.__slots__} if old is None else \
-            {f: getattr(old, f) for f in Quote.__slots__}
-        base.update(symbol=sym, ts=q["ts"], delayed=body["delayed"],
-                    **{f: q.get(f) for f in _QUOTE_FIELDS if q.get(f) is not None})
-        if q.get("volume") is not None:
-            base["volume"] = int(q["volume"])
-        out.append(Quote(**base))
-    n = quotes_repo.upsert_quotes(out, body["source"]) if out else 0
+    """Upsert quotes field-wise (quotes_repo.merge_quotes): pushed fields replace the stored quote's, others are
+    kept; a push older than the stored quote is ignored. Live subscribers get them too (live.hub)."""
+    rows = [{**q, "symbol": normalize_symbol(q["symbol"])} for q in body["quotes"]]
+    n = quotes_repo.merge_quotes(rows, body["source"], body["delayed"])
+    live.instance().ingested_quotes(body["source"], body["delayed"], rows)
     bridge_repo.record_push(now or datetime.now(timezone.utc))
     return {"stored": n}
 

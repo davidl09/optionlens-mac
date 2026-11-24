@@ -1,7 +1,7 @@
 // Stock group: chart, price action, dividends.
 import { useMemo, useState } from "react";
 import { api } from "../../api/client";
-import type { ColumnDef, PriceAction, ReportRow } from "../../api/types";
+import type { Bar, ColumnDef, PriceAction, ReportRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { CandlesVolume, ChartMarker, SMA_LENGTHS, type SmaLength, smasWithData } from "../../components/charts/Candles";
 import { LineChart, LineSeries } from "../../components/charts/Charts";
@@ -9,10 +9,22 @@ import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
 import { Async, Card, EmptyNotice, InfoBox, Segmented } from "../../components/ui";
+import { todayNY } from "../../lib/dates";
 import { fmt } from "../../lib/format";
+import { isFlowing, useLive, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
+import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 
 const RANGES = ["1m", "3m", "6m", "1y", "3y", "5y", "10y"] as const;
+
+/** The candles with today's bar following the live price (at most once a second; only while quotes flow). */
+function LiveCandles({ sym, bars, smas, markers }: { sym: string; bars: Bar[]; smas: SmaLength[]; markers: ChartMarker[] }) {
+  useLive({ symbols: [sym] });
+  const flowing = isFlowing(useLiveStatus());
+  const patch = useThrottled(useLiveQuote(sym), 1000);
+  const shown = useMemo(() => (flowing ? withLiveBar(bars, patch, todayNY()) : bars), [bars, patch, flowing]);
+  return <CandlesVolume bars={shown} smas={smas} markers={markers} />;
+}
 
 export function ChartTab() {
   const sym = useSym();
@@ -43,7 +55,7 @@ export function ChartTab() {
         const missing = smas.filter((n) => !smasWithData(b, [n]).length);
         return (
           <>
-            <CandlesVolume bars={b} smas={smas} markers={markers} />
+            <LiveCandles sym={sym} bars={b} smas={smas} markers={markers} />
             <div className="legend-note small muted">
               <span className="dot e" /> E = earnings · <span className="dot d" /> D = ex-dividend · SMAs use the full stored price history
               {missing.length > 0 && <> · {missing.map((n) => `SMA ${n}`).join(", ")}: not enough stored history yet</>}

@@ -58,7 +58,7 @@ export const URGENT: JobKind = "on-demand";
 
 /** Share of TWS time per kind while several kinds have work (relative weights). */
 export const WEIGHT: Record<Exclude<JobKind, typeof URGENT>, number> = {
-  "eod-chains": 8, "chain-universe": 4, "underlying-stats": 3, index: 2, "option-bars": 1, "iv-history": 1,
+  live: 6, "eod-chains": 8, "chain-universe": 4, "underlying-stats": 3, index: 2, "option-bars": 1, "iv-history": 1,
 };
 
 export interface CancelFilter { kind?: JobKind; key?: string; group?: string; /** Leave running / suspended tasks alone. */ queuedOnly?: boolean }

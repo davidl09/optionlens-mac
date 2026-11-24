@@ -61,6 +61,8 @@ export interface Heartbeat {
 
 export interface IngestApi {
   wants(): Promise<unknown>;
+  /** The symbols on screen to snapshot now (INTEGRATION.md §9; none unless the bridge is the live fallback). */
+  liveWants(): Promise<unknown>;
   chain(b: IngestChain): Promise<unknown>;
   noOptions(b: NoOptions): Promise<unknown>;
   volHistory(b: VolBars): Promise<unknown>;
@@ -76,6 +78,7 @@ export interface IngestApi {
 export function ingestApi(http: JsonHttp): IngestApi {
   return {
     wants: () => http.get("/api/ingest/wants"),
+    liveWants: () => http.get("/api/ingest/live-wants"),
     chain: (b) => http.post("/api/ingest/chain", b),
     noOptions: (b) => http.post("/api/ingest/no-options", b),
     volHistory: (b) => http.post(b.kind === "iv30" ? "/api/ingest/iv-history" : "/api/ingest/hv-history", b),

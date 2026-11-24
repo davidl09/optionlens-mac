@@ -11,6 +11,8 @@ import { StatValue } from "../components/StatGrid";
 import { CollectionTimes, PopulationNote } from "../components/Collection";
 import { AfterHoursBadge, AsOf, Async, Card, EmptyNotice, Segmented } from "../components/ui";
 import { fmt, plural, shortSector, signClass } from "../lib/format";
+import { Flash, isFlowing, useLive, useLiveQuote, useLiveStatus } from "../live";
+import { withLiveQuote } from "../live/merge";
 
 function Sparkline({ values, width = 96, height = 30 }: { values: number[]; width?: number; height?: number }) {
   if (values.length < 2) return <svg width={width} height={height} aria-hidden="true" />;
@@ -36,29 +38,34 @@ function compactColumns(rows: ReportRow[], def: ReportDef | undefined, preferred
   return out;
 }
 
-function MiniTable({ title, rows, def, preferred, link, max, empty }: { title: string; rows: ReportRow[]; def?: ReportDef; preferred: string[]; link?: string; max?: number; empty?: string }) {
+function MiniTable({ title, rows, def, preferred, link, max, empty, live }: { title: string; rows: ReportRow[]; def?: ReportDef; preferred: string[]; link?: string; max?: number; empty?: string; live?: boolean }) {
   const cols = useMemo(() => compactColumns(rows, def, preferred, max), [rows, def, preferred, max]);
   return (
     <Card title={title} actions={link ? <Link to={link} className="small">Full report →</Link> : undefined} className="mini-table">
-      {rows.length ? <DataTable minimal columns={cols} rows={rows} /> : <EmptyNotice>{empty ?? "No rows match this panel's criteria right now."} <PopulationNote /></EmptyNotice>}
+      {rows.length ? <DataTable minimal live={live} columns={cols} rows={rows} /> : <EmptyNotice>{empty ?? "No rows match this panel's criteria right now."} <PopulationNote /></EmptyNotice>}
     </Card>
   );
 }
 
 function IndexCards({ m }: { m: MarketOverview }) {
+  useLive({ symbols: m.indices.map((c) => c.symbol) });
+  const flowing = isFlowing(useLiveStatus());
+  return <div className="index-cards">{m.indices.map((c) => <IndexCard key={c.symbol} card={c} flowing={flowing} />)}</div>;
+}
+
+function IndexCard({ card, flowing }: { card: MarketOverview["indices"][number]; flowing: boolean }) {
+  const patch = useLiveQuote(card.symbol);
+  const c = withLiveQuote(card, patch);
+  const live = flowing && patch !== null;
   return (
-    <div className="index-cards">
-      {m.indices.map((c) => (
-        <Link key={c.symbol} to={`/s/${c.symbol}`} className="index-card">
-          <div className="ic-top"><b>{c.symbol}</b><span className="muted ic-name">{c.name}</span></div>
-          <div className="ic-mid">
-            <span className="ic-price"><StatValue value={c.price} kind="num2" /></span>
-            <span className={signClass(c.change_pct)} title="One-day change"><StatValue value={c.change_pct} kind="pct_signed" hint="No price for this index yet." /><small className="muted"> 1D</small></span>
-          </div>
-          <div className="ic-bot"><Sparkline values={c.spark} /><span className="muted small nowrap">IV30 {fmt(c.iv30, "vol")}</span></div>
-        </Link>
-      ))}
-    </div>
+    <Link to={`/s/${c.symbol}`} className="index-card">
+      <div className="ic-top"><b>{c.symbol}</b><span className="muted ic-name">{c.name}</span></div>
+      <div className="ic-mid">
+        <span className="ic-price"><Flash value={c.price} active={live}><StatValue value={c.price} kind="num2" /></Flash></span>
+        <span className={signClass(c.change_pct)} title="One-day change"><StatValue value={c.change_pct} kind="pct_signed" hint="No price for this index yet." /><small className="muted"> 1D</small></span>
+      </div>
+      <div className="ic-bot"><Sparkline values={c.spark} /><span className="muted small nowrap">IV30 {fmt(c.iv30, "vol")}</span></div>
+    </Link>
   );
 }
 
@@ -147,8 +154,8 @@ function DashboardBody({ m, defs, status }: { m: MarketOverview; defs: ReportDef
         </>
       )}
       <div className="grid-3">
-        <MiniTable title="Top gainers" rows={m.gainers} empty={m.empty_notes.gainers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=gainers" />
-        <MiniTable title="Top losers" rows={m.losers} empty={m.empty_notes.losers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=losers" />
+        <MiniTable live title="Top gainers" rows={m.gainers} empty={m.empty_notes.gainers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=gainers" />
+        <MiniTable live title="Top losers" rows={m.losers} empty={m.empty_notes.losers} def={d("market-movers")} preferred={["symbol", "price", "change_pct", "volume", "rel_volume"]} link="/reports/market-movers?side=losers" />
         <MiniTable title="IV movers" rows={m.iv_movers} empty={m.empty_notes.iv_movers} def={d("iv-movers")} preferred={["symbol", "iv30", "iv30_chg_1d", "iv30_chg_pct", "iv_rank"]} link="/reports/iv-movers" />
       </div>
       <div className="grid-3">
@@ -156,7 +163,7 @@ function DashboardBody({ m, defs, status }: { m: MarketOverview; defs: ReportDef
         <MiniTable title="Earnings next session" rows={m.earnings_tomorrow} empty={m.empty_notes.earnings_tomorrow} def={d("earnings-calendar")} preferred={["symbol", "time", "implied_move", "avg_abs_move", "iv_rank"]} />
         <Freshness m={m} status={status} />
       </div>
-      <MiniTable title="Watchlist" rows={m.watchlist} empty={m.empty_notes.watchlist} preferred={["symbol", "name", "price", "change_pct", "iv30", "iv_rank", "next_earnings"]} max={8} link="/watchlists" />
+      <MiniTable live title="Watchlist" rows={m.watchlist} empty={m.empty_notes.watchlist} preferred={["symbol", "name", "price", "change_pct", "iv30", "iv_rank", "next_earnings"]} max={8} link="/watchlists" />
     </div>
   );
 }

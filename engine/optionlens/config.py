@@ -70,6 +70,9 @@ class Settings:
     chain_sources: tuple[str, ...] = ("ibkr-bridge", "questrade")
     questrade_expiries: int = 8            # Questrade sweeps: first N expiries ...
     questrade_moneyness: float = 0.25      # ... strikes within ±this fraction of the underlying price
+    # Live quotes from Questrade (live/questrade.py): "poll" = Level 1 snapshots at a cadence within the rate limits;
+    # "stream" = Level 1 WebSocket streams (Questrade: freezes the market data of other IQ platforms open meanwhile).
+    questrade_live: str = "poll"
     tz: str = "America/New_York"
 
     def __post_init__(self) -> None:
@@ -87,6 +90,8 @@ class Settings:
             bad.append(f"OPTIONLENS_CHAIN_SOURCES={','.join(self.chain_sources)} must list distinct sources")
         if self.questrade_moneyness >= 1:
             bad.append(f"OPTIONLENS_QUESTRADE_MONEYNESS={self.questrade_moneyness} must be < 1")
+        if self.questrade_live not in ("poll", "stream"):
+            bad.append(f"OPTIONLENS_QUESTRADE_LIVE={self.questrade_live} must be poll or stream")
         if self.api_token is not None and len(self.api_token) < MIN_TOKEN_LEN:
             bad.append(f"OPTIONLENS_API_TOKEN must be at least {MIN_TOKEN_LEN} characters")
         if self.parent_pid is not None and self.parent_pid <= 0:
@@ -132,6 +137,7 @@ def load_settings() -> Settings:
                             if x.strip()),
         questrade_expiries=_num("QUESTRADE_EXPIRIES", "8", int),
         questrade_moneyness=_num("QUESTRADE_MONEYNESS", "0.25", float),
+        questrade_live=(_env("QUESTRADE_LIVE", "poll") or "poll").strip().lower(),
     )
 
 

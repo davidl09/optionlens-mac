@@ -85,6 +85,49 @@ def update_source_iv(symbol: str, contracts: Iterable[OptionContract]) -> int:
     return tbl.num_rows
 
 
+LIVE_FIELDS = ("bid", "ask", "last", "volume", "oi", "iv", "delta", "gamma", "theta", "vega")
+
+
+def patch_latest(rows: Sequence[Mapping]) -> int:
+    """Live quotes (live/hub.py) into the served chain: each row {osi, source, <LIVE_FIELDS>...} replaces the fields
+    it carries (not None) of that served contract; a row with an IV labels iv_source / greeks_source with its source.
+    Rows of contracts not in option_latest are skipped; the chain's fetch time, source and `delayed` are kept (they
+    describe the chain for jobs/precedence.py). Returns rows given."""
+    if not rows:
+        return 0
+    data: dict[str, list] = {k: [r.get(k) for r in rows] for k in ("osi", "source", *LIVE_FIELDS)}
+    data["volume"] = [None if v is None else int(v) for v in data["volume"]]
+    data["oi"] = [None if v is None else int(v) for v in data["oi"]]
+    tbl = pa.table({k: pa.array(v, type=pa.string() if k in ("osi", "source") else
+                                (pa.int64() if k in ("volume", "oi") else pa.float64())) for k, v in data.items()})
+    sets = ", ".join(f"{k} = COALESCE(u.{k}, o.{k})" for k in LIVE_FIELDS)
+    with db.write() as cur:
+        cur.register("_live_patch", tbl)
+        try:
+            cur.execute(f"""UPDATE option_latest o SET {sets},
+                              iv_source = CASE WHEN u.iv IS NOT NULL THEN u.source ELSE o.iv_source END,
+                              greeks_source = CASE WHEN u.delta IS NOT NULL THEN u.source ELSE o.greeks_source END
+                            FROM _live_patch u WHERE o.osi = u.osi""")
+        finally:
+            cur.unregister("_live_patch")
+    return tbl.num_rows
+
+
+def symbols_of(osis: Sequence[str]) -> dict[str, str]:
+    """{osi: underlying symbol} of the served contracts among `osis`."""
+    if not osis:
+        return {}
+    return {r["osi"]: r["symbol"] for r in query("SELECT osi, symbol FROM option_latest WHERE osi IN (SELECT unnest(?))",
+                                                  [list(osis)])}
+
+
+def osis_in_band(symbol: str, expiry: date, strike_min: float | None, strike_max: float | None) -> list[str]:
+    """OSI codes of the served chain's contracts of one expiry within [strike_min, strike_max] (None: unbounded)."""
+    return [r["osi"] for r in query(
+        """SELECT osi FROM option_latest WHERE symbol = ? AND expiry = ? AND strike >= coalesce(?, -1e18)
+           AND strike <= coalesce(?, 1e18) ORDER BY strike, "right" """, [symbol, expiry, strike_min, strike_max])]
+
+
 def latest_fetched_at(symbol: str) -> datetime | None:
     """Fetch time (aware UTC) of the stored chain, or None if none stored."""
     return aware(scalar("SELECT max(ts) FROM option_latest WHERE symbol = ?", [symbol]))

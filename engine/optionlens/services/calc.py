@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date
 
 from ..analytics import bs, payoff, strategies
@@ -69,6 +70,8 @@ def calculate(req: dict) -> dict:
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False) or ctx.load_chain_arrays(sym)
     if ca is None:
         raise NoChain(sym, ctx.optionable(sym))
+    if req.get("spot") is not None:          # the renderer's live underlying price
+        ca = replace(ca, spot=float(req["spot"]))
     legs = _legs(ca, req["legs"])
     shift = float(req.get("iv_shift") or 0.0)
     if abs(shift) > MAX_IV_SHIFT:
@@ -79,6 +82,11 @@ def calculate(req: dict) -> dict:
     rng = req.get("price_range")
     if rng is not None and not (0 < rng[0] < rng[1]):
         raise BadRequest("price_range must be [low, high] with 0 < low < high")
-    return payoff.calculate(legs, ca.spot, now_ny(), ca.r, ca.q, hv30=ca.hv30, iv_shift=shift,
-                            eval_date=req.get("eval_date"), price_range=tuple(rng) if rng else None,
-                            points=points, asof=ca.asof)
+    out = payoff.calculate(legs, ca.spot, now_ny(), ca.r, ca.q, hv30=ca.hv30, iv_shift=shift,
+                           eval_date=req.get("eval_date"), price_range=tuple(rng) if rng else None,
+                           points=points, asof=ca.asof)
+    index = ctx.derived(ca, "leg_index", _index)
+    for raw, leg in zip(req["legs"], out["legs"]):     # the contract's OSI: live quotes of the leg (renderer)
+        i = index.get((raw.get("expiry"), float(raw["strike"]), raw.get("right"))) if raw["kind"] == "option" else None
+        leg["osi"] = str(ca.osi[i]) if i is not None and ca.osi[i] is not None else None
+    return out

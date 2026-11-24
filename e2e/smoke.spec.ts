@@ -24,7 +24,7 @@ async function setup(page: Page, allowConsole: RegExp[] = []): Promise<Problems>
     try { body = req.postDataJSON(); } catch { body = null; }
     const res = handle(req.method(), url, body);
     if (!res) { p.unmocked.push(`${req.method()} ${url.pathname}${url.search}`); await route.fulfill({ status: 501, json: { detail: "not mocked" } }); return; }
-    await route.fulfill({ status: res.status, json: res.body });
+    await route.fulfill(res.text !== undefined ? { status: res.status, body: res.text, contentType: res.contentType } : { status: res.status, json: res.body });
   });
   return p;
 }

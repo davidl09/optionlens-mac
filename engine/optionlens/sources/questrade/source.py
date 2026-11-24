@@ -23,10 +23,11 @@ from ...fileio import read_json, write_json_atomic
 from ...models import ChainSnapshot
 from ...net import FetchError
 from ..chain_source import NotListed
+from ..osi import format_osi
 from .auth import TokenError, TokenManager, TokenStore
 from .client import QuestradeClient
 from .errors import QuestradeError
-from .mapping import (SymbolInfo, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
+from .mapping import (Listed, SymbolInfo, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
                       pick_symbol_id, snapshot, symbol_info)
 from .ratelimit import RateGate
 
@@ -75,6 +76,7 @@ class QuestradeSource:
         self.api = QuestradeClient(self.tokens, self.gate, http)
         self.ids = SymbolIds(data_dir / "questrade_symbols.json")
         self._info: dict[str, tuple[date, SymbolInfo]] = {}
+        self._option_ids: dict[str, tuple[date, dict[str, tuple[int, Listed]]]] = {}
         self.last_delayed: bool | None = None
         self.verification: dict | None = None   # result of the check after a token was saved (verify)
 
@@ -130,6 +132,23 @@ class QuestradeSource:
         info = symbol_info(await self.api.get(f"symbols/{sid}"))
         self._info[symbol] = (today, info)
         return info
+
+    async def symbol_info(self, symbol: str) -> SymbolInfo:
+        """hasOptions and prevDayClosePrice of `symbol` (symbols/:id once per New York day). Raises NotListed,
+        QuestradeError."""
+        return await self._symbol_info(symbol, await self.symbol_id(symbol), now_ny().date())
+
+    async def option_ids(self, symbol: str) -> dict[str, tuple[int, Listed]]:
+        """{OSI: (option symbolId, Listed)} of the standard contracts Questrade lists for `symbol` (symbols/:id/options
+        once per New York day; live quotes ask for option quotes by these ids). Raises NotListed, QuestradeError."""
+        today = now_ny().date()
+        cached = self._option_ids.get(symbol)
+        if cached and cached[0] == today:
+            return cached[1]
+        _, listed = listed_contracts(await self.api.get(f"symbols/{await self.symbol_id(symbol)}/options"), symbol)
+        ids = {format_osi(symbol, c.expiry, c.right, c.strike): (qid, c) for qid, c in listed.items()}
+        self._option_ids[symbol] = (today, ids)
+        return ids
 
     async def fetch_chain(self, symbol: str, final: bool = False) -> ChainSnapshot:
         """The chain of `symbol` (no contracts: Questrade lists no options for it). Raises NotListed, FetchError."""

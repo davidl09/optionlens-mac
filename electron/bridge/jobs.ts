@@ -445,6 +445,16 @@ export async function pushUnderlyingStats(ctx: JobContext, symbols: string[], se
   return { symbols: stats.map((s) => s.symbol), delayed, optionTicks: stats.some((s) => s.call_volume !== null || s.call_oi !== null) };
 }
 
+/** Live snapshots of the symbols on screen (INTEGRATION.md §9: only while Questrade is unavailable): their quotes,
+ * posted like the stats pass's so the engine passes them on to the windows. */
+export async function pushLiveQuotes(ctx: JobContext, symbols: string[]): Promise<number> {
+  const quotes = await collectQuotes(ctx, symbols.map(underlyingContract), { genericTicks: "", complete: (a) => a.priceComplete(), minDwellMs: 400 });
+  const ts = ctx.now().toISOString();
+  const rows = symbols.map((s, i) => assembleQuote(s, quotes[i], ts)).filter((q): q is IngestQuote => q !== null);
+  if (rows.length) await ctx.ingest.quotes({ source: "ibkr", delayed: quotes.some((q) => q.delayed), quotes: rows });
+  return rows.length;
+}
+
 /** VIX-family quotes: a current value and its change vs. the previous close (a symbol with only a close is skipped). */
 export async function pushIndexQuotes(ctx: JobContext, symbols: string[]): Promise<number> {
   const quotes = await collectQuotes(ctx, symbols.map(underlyingContract), { genericTicks: "", complete: (a) => a.priceComplete() && a.snapshot().close !== null });

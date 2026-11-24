@@ -102,14 +102,16 @@ async function mockEngine(page: Page, failFirst = 0, questrade: Parameters<typeo
   await page.route("**/api/**", async (route) => {
     const req = route.request();
     const url = new URL(req.url());
-    if (failures > 0) { failures -= 1; await route.abort("connectionrefused"); return; }
+    // the app's own requests fail first (the live channel retries on its own schedule, src/live/connection.ts)
+    if (failures > 0 && !url.pathname.startsWith("/api/live/")) { failures -= 1; await route.abort("connectionrefused"); return; }
     seen.hosts.add(url.origin);
     if (url.pathname !== "/api/health") seen.auth.push(req.headers()["authorization"] ?? null);
     let body: unknown = null;
     try { body = req.postDataJSON(); } catch { body = null; }
     const res = handle(req.method(), url, body);
     if (!res) { seen.unmocked.push(url.pathname); await route.fulfill({ status: 501, json: { detail: "not mocked" } }); return; }
-    await route.fulfill({ status: res.status, json: res.body, headers: { "Access-Control-Allow-Origin": "*" } });
+    const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Authorization, Content-Type" };
+    await route.fulfill(res.text !== undefined ? { status: res.status, body: res.text, contentType: res.contentType, headers } : { status: res.status, json: res.body, headers });
   });
   return seen;
 }

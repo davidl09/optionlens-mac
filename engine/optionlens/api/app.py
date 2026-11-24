@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from .. import db
+from .. import db, live
 from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
@@ -23,6 +23,7 @@ from . import (
     routes_backtest,
     routes_calc,
     routes_ingest,
+    routes_live,
     routes_market,
     routes_reports,
     routes_sources,
@@ -50,9 +51,11 @@ async def lifespan(app: FastAPI):
     ingest.register_hooks()  # IV / greeks of server-side sources' chains
     if scheduler_enabled():
         await scheduler.start()
+    await live.start()
     try:
         yield
     finally:
+        await live.stop()   # persists the last live values
         if scheduler_enabled():
             await scheduler.stop()
         db.close()
@@ -121,7 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = s
     _install_errors(app)
     for module in (routes_system, routes_symbol, routes_calc, routes_backtest,
-                   routes_reports, routes_market, routes_user, routes_ingest, routes_sources):
+                   routes_reports, routes_market, routes_user, routes_ingest, routes_sources, routes_live):
         app.include_router(module.router)
     app.add_middleware(BodyLimit)
     if s.auth_enabled:

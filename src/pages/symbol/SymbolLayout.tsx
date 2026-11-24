@@ -6,6 +6,8 @@ import { useApi } from "../../api/useApi";
 import { AddToWatchlist } from "../../components/AddToWatchlist";
 import { AfterHoursBadge, AsOf, ErrorBox, SourceBadge, Spinner } from "../../components/ui";
 import { fmt, signClass } from "../../lib/format";
+import { Flash, isFlowing, useLive, useLiveQuote, useLiveStatus } from "../../live";
+import { withLiveQuote } from "../../live/merge";
 import { LegsProvider } from "../../state/legs";
 import CalculatorTab from "./CalculatorTab";
 import { RefreshChip, SymbolRefreshProvider } from "./ChainRefresh";
@@ -68,9 +70,12 @@ function OptionsBadge({ optionable }: { optionable: boolean | null }) {
 
 function QuoteHeader({ sym }: { sym: string }) {
   const st = useApi(() => api.summary(sym), [sym]);
+  useLive({ symbols: [sym] });
+  const patch = useLiveQuote(sym);
+  const flowing = isFlowing(useLiveStatus());
   if (st.error) return <ErrorBox error={st.error} onRetry={st.refetch} />;
   const s = st.data && st.data.symbol === sym ? st.data : null;
-  const q = s?.quote ?? null;
+  const q = s?.quote ? withLiveQuote(s.quote, patch) : null;
   const ivDate = ivAsOf(s?.iv30_asof ?? null);
   return (
     <div className="quote-header">
@@ -80,7 +85,7 @@ function QuoteHeader({ sym }: { sym: string }) {
       </div>
       {q && (
         <div className="qh-price">
-          <span className="qh-last">{fmt(q.price, "money")}</span>
+          <span className="qh-last"><Flash value={q.price} active={flowing && patch !== null}>{fmt(q.price, "money")}</Flash></span>
           <span className={`qh-chg ${signClass(q.change)}`}>{q.change > 0 ? "+" : ""}{fmt(q.change, "num2")} ({fmt(q.change_pct, "pct_signed")})</span>
           <AsOf ts={q.ts} />
           <SourceBadge source={q.source} delayed={q.delayed === true} />

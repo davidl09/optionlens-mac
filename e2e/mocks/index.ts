@@ -1,11 +1,13 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
 import type { CalcRequest, Watchlist } from "../../src/api/types";
+import * as live from "./live";
 import * as m from "./market";
 import * as refresh from "./refresh";
 import { reportResult, REPORT_DEFS } from "./reports";
 import * as s from "./symbol";
 
-export interface MockResponse { status: number; body: unknown }
+/** `text` (with `contentType`): a non-JSON body, e.g. the live channel's text/event-stream. */
+export interface MockResponse { status: number; body: unknown; text?: string; contentType?: string }
 
 const ok = (body: unknown): MockResponse => ({ status: 200, body });
 /** Endpoints that need a stored chain (404 + code for the NO_CHAIN symbols). */
@@ -18,6 +20,9 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
   const syms = (q.get("symbols") ?? "").split(",").filter(Boolean);
 
   if (p === "/api/health") return ok({ ok: true });
+  if (p === "/api/live/stream") return { status: 200, body: null, text: live.defaultStream(), contentType: "text/event-stream" };
+  if (p === "/api/live/subscribe" && method === "POST") return ok(live.subscribed(body as Parameters<typeof live.subscribed>[0]));
+  if (p === "/api/live/status") return ok(live.STATUS.closed);
   if (p === "/api/ingest/refresh-result" && method === "POST") return ok(refresh.report(body as Parameters<typeof refresh.report>[0]));
   if (p === "/api/status") return ok(m.status());
   if (p === "/api/sources/questrade") return ok(m.questradeStatus());

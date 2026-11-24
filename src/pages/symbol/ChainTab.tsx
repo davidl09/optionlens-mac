@@ -8,6 +8,8 @@ import { StatGrid } from "../../components/StatGrid";
 import { AfterHoursBadge, AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
+import { Flash, isFlowing, useLive, useLiveOption, useLiveQuote, useLiveStatus } from "../../live";
+import { withLiveOption } from "../../live/merge";
 import { describeLeg, useLegs } from "../../state/legs";
 import { ExpiryPills, useQueryValue, useSym } from "./shared";
 
@@ -32,8 +34,12 @@ const SIDE_COLS: Col[] = [
   { key: "theo", label: "Theo", fmt: "money", greek: true, title: "Feed theoretical value" },
 ];
 
-function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side: Side; range: RangeOpt; greeks: boolean; onLeg: (row: OptionRow, qty: number, price: number) => void }) {
-  const spot = chain.underlying.price;
+type OnLeg = (row: OptionRow, qty: number, price: number) => void;
+
+function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side: Side; range: RangeOpt; greeks: boolean; onLeg: OnLeg }) {
+  const stored = chain.underlying.price;
+  const liveSpot = useLiveQuote(chain.symbol)?.price;
+  const spot = liveSpot ?? stored;
   const cols = SIDE_COLS.filter((c) => greeks || !c.greek);
   const callCols = [...cols].reverse();
   const byStrike = useMemo(() => {
@@ -45,38 +51,15 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
   const strikes = useMemo(() => {
     const all = chain.strikes.length ? chain.strikes : [...byStrike.keys()].sort((a, b) => a - b);
     if (range === "all") return all;
-    const atm = nearest(all, spot);
+    const atm = nearest(all, stored);      // the window stays put while the live price moves
     const i = atm === null ? 0 : all.indexOf(atm);
     const n = Number(range);
     return all.slice(Math.max(0, i - n), i + n + 1);
-  }, [chain.strikes, byStrike, range, spot]);
+  }, [chain.strikes, byStrike, range, stored]);
   const spotAfter = strikes.findIndex((k) => k > spot); // spot line goes before this index
-
-  const cell = (row: OptionRow | undefined, c: Col): ReactNode => {
-    if (!row) return <td key={c.key} className="num muted">·</td>;
-    const v = row[c.key];
-    const base = `num ${row.itm ? "itm" : ""}`;
-    if ((c.key === "bid" || c.key === "ask") && !isMissing(v) && (v as number) > 0) {
-      const qty = c.key === "bid" ? -1 : 1;
-      return (
-        <td key={c.key} className={`${base} quote-cell`}>
-          <button className={`quote-btn ${c.key}`} title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money")} → calculator`}
-            onClick={() => onLeg(row, qty, v as number)}>{fmt(v, "num2")}</button>
-        </td>
-      );
-    }
-    if (c.key === "volume") {
-      const hot = row.volume !== null && row.volume > 0 && row.volume > (row.oi ?? 0);
-      return <td key={c.key} className={`${base} ${hot ? "hot" : ""}`} title={hot ? "Volume exceeds open interest" : undefined}>{fmt(v, "int")}</td>;
-    }
-    if (c.key === "last") {
-      return <td key={c.key} className={base}><Link to={`/s/${chain.symbol}/contract/${encodeURIComponent(row.osi)}`} title={row.last_ts ? `Last trade ${fmtDateTime(row.last_ts)} — contract history` : "Contract history"}>{isMissing(v) ? "—" : fmt(v, "num2")}</Link></td>;
-    }
-    if (isMissing(v)) return <td key={c.key} className={base}><NullValue hint={c.key === "iv" ? "Feed reported no IV for this contract." : undefined} /></td>;
-    const computed = computedHint(row, c.key);
-    if (computed) return <td key={c.key} className={base} title={computed}><i>{fmt(v, c.fmt === "money" ? "num2" : c.fmt)}</i></td>;
-    return <td key={c.key} className={`${base} ${c.key === "change" ? signClass(v) : ""}`}>{fmt(v, c.fmt === "money" ? "num2" : c.fmt)}</td>;
-  };
+  // Live: the visible expiry and strike window only (re-subscribed when either changes).
+  useLive(strikes.length ? { symbols: [chain.symbol], chains: [{ symbol: chain.symbol, expiry: chain.expiry, strike_min: strikes[0], strike_max: strikes[strikes.length - 1] }] } : { symbols: [chain.symbol] });
+  const flowing = isFlowing(useLiveStatus());
 
   const showC = side !== "puts", showP = side !== "calls";
   const width = (showC ? cols.length : 0) + (showP ? cols.length : 0) + 1;
@@ -100,11 +83,8 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
             const r = byStrike.get(k) ?? {};
             return (
               <FragmentRow key={k} spotLine={i === spotAfter} spot={spot} left={showC ? cols.length : 0} right={showP ? cols.length : 0}>
-                <tr>
-                  {showC && callCols.map((c) => cell(r.c, c))}
-                  <td className="strike-col">{fmt(k, "num")}<RowSource chain={chain} rows={[r.c, r.p]} /></td>
-                  {showP && cols.map((c) => cell(r.p, c))}
-                </tr>
+                <ChainRow chain={chain} strike={k} call={showC ? r.c : undefined} put={showP ? r.p : undefined} showC={showC} showP={showP}
+                  callCols={callCols} cols={cols} spot={liveSpot ?? null} flowing={flowing} onLeg={onLeg} />
               </FragmentRow>
             );
           })}
@@ -114,6 +94,50 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
     </div>
   );
 }
+
+/** One strike: its call and put with their live fields merged in (each row re-renders only for its own contracts). */
+function ChainRow({ chain, strike, call, put, showC, showP, callCols, cols, spot, flowing, onLeg }: {
+  chain: Chain; strike: number; call?: OptionRow; put?: OptionRow; showC: boolean; showP: boolean; callCols: Col[]; cols: Col[];
+  spot: number | null; flowing: boolean; onLeg: OnLeg;
+}) {
+  const pc = useLiveOption(call?.osi), pp = useLiveOption(put?.osi);
+  const c = call && withLiveOption(call, pc, spot), p = put && withLiveOption(put, pp, spot);
+  return (
+    <tr>
+      {showC && callCols.map((col) => chainCell(chain, c, col, flowing && pc !== null, onLeg))}
+      <td className="strike-col">{fmt(strike, "num")}<RowSource chain={chain} rows={[call, put]} /></td>
+      {showP && cols.map((col) => chainCell(chain, p, col, flowing && pp !== null, onLeg))}
+    </tr>
+  );
+}
+
+function chainCell(chain: Chain, row: OptionRow | undefined, c: Col, live: boolean, onLeg: OnLeg): ReactNode {
+    if (!row) return <td key={c.key} className="num muted">·</td>;
+    const v = row[c.key];
+    const fl = (node: ReactNode) => <Flash value={v} active={live}>{node}</Flash>;
+    const base = `num ${row.itm ? "itm" : ""}`;
+    if ((c.key === "bid" || c.key === "ask") && !isMissing(v) && (v as number) > 0) {
+      const qty = c.key === "bid" ? -1 : 1;
+      return (
+        <td key={c.key} className={`${base} quote-cell`}>
+          <button className={`quote-btn ${c.key}`} title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money")} → calculator`}
+            onClick={() => onLeg(row, qty, v as number)}>{fl(fmt(v, "num2"))}</button>
+        </td>
+      );
+    }
+    if (c.key === "volume") {
+      const hot = row.volume !== null && row.volume > 0 && row.volume > (row.oi ?? 0);
+      return <td key={c.key} className={`${base} ${hot ? "hot" : ""}`} title={hot ? "Volume exceeds open interest" : undefined}>{fl(fmt(v, "int"))}</td>;
+    }
+    if (c.key === "last") {
+      return <td key={c.key} className={base}><Link to={`/s/${chain.symbol}/contract/${encodeURIComponent(row.osi)}`} title={row.last_ts ? `Last trade ${fmtDateTime(row.last_ts)} — contract history` : "Contract history"}>{fl(isMissing(v) ? "—" : fmt(v, "num2"))}</Link></td>;
+    }
+    if (isMissing(v)) return <td key={c.key} className={base}><NullValue hint={c.key === "iv" ? "Feed reported no IV for this contract." : undefined} /></td>;
+    const computed = computedHint(row, c.key);
+    if (computed) return <td key={c.key} className={base} title={computed}><i>{fl(fmt(v, c.fmt === "money" ? "num2" : c.fmt))}</i></td>;
+    return <td key={c.key} className={`${base} ${c.key === "change" ? signClass(v) : ""}`}>{fl(fmt(v, c.fmt === "money" ? "num2" : c.fmt))}</td>;
+}
+
 
 /** Why an IV / greek cell is shown in italics: the engine computed it because the feed sent none. */
 function computedHint(row: OptionRow, key: Col["key"]): string | null {

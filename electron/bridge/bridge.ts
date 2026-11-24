@@ -10,7 +10,7 @@ import { ContractCache, type ContractStore } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { FailureLog } from "./failures";
 import type { IngestApi, RefreshResultBody } from "./ingest";
-import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
@@ -18,7 +18,7 @@ import { OptionsFeed, type OptionsFeedStore } from "./options-feed";
 import { HistoricalPacer } from "./pacer";
 import { Parked, RetryLater, Scheduler, URGENT, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
-import { HIST_RETRY_MS, ledgerKey, parseWants, planWants, type Wants } from "./wants";
+import { HIST_RETRY_MS, ledgerKey, parseLiveWants, parseWants, planWants, type Wants } from "./wants";
 
 export interface BridgeDeps {
   connector: TwsConnector;
@@ -32,6 +32,8 @@ export interface BridgeDeps {
   now?: () => number;
   heartbeatMs?: number;
   wantsMs?: number;
+  /** How often the engine is asked for the symbols on screen (live fallback, INTEGRATION.md §9). */
+  liveMs?: number;
   batchTimeoutMs?: number;
   /** Where saved contract definitions live (one entry per symbol; none: kept nowhere). */
   contractStore?: ContractStore | null;
@@ -39,6 +41,9 @@ export interface BridgeDeps {
   optionsFeedStore?: OptionsFeedStore | null;
 }
 
+/** Live fallback: the engine is asked this often for the symbols on screen (it answers none while Questrade is live). */
+const LIVE_POLL_MS = 5_000;
+const LIVE_KEY = "live-quotes";
 const onDemandKey = (symbol: string) => `ondemand:${symbol.toUpperCase()}`;
 /** Scheduled chain work: a round of it is the IBKR source's "last sweep" (Settings → Data sources). */
 const CHAIN_ROUND_KINDS: readonly JobKind[] = ["chain-universe", "eod-chains"];
@@ -144,6 +149,7 @@ export class Bridge {
     void this.heartbeat();
     this.timers.push(setInterval(() => void this.heartbeat(), this.d.heartbeatMs ?? 60_000));
     this.timers.push(setInterval(() => void this.pollWants(), this.d.wantsMs ?? 5 * 60_000));
+    this.timers.push(setInterval(() => void this.pollLive(), this.d.liveMs ?? LIVE_POLL_MS));
   }
 
   stop(): void {
@@ -338,6 +344,22 @@ export class Bridge {
     } finally {
       this.polling = false;
     }
+  }
+
+  /**
+   * Live fallback (INTEGRATION.md §9): while Questrade is unavailable the engine names the symbols on screen; one
+   * snapshot task of them at a time (a "live" share of TWS time, never pre-empting other work).
+   */
+  async pollLive(): Promise<void> {
+    if (!this.session || this.supervisor.state().paused || this.scheduler.has(LIVE_KEY)) return;
+    let symbols: string[];
+    try {
+      symbols = parseLiveWants(await this.d.ingest.liveWants()).symbols;
+    } catch {
+      return;   // an older engine without live quotes, or not up yet: next poll
+    }
+    if (!symbols.length) return;
+    void this.enqueue(this.task("live", LIVE_KEY, `live quotes (${symbols.length} symbols)`, async (ctx) => { if (await pushLiveQuotes(ctx, symbols)) this.pushed(); }));
   }
 
   private enqueuePlan(w: Wants): void {

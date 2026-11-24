@@ -25,6 +25,7 @@ API against other local processes and web pages.
 | `OPTIONLENS_CHAIN_SOURCES` | `ibkr-bridge,questrade` | Enabled chain sources (no order: no source is preferred, §6 "Chain precedence"): `ibkr-bridge` = chains pushed by the bridge; `questrade` = the engine's own Questrade sweeps (§8), active once a token is pasted. Unknown names: the engine refuses to start |
 | `OPTIONLENS_QUESTRADE_EXPIRIES` | `8` | Questrade sweeps: first N expiries (on/after today) |
 | `OPTIONLENS_QUESTRADE_MONEYNESS` | `0.25` | Questrade sweeps: strikes within ±this fraction of the underlying price |
+| `OPTIONLENS_QUESTRADE_LIVE` | `poll` | Live quotes from Questrade (§9): `poll` = Level 1 snapshots of what is on screen at a cadence within the rate limits; `stream` = Level 1 WebSocket streams (Questrade: freezes the market data of any other IQ platform open at the same time). Anything else: the engine refuses to start |
 | `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `<userData>/data` (macOS `~/Library/Application Support/OptionLens/data`, Windows `%APPDATA%\OptionLens\data`, Linux `~/.config/OptionLens/data`) |
 
 Launch: `python -m optionlens.cli serve [--port N] [--exit-on-stdin-eof]`. Once the API is ready the engine
@@ -77,6 +78,9 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   arrived (close + 20 min: evening, weekend, before the next open), i.e. from IBKR's frozen data of that session.
   `ReportResult.after_hours` / `MarketOverview.after_hours`: some rows' session values are an after-hours fill
   (§6 "After-hours fills"). The UI shows a neutral "Last session's close (collected after hours)" badge for them.
+- `CalcRequest.spot` (optional, > 0): the renderer's live underlying price, used instead of the stored chain's;
+  `CalcResult.legs[].osi`: the contract each option leg priced (null for stock legs), so the calculator can follow
+  its live quote (§9).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
   of that same value, and only when it is from the last session (else null: stale, never shown as today's).
@@ -188,6 +192,11 @@ POST /api/ingest/refresh-result            // an on-demand refresh's state (§7)
   "status": "unavailable",                 // "failed" (RefreshResult)
   "message": "IBKR's contract server is unavailable; …", "waiting_for": "contract-server" }   // both optional
 → 200 RefreshStatus (§7)
+GET /api/ingest/live-wants                 // the symbols on screen to snapshot now (§9): only while the bridge is
+→ 200 {"symbols": ["AAPL", ...], "interval_s": 5}  // the live fallback (Questrade unavailable), else []. The bridge
+                                           // polls it every 5 s while connected and runs one "live" task at a time
+                                           // (a weighted share of TWS time, weight 6; never pre-empts), posting the
+                                           // quotes to /api/ingest/quotes as the stats pass does
 POST /api/ingest/ack-wants                 // the bridge accepted (queued) these wants
 { "kind": "option_bars", "items": [ { "symbol": "AAPL", "sessions": ["2026-11-18"] } ] }
 → 200 {"recorded": n_session_symbol_pairs}
@@ -486,3 +495,73 @@ never archived, never over the session's own data; it also refreshes an idle tok
 asked again 30 min later, and the run says "N symbols … failed recently" instead of "covered". Swept: the universe plus SPX, NDX, RUT, XSP. With ~1,150 symbols a sweep is ~3,500 calls (the day's first ~5,800
 with the daily symbol info), under the 10,500/h budget; the on-demand refresh of an opened symbol also uses Questrade
 when it is connected (§7).
+
+---------------------------------------------------------------------------------------------------
+## 9. Live quotes (everything on screen updates while the market is open)
+
+**Verified in Questrade's API documentation** (questrade.com/api/documentation, "Streaming", "Rate limiting",
+"markets/quotes/:id", "markets/quotes/options"; read 2026-11-24):
+- L1 streaming: "you can use either WebSocket or RawSocket"; "You must specify stream=true (or '"stream": true' in
+  JSON) and then the mode": `GET v1/markets/quotes?ids=…&stream=true&mode=WebSocket` for equities, and **options can
+  be streamed** the same way: `POST v1/markets/quotes/options` with `"stream": true, "mode": "WebSocket"` and `filters`
+  and/or `optionIds` (also `markets/quotes/strategies`). The answer is `{"streamPort": N}`; "Ports for L1 are separate
+  but still remain same for the same URL within the same day".
+- Handshake: on a WebSocket "send the access token as a message without any delimiters"; "Do not use the word Bearer
+  in sockets"; a recognized token is answered `{"success": true}` (RawSocket: token + a space within 5 s).
+- Session: "Keeping a socket open does not extend your session. You need to send requests at least every 30 minutes
+  otherwise your socket will get disconnected when the session expires."
+- "If you use L1 Streaming in Trading API, then your market data will freeze in any other IQ Platform that you are using
+  simultaneously." — hence polling is the default and streaming opt-in (`OPTIONLENS_QUESTRADE_LIVE=stream`).
+- Rate limits: market-data calls 20/s and 15,000/h (§8); the table lists `markets/quotes/:id` but not
+  `markets/quotes/options` or how streams count, so every quote and stream-port request goes through the same 70% gate.
+- Snap quotes: without a real-time data package "call to get quote is considered snap quote and limit per market can be
+  quickly reached … the response will return delayed data (check "delay")". The user's account answers `delay` 0
+  (real-time), verified live during development.
+- **Not documented** (so not relied on, or marked unverified in code): the maximum symbols per stream or per quote
+  call, the number of concurrent streams, keep-alive / ping behaviour, the socket URL path, and the format of stream
+  messages (the engine assumes the REST shape `{"quotes"|"optionQuotes": [...]}` with possibly partial fields, merged per
+  symbolId, as client libraries do). Quote calls carry at most 100 ids (our choice).
+
+**Architecture** (engine `optionlens/live/`, renderer `src/live/`): one subsystem behind a narrow contract.
+- `POST /api/live/subscribe {client_id, symbols[], option_contracts[] (OSI), chains[{symbol, expiry, strike_min,
+  strike_max}]}` replaces that window's set (≤ 500 symbols, 1,000 contracts, 8 chain views; chain views resolve to the
+  served contracts of that expiry in the band). → `{client_id, symbols, contracts, status}`.
+- `GET /api/live/stream?client_id=` (text/event-stream, same Bearer token; the renderer reads it with fetch streaming,
+  so no token in a URL): `event: status` `{state, source, session, mode, interval_s, symbols, contracts, detail}` and
+  `event: patch` `{quotes: {SYM: {price, change, change_pct, bid, ask, open, high, low, prev_close, volume, delayed,
+  source, ts}}, options: {OSI: {bid, ask, mid, last, volume, oi, iv, delta, gamma, theta, vega, delayed, source, ts}}}`
+  with only changed fields; a `: keep-alive` comment every 15 s. A window without an open stream for 30 s is dropped.
+  `GET /api/live/status` is the current status.
+- `state`: `live` (data flowing, real-time) · `delayed` (flowing, `delay` set) · `connecting` · `stale` (no success for
+  max(10 s, 3 × the poll interval), detail = the last error) · `market_closed` (outside 04:00–20:00 ET on NYSE trading
+  days, or only options wanted outside 09:30–close; nothing is fetched) · `not_connected` (no usable source) · `idle`
+  (nothing subscribed). Extended hours (04:00–09:30, close–20:00) keep underlyings live, never options.
+- Source: Questrade while it is usable (connected, not needing attention); when it is unavailable, or failing for 30 s,
+  and the IBKR bridge is connected, the bridge snapshots the visible symbols (`live-wants`, §6; option cells keep the
+  stored chain) — the Questrade driver keeps retrying and takes over again on its first success.
+- The hub keeps exactly the union of all windows' sets live (Registry/diff), coalesces to at most one update per key per
+  250 ms per window, keeps the latest values in memory and persists the changed ones every 60 s: `quotes_latest`
+  field-wise (`source` the live source) and the served `option_latest` rows' market fields (`iv_source` /
+  `greeks_source` relabelled when an IV / greeks arrive; the chain's fetch time, source and `delayed` unchanged, so
+  "Chain precedence" is unaffected). Never `option_eod`: archives come only from the closing snapshot job. The chain
+  cache of patched symbols is dropped. On shutdown open streams are ended first (uvicorn would wait for them).
+- Polling cadence (`live/questrade.py`): one round = ⌈symbols/100⌉ GET `markets/quotes` + ⌈contracts/100⌉ POST
+  `markets/quotes/options {"optionIds"}`; every `max(2 s, calls / ((10,500 − 6,000)/3600 s))`: live polling uses at
+  most the 4,500/h left after a 6,000/h reserve for the sweeps (the day's first sweep ~5,800), all within the 70% gate
+  (10,500/h, 14/s). E.g. a quote header: every 2 s; a chain window of ±10 strikes (42 contracts) + its underlying: 2 s;
+  300 contracts + 1 underlying (4 calls): 3.2 s; 1,000 contracts (11 calls): 8.8 s. A changed set is polled at once
+  (at most once a second). Ids: `symbols/search` (cached), `symbols/:id` once a day (previous close), `symbols/:id/options`
+  once per underlying per day (option ids).
+- Streaming mode: one equity and one option stream for the union; reopened after a set change (1 s debounce), renewed 60 s
+  before the access token expires (new port request with a fresh token), reopened after a drop with backoff (2^n s, max
+  30 s); after 3 failed attempts in a row (a stream open ≥ 60 s resets the count) it polls for 15 min, then tries again.
+- Renderer: `useLive(subscription)` registers what a view shows (refcounted; the window's union is posted, debounced
+  250 ms); `useLiveQuote(symbol)` / `useLiveOption(osi)` / `useLiveCell` read values; `merge.ts` patches Quotes,
+  OptionRows, report cells and the last daily bar. A changed value gets a 600 ms static tint (no animation, no layout
+  shift; same with prefers-reduced-motion). A hidden or minimized window (Electron background throttling) unsubscribes
+  and closes its stream. What updates: the symbol header quote; the chain (visible expiry and strike window only); the
+  calculator (live spot, legs' live mid / IV for legs without a typed price, recomputed via `/api/calc/strategy` at most
+  once a second); watchlist tables; dashboard index cards, gainers / losers / watchlist rows; report pages (price,
+  change, bid / ask / last / mid, volume, IV / greeks of option rows on the current page; the report re-runs quietly every
+  45 s while live, keeping sort, filters, page and scroll); the chart's last candle (at most once a second).
+  History-based metrics (IV rank, HV, returns, backtests) are not live.

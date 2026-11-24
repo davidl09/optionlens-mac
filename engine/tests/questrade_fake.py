@@ -44,6 +44,8 @@ class FakeQuestrade:
         self.unquoted = {option_id("2026-11-20", 100, "P")}   # listed, no quote
         self.no_vol = {option_id("2026-11-20", 90, "C")}      # quoted, volatility 0
         self.scope_denied = False   # the personal app lacks the market-data permission: 403 code 1016 on every call
+        self.stream_port = 0        # what a `stream=true` quote request answers (live/stream.py)
+        self.price = 100.2          # XYZ's last trade
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -74,15 +76,17 @@ class FakeQuestrade:
             return httpx.Response(200, json={"symbols": [{"symbol": "XYZ", "symbolId": 1000, "hasOptions": True,
                                                           "prevDayClosePrice": 98.0}]}, headers=h)
         if path == "/v1/markets/quotes":
-            return httpx.Response(200, json={"quotes": [{
-                "symbol": "XYZ", "symbolId": 1000, "bidPrice": 99.9, "askPrice": 100.1, "lastTradePriceTrHrs": 100.0,
-                "lastTradePrice": 100.2, "volume": 1_000_000, "openPrice": 98.5, "highPrice": 101.0, "lowPrice": 98.0,
-                "delay": bool(self.delay), "isHalted": False}]}, headers=h)
+            if request.url.params.get("stream") == "true":
+                return httpx.Response(200, json={"streamPort": self.stream_port}, headers=h)
+            ids = [int(i) for i in request.url.params.get("ids", "1000").split(",")]
+            return httpx.Response(200, json={"quotes": [self.equity_quote()] if 1000 in ids else []}, headers=h)
         if path == "/v1/symbols/1000/options":
             return httpx.Response(200, json=_chain(), headers=h)
         if path == "/v1/markets/quotes/options" and request.method == "POST":
-            return httpx.Response(200, json={"optionQuotes": self._option_quotes(json.loads(request.content))},
-                                  headers=h)
+            body = json.loads(request.content)
+            if body.get("stream"):
+                return httpx.Response(200, json={"streamPort": self.stream_port}, headers=h)
+            return httpx.Response(200, json={"optionQuotes": self._option_quotes(body)}, headers=h)
         return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
 
     def _login(self, request: httpx.Request) -> httpx.Response:
@@ -100,23 +104,23 @@ class FakeQuestrade:
                                          "expires_in": self.expires_in, "refresh_token": new,
                                          "api_server": f"{API}/"})
 
+    def equity_quote(self) -> dict:
+        return {"symbol": "XYZ", "symbolId": 1000, "bidPrice": 99.9, "askPrice": 100.1, "lastTradePriceTrHrs": 100.0,
+                "lastTradePrice": self.price, "volume": 1_000_000, "openPrice": 98.5, "highPrice": 101.0,
+                "lowPrice": 98.0, "delay": bool(self.delay), "isHalted": False}
+
     def _option_quotes(self, body: dict) -> list[dict]:
-        out = []
-        for f in body["filters"]:
-            expiry = f["expiryDate"][:10]
-            for k in STRIKES:
-                if not f["minstrikePrice"] <= k <= f["maxstrikePrice"]:
-                    continue
-                for right in ("C", "P"):
-                    sid = option_id(expiry, k, right)
-                    if sid in self.unquoted:
-                        continue
-                    itm = max(0.0, (100 - k) if right == "C" else (k - 100))
-                    out.append({"underlying": "XYZ", "underlyingId": 1000, "symbol": f"XYZ{expiry}{right}{k}",
-                                "symbolId": sid, "bidPrice": round(itm + 1.0, 2), "askPrice": round(itm + 1.2, 2),
-                                "lastTradePrice": round(itm + 1.1, 2), "lastTradeTime": "2026-11-19T15:00:00.000000-05:00",
-                                "volume": 10, "openInterest": 100,
-                                "volatility": 0 if sid in self.no_vol else 31.5, "delta": 0.5 if right == "C" else -0.5,
-                                "gamma": 0.02, "theta": -0.05, "vega": 0.1, "rho": 0.01, "delay": self.delay,
-                                "isHalted": False})
-        return out
+        wanted = [(f["expiryDate"][:10], k, right) for f in body.get("filters") or [] for k in STRIKES
+                  if f["minstrikePrice"] <= k <= f["maxstrikePrice"] for right in ("C", "P")]
+        by_id = {option_id(e, k, r): (e, k, r) for e in EXPIRIES for k in STRIKES for r in ("C", "P")}
+        wanted += [by_id[i] for i in body.get("optionIds") or [] if i in by_id]
+        return [self.option_quote(*w) for w in wanted if option_id(*w) not in self.unquoted]
+
+    def option_quote(self, expiry: str, k: int, right: str) -> dict:
+        sid = option_id(expiry, k, right)
+        itm = max(0.0, (100 - k) if right == "C" else (k - 100))
+        return {"underlying": "XYZ", "underlyingId": 1000, "symbol": f"XYZ{expiry}{right}{k}", "symbolId": sid,
+                "bidPrice": round(itm + 1.0, 2), "askPrice": round(itm + 1.2, 2), "lastTradePrice": round(itm + 1.1, 2),
+                "lastTradeTime": "2026-11-19T15:00:00.000000-05:00", "volume": 10, "openInterest": 100,
+                "volatility": 0 if sid in self.no_vol else 31.5, "delta": 0.5 if right == "C" else -0.5,
+                "gamma": 0.02, "theta": -0.05, "vega": 0.1, "rho": 0.01, "delay": self.delay, "isHalted": False}

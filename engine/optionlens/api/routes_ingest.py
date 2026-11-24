@@ -8,9 +8,11 @@ from typing import Annotated, Literal
 from fastapi import APIRouter
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
+from .. import live
 from ..models import normalize_symbol
 from ..services import ingest, refresh
 from .deps import respond, symbol_param
+from .json import ApiJSON
 
 router = APIRouter(prefix="/api/ingest", tags=["ingest"])
 
@@ -264,3 +266,9 @@ async def refresh_result(req: RefreshResultIn):
 async def wants():
     return await respond(ingest.wants)
 
+
+
+@router.get("/live-wants")
+async def live_wants():
+    """The visible symbols the bridge should snapshot now (only while it is the live fallback, docs §9)."""
+    return ApiJSON(live.instance().bridge_wants())

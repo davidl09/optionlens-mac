@@ -336,9 +336,10 @@ export interface CalcRequest {
   eval_date?: ISODate;             // P/L curve date (default today)
   price_range?: [number, number];  // default spot ±(3σ to last expiry, min 20%)
   points?: number;                 // default 121
+  spot?: number;                   // the live underlying price (default: the stored chain's)
 }
 export interface CalcResult {
-  spot: number; asof: ISODateTime | null; legs: (Leg & { price: number; iv: number | null; mid: number | null })[];
+  spot: number; asof: ISODateTime | null; legs: (Leg & { price: number; iv: number | null; mid: number | null; osi?: string | null })[];  // osi: the contract (live quotes)
   cost: number;                    // net debit (+) / credit (−) in dollars
   prices: number[];
   pnl_expiry: number[];            // at first (nearest) expiry among option legs; later legs valued by BSM

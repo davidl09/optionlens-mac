@@ -6,6 +6,8 @@ import type { ColumnDef, ColumnFilter, ReportRow } from "../api/types";
 import { toCsv, downloadText } from "../lib/csv";
 import { badgeTone, displayScale, fmt, isMissing, isNumericFmt, signClass } from "../lib/format";
 import { emptyColumnKeys, humanize } from "../lib/table";
+import { Flash, isFlowing, useLive, useLiveCell, useLiveStatus } from "../live";
+import { liveKeyOf, rowKeys } from "../live/merge";
 import { isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
 export interface SortState { key: string; dir: "asc" | "desc" }
@@ -36,6 +38,11 @@ export interface DataTableProps {
   /** Shown when there are no rows at all: say why (a reason, not a bare "No data"). */
   emptyState?: ReactNode;
   rowClass?: (row: ReportRow) => string | undefined;
+  /**
+   * Live-patch the quote columns (price, change, bid/ask/last, volume…) of the rows on the current page
+   * (INTEGRATION.md §9). Rows keep their order until the data reloads, so sorting and scrolling stay put.
+   */
+  live?: boolean;
 }
 
 const LOW_CARDINALITY = 14;
@@ -102,6 +109,16 @@ const SOURCE_COLUMN: ColumnDef = { key: "source", label: "Source", fmt: "text", 
 export function withSourceColumn(columns: ColumnDef[], rows: ReportRow[]): ColumnDef[] {
   if (columns.some((c) => c.key === "source") || !rows.some((r) => isDataSource(r.source))) return columns;
   return [...columns, SOURCE_COLUMN];
+}
+
+/** A cell of a live table: the row's value, or the live one for its key (merge.liveKeyOf), flashing on change. */
+function LiveCell({ col, row, flowing }: { col: ColumnDef; row: ReportRow; flowing: boolean }) {
+  const key = liveKeyOf(row, col.key);
+  const f = useLiveCell(key);
+  const v = f ? (f as Record<string, unknown>)[col.key] : undefined;
+  if (!key) return <Cell col={col} row={row} />;
+  const live = v !== undefined && v !== null;
+  return <Flash value={live ? v : row[col.key]} active={flowing && live}><Cell col={col} row={live ? { ...row, [col.key]: v } : row} /></Flash>;
 }
 
 export function Cell({ col, row }: { col: ColumnDef; row: ReportRow }) {
@@ -243,7 +260,9 @@ export function DataTable(props: DataTableProps) {
   const [pageSize, setPageSize] = useState(props.pageSize ?? 100);
 
   const view = useMemo(() => applyTable(rows, state), [rows, state]);
-  useEffect(() => setPage(0), [state.filters, state.sort, rows]);
+  useEffect(() => setPage(0), [state.filters, state.sort]);
+  // New rows (a re-run) keep the page unless it no longer exists.
+  useEffect(() => setPage((p) => Math.min(p, Math.max(0, Math.ceil(view.length / pageSize) - 1))), [view.length, pageSize]);
 
   const hiddenSet = useMemo(() => new Set(state.hidden), [state.hidden]);
   // Columns without a value in any row are hidden by default (a toggle brings them back); never one with data.
@@ -255,6 +274,9 @@ export function DataTable(props: DataTableProps) {
   const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const pageRows = minimal ? view : view.slice(page * pageSize, page * pageSize + pageSize);
   const activeFilters = columns.filter((c) => filterActive(state.filters[c.key]));
+  const liveRows = useMemo(() => (props.live ? rowKeys(pageRows) : null), [props.live, pageRows]);
+  useLive(liveRows);
+  const flowing = isFlowing(useLiveStatus());
 
   const rowLink = props.rowLink === false ? null : props.rowLink ?? ((r: ReportRow) => (typeof r.symbol === "string" && r.symbol ? `/s/${encodeURIComponent(r.symbol)}` : null));
 
@@ -343,7 +365,7 @@ export function DataTable(props: DataTableProps) {
                   const custom = renderCell?.(c, r);
                   return (
                     <td key={c.key} className={isNumericFmt(c.fmt) ? "num" : c.fmt === "text" && String(r[c.key] ?? "").length > LONG_TEXT ? "wrap-cell" : undefined}>
-                      {custom !== undefined ? custom : <Cell col={c} row={r} />}
+                      {custom !== undefined ? custom : props.live ? <LiveCell col={c} row={r} flowing={flowing} /> : <Cell col={c} row={r} />}
                       {ci === 0 && r.pricing === "model" && <> <ModelBadge /></>}
                     </td>
                   );

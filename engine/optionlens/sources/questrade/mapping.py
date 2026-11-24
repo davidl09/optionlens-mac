@@ -184,3 +184,24 @@ def snapshot(quote: Quote, listed: Iterable[Listed], quotes: Mapping[int, Mappin
     delayed = bool(quote.delayed) or any(is_delayed(q) for q in quotes.values())
     return ChainSnapshot(quote, tuple(contract(quote.symbol, c, quotes.get(c.symbol_id)) for c in rows),
                          fetched_at, delayed)
+
+
+# ----------------------------------------------------------------------------- live quotes (live/questrade.py)
+QUOTE_LIVE_FIELDS = ("price", "change", "change_pct", "bid", "ask", "open", "high", "low", "prev_close", "volume")
+OPTION_LIVE_FIELDS = ("bid", "ask", "mid", "last", "volume", "oi", "iv", "delta", "gamma", "theta", "vega")
+
+
+def live_quote(q: Mapping, symbol: str, prev_close: float | None, at: datetime) -> dict:
+    """An equity / index Level 1 quote -> the live patch of `symbol` ({QUOTE_LIVE_FIELDS..., delayed}); the same
+    reading as parse_quote (a live price is the last trade, else the mid)."""
+    p = parse_quote(q, symbol, prev_close, at, final=False)
+    return {**{k: getattr(p, k) for k in QUOTE_LIVE_FIELDS}, "delayed": bool(p.delayed)}
+
+
+def live_option(symbol: str, c: Listed, q: Mapping) -> dict:
+    """An option Level 1 quote -> the live patch of its contract ({OPTION_LIVE_FIELDS..., delayed}); the same
+    reading as contract()."""
+    o = contract(symbol, c, q)
+    mid = (o.bid + o.ask) / 2.0 if o.bid is not None and o.ask is not None else None
+    return {"bid": o.bid, "ask": o.ask, "mid": mid, "last": o.last, "volume": o.volume, "oi": o.oi, "iv": o.iv,
+            "delta": o.delta, "gamma": o.gamma, "theta": o.theta, "vega": o.vega, "delayed": is_delayed(q)}
