@@ -113,6 +113,14 @@ export type RefreshResult =
   | { status: "unavailable"; message: string; waitingFor?: "contract-server" | "market-hours" }
   | { status: "failed"; message: string };
 
+/** Intraday bars for the spans the engine could not fill (GET /bars?interval=… `missing`, INTEGRATION.md §5). */
+export type IntradayInterval = "1m" | "5m" | "15m" | "1h";
+export interface IntradayRequest { symbol: string; interval: IntradayInterval; spans: { start: string; end: string }[] }
+export type IntradayResult =
+  | { status: "fetched"; bars: number }      // pushed to the engine (POST /api/ingest/intraday-bars)
+  | { status: "unavailable"; message: string }   // bridge off / TWS not connected / paused
+  | { status: "failed"; message: string };
+
 export type Result = { ok: true } | { ok: false; error: string };
 
 /** A command an MCP client runs to start a stdio server. */
@@ -139,6 +147,8 @@ export interface DesktopApi {
   refreshSymbol(symbol: string): Promise<RefreshResult>;
   /** The page that asked for refreshSymbol(symbol) went away: drop the refresh if it has not finished. */
   cancelRefresh(symbol: string): Promise<void>;
+  /** IBKR historical bars (TRADES, all hours) for these spans, pushed to the engine; resolves when done. */
+  intradayBars(req: IntradayRequest): Promise<IntradayResult>;
   cancelJobs(kind?: JobKind): Promise<void>;
   onEngineStatus(cb: (s: EngineStatus) => void): () => void;
   onBridgeStatus(cb: (s: BridgeStatus) => void): () => void;
@@ -166,6 +176,7 @@ export const IPC = {
   bridgeStatus: "bridge:status",
   refreshSymbol: "bridge:refresh",
   cancelRefresh: "bridge:cancel-refresh",
+  intradayBars: "bridge:intraday-bars",
   cancelJobs: "bridge:cancel",
   updateStatus: "update:status",
   checkForUpdates: "update:check",

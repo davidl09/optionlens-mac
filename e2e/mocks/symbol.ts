@@ -1,7 +1,7 @@
 // Per-symbol fixtures conforming to src/api/types.ts.
 import type {
   Activity, BacktestResult, BacktestTrade, Bar, Chain, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, ExpiryInfo,
-  Fundamentals, ImpliedMoves, Insiders, NewsItem, OpenInterest, OptionRow, PriceAction, Profile, Quote, ReportResult, Seasonality, Skew,
+  Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, NewsItem, OpenInterest, OptionRow, PriceAction, Profile, Quote, ReportResult, Seasonality, Skew,
   StraddleInfo, SymbolSummary, TradeIdea, TradeIdeas, VolSeasonality, Volatility,
 } from "../../src/api/types";
 import { addDays, between, NOW, pick, reseed, rnd, round, rowsFor, SYMBOLS, TODAY, tradingDays, walk } from "./gen";
@@ -14,6 +14,32 @@ export function quote(sym: string): Quote {
 
 /** Stored daily history: 10 years, except DELL (a short history: no SMA 200 yet). */
 const HISTORY_DAYS = (sym: string) => (sym === "DELL" ? 150 : 2520);
+
+const INTERVAL_MIN: Record<IntradayInterval, number> = { "1m": 1, "5m": 5, "15m": 15, "1h": 60 };
+const SESSIONS: Record<IntradayRange, number> = { "1d": 1, "5d": 5, "1m": 21, "3m": 63 };
+
+/** Like the engine's /bars?interval=…: bars of the range's sessions up to NOW (15:45 ET), times as
+ * EST (−05:00) throughout; extended adds 04:00–09:30 and (before today) 16:00–20:00. */
+export function intradayBars(sym: string, interval: IntradayInterval, range: IntradayRange, extended: boolean): IntradayBars {
+  const step = INTERVAL_MIN[interval];
+  const days = tradingDays(SESSIONS[range]);
+  reseed(7 + step);
+  let p = SPOT * 0.98;
+  const bars = days.flatMap((d) => {
+    const out = [];
+    const nowMin = d === TODAY ? 15 * 60 + 45 : 24 * 60;
+    for (let m = extended ? 4 * 60 : 9 * 60 + 30; m < Math.min(extended ? 20 * 60 : 16 * 60, nowMin); m += step) {
+      const o = p;
+      p = round(p * (1 + (rnd() - 0.5) * 0.002));
+      out.push({ ts: new Date(Date.parse(`${d}T05:00:00Z`) + m * 60_000).toISOString(), open: round(o), high: round(Math.max(o, p) * 1.0005), low: round(Math.min(o, p) * 0.9995), close: p, volume: Math.round(between(1e4, 9e4) * step) });
+    }
+    return out;
+  });
+  return {
+    symbol: sym, interval, range, extended, start: `${days[0]}T09:00:00Z`, end: NOW, bars, has_extended: true,
+    sources: ["questrade"], delayed: false, missing: [], problem: null,
+  };
+}
 
 /** Like the engine's /bars: the range's bars, with SMAs over the full stored history. */
 export function bars(sym: string, range: string): Bar[] {

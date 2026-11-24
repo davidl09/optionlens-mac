@@ -90,6 +90,33 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   request in flight (the newest inputs are sent when it ends, so a slow engine never freezes the result);
   `price_range` is pinned per position (legs, evaluation date, IV shift) while the spot stays inside it, and the P/L
   axis keeps its range until a curve leaves it, so live ticks move the curves without rescaling the chart.
+- **Intraday bars**: `GET /api/symbol/{sym}/bars?interval=1m|5m|15m|1h&range=1d|5d|1m|3m&extended=0|1` →
+  `IntradayBars` (types.ts); without `interval` the endpoint is the daily one, unchanged (`Bar[]`, ranges
+  1m…10y|max). Offered combinations (else 422): 1d: 1m/5m/15m; 5d: 5m/15m/1h; 1m: 15m/1h; 3m: 1h. A range is 1 or
+  5 sessions, or 1 or 3 calendar months, ending now (the latest session is today once it started: 09:30 ET, 04:00 ET
+  with `extended`). `bars[].ts` is the bar's start (UTC, the UI shows New York time); regular hours (09:30 to the
+  close) unless `extended=1`; `has_extended` says whether pre-market / after-hours bars are stored (the UI offers the
+  toggle only then). Bars are stored per (symbol, interval) in `intraday_bars` with the spans already fetched
+  (`intraday_spans`), kept 10 days (1m), 60 days (5m) or a year (15m, 1h); a request fetches only the missing spans.
+  Sources are asked for every hour they have (04:00–20:00 ET), so one series serves both views; the last 20 minutes
+  are never recorded as fetched (the current bar is still forming, delayed feeds deliver late) and are asked for
+  again. Source order: Questrade candles (`GET v1/markets/candles/:id?startTime&endTime&interval=OneMinute|
+  FiveMinutes|FifteenMinutes|OneHour`, "limited to returning 2,000 candlesticks in a single response", a Market Data
+  call under the §8 rate gate): request windows group the spans' session hours (trading days 04:00–20:00 ET) into at
+  most 2,000 bars each, and a response of 2,000 candles is continued after its last candle. Spans no engine-side
+  source could fill come back as `missing` (with `problem`, e.g. "questrade: not connected"): the desktop app then
+  asks the IBKR bridge once per series (`DesktopApi.intradayBars`), which requests TRADES bars with useRTH 0 (all
+  hours, for the same reason) in windows its bar size allows (1 min: a day, 5/15 min: a week, 1 hour: a month),
+  paced by the historical pacer plus IBKR's small-bar rules (no identical request within 15 s, at most 60 in 10
+  minutes), and pushes each window:
+  `POST /api/ingest/intraday-bars {source, symbol, interval, delayed: bool|null, spans: [{start, end}], bars: [{ts,
+  open, high, low, close, volume}]}` → `{stored, symbol}` (spans: what the window covered; bars outside regular hours
+  are kept for the extended view). `sources` / `delayed` describe the bars shown (Questrade's `delayed` is the
+  account's last seen quote delay; IBKR historical bars: null, unknown). Live: while quotes flow the chart's last bar
+  follows the live price (≤ 1 update/s), rolling to a new bar at the interval boundary; its volume grows by the
+  quote's day-volume deltas, or stays the source's bar volume without them. Intraday SMAs are over the loaded bars
+  ("SMA 20 (bars)"); earnings / dividend markers are drawn on daily ranges only; the time axis has one slot per bar
+  (nights and weekends collapsed).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
   of that same value, and only when it is from the last session (else null: stale, never shown as today's).

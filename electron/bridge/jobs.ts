@@ -2,7 +2,9 @@
 // Market-data work is done in batches no larger than the line budget; every historical
 // request goes through the pacer (begin → request → success | violation → RetryLater).
 import { assembleChain, assembleUnderlying, expiryCoverage, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract, type ChainShape, type ExpiryCoverage, type ExpiryPick } from "./chain";
+import type { IntradayInterval } from "../shared/api";
 import type { IngestApi, IngestChain, IngestQuote, OptionBar, UnderlyingStat } from "./ingest";
+import { BAR_SIZE, barStart, durationOf, endDateTime, type Chunk } from "./intraday";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
 import type { LineBudget } from "./line-budget";
@@ -530,5 +532,24 @@ export async function pushOptionBars(ctx: JobContext, symbol: string, contract: 
       : [];
   });
   if (rows.length) await ctx.ingest.optionBars({ source: "ibkr", symbol, bars: rows });
+  return rows.length;
+}
+
+/**
+ * Intraday TRADES bars of one request window (intraday.chunks), every hour IBKR has (useRTH 0: one stored series
+ * serves the regular-hours and the extended-hours view), pushed with the window as the span they cover.
+ */
+export async function pushIntradayBars(ctx: JobContext, symbol: string, interval: IntradayInterval, c: Chunk): Promise<number> {
+  const bars = await pacedHistorical(ctx, underlyingContract(symbol), {
+    duration: durationOf(c), whatToShow: "TRADES", useRth: false, barSize: BAR_SIZE[interval], endDateTime: endDateTime(c.end),
+  });
+  const rows = bars.filter(validBar).flatMap((b) => {
+    const t = barStart(b);
+    return t !== null && t >= c.start && t <= c.end
+      ? [{ ts: new Date(t).toISOString(), open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }]
+      : [];
+  });
+  await ctx.ingest.intradayBars({ source: "ibkr", symbol, interval, delayed: null,
+    spans: [{ start: new Date(c.start).toISOString(), end: new Date(c.end).toISOString() }], bars: rows });
   return rows.length;
 }

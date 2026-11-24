@@ -1,4 +1,5 @@
-// IBKR historical-data pacing gate. Every historical request the bridge makes is for daily bars. IBKR's
+// IBKR historical-data pacing gate. The bridge's historical requests are daily bars, and intraday bars on request
+// (1 min to 1 hour, also gated by IntradayGate below). IBKR's
 // hard pacing limits (60 requests per 10 minutes, identical requests within 15 s, 6 per contract within
 // 2 s) apply to bars of 30 seconds or less; daily bars are only soft-throttled. So:
 //   - requests are serialized by the scheduler; starts are ≥ the current spacing apart (default 1 s),
@@ -77,5 +78,43 @@ export class HistoricalPacer implements Gate {
       this.spacing = Math.max(this.minSpacing, this.spacing / 2);
       this.successes = 0;
     }
+  }
+}
+
+/**
+ * Extra limits for intraday bar requests: IBKR's hard "small bars" pacing rules (written for bars of 30 s or less,
+ * applied here to every intraday request to stay well clear of them): at most 60 requests in any 10 minutes and no
+ * identical request (same contract, bar size, end and duration) within 15 s. These requests also go through the
+ * HistoricalPacer (spacing, backoff after a violation), whose ≥ 1 s spacing keeps them under 6 per contract in 2 s.
+ */
+export class IntradayGate {
+  private readonly now: () => number;
+  private starts: number[] = [];
+  private readonly lastByKey = new Map<string, number>();
+
+  private readonly max: number;
+  private readonly window: number;
+  private readonly identical: number;
+
+  constructor(o: { now?: () => number; maxPerWindow?: number; windowMs?: number; identicalMs?: number } = {}) {
+    this.now = o.now ?? Date.now;
+    this.max = o.maxPerWindow ?? 60;
+    this.window = o.windowMs ?? 600_000;
+    this.identical = o.identicalMs ?? 15_000;
+  }
+
+  /** Earliest time (epoch ms) a request with this key may start. */
+  readyAt(key: string, now = this.now()): number {
+    this.starts = this.starts.filter((t) => t > now - this.window);
+    const byWindow = this.starts.length >= this.max ? this.starts[0] + this.window : now;
+    const last = this.lastByKey.get(key);
+    return Math.max(now, byWindow, last === undefined ? now : last + this.identical);
+  }
+
+  begin(key: string): void {
+    const now = this.now();
+    this.starts.push(now);
+    this.lastByKey.set(key, now);
+    for (const [k, t] of this.lastByKey) if (t <= now - this.identical) this.lastByKey.delete(k);
   }
 }

@@ -5,7 +5,7 @@ import type { BridgeStatus } from "../shared/api";
 import { Bridge } from "./bridge";
 import { emptyMarket, FakeConnector, FakeSession, memoryContractStore } from "./fake-tws.test-helper";
 import type { ContractStore } from "./contract-cache";
-import type { Heartbeat, IngestApi, IngestChain, RefreshResultBody, UnderlyingStats } from "./ingest";
+import type { Heartbeat, IngestApi, IngestChain, IntradayBarsPush, RefreshResultBody, UnderlyingStats } from "./ingest";
 import { CONTRACTS_UNAVAILABLE, OPTION_QUOTES_CLOSED } from "./jobs";
 import type { OptionsFeedStore } from "./options-feed";
 import { Ledger } from "./ledger";
@@ -34,8 +34,9 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
   const reports: RefreshResultBody[] = [];
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
   const quoteBodies: unknown[] = [];
+  const intraday: IntradayBarsPush[] = [];
   const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
-    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
+    underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), intradayBars: async (b) => { intraday.push(b); return rec("intraday")(b); }, heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
     refreshResult: async (b) => { reports.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
@@ -45,7 +46,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
     contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
   });
-  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies };
+  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies, intraday };
 }
 
 const WANTS = {
@@ -109,6 +110,37 @@ describe("Bridge", () => {
     expect(h.reports.map((r) => `${r.symbol}:${r.status}`)).toEqual(["AAPL:pending", "AAPL:refreshed", "AAPL:pending", "AAPL:fresh"]);
     expect(h.reports[1]).toEqual({ source: "ibkr", symbol: "AAPL", status: "refreshed", message: null, waiting_for: null });
     h.bridge.stop();
+  });
+
+  it("intraday bars: one paced request per window (1-min bars: a day each), pushed with the span they cover", async () => {
+    const m = market();
+    m.historical = (_c, r) => {
+      if (r.barSize !== "1 min") return [];
+      const end = Date.parse(`${r.endDateTime!.slice(0, 4)}-${r.endDateTime!.slice(4, 6)}-${r.endDateTime!.slice(6, 8)}T${r.endDateTime!.slice(9)}Z`);
+      return [0, 1, 2].map((i) => ({ time: String((end - (i + 1) * 60_000) / 1000), open: 10, high: 11, low: 9, close: 10.5, volume: 7 }));
+    };
+    const h = harness({ iv_history: [] }, m);
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const span = { start: "2026-11-18T09:00:00.000Z", end: "2026-11-20T09:00:00.000Z" };
+    const p = h.bridge.intradayBars({ symbol: "AAPL", interval: "1m", spans: [span] });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await p).toEqual({ status: "fetched", bars: 6 });
+    const reqs = h.session.historicalCalls.filter((c) => c.req.barSize === "1 min").map((c) => c.req);
+    expect(reqs).toEqual([
+      { duration: "86400 S", whatToShow: "TRADES", useRth: false, barSize: "1 min", endDateTime: "20261120-09:00:00" },
+      { duration: "86400 S", whatToShow: "TRADES", useRth: false, barSize: "1 min", endDateTime: "20261119-09:00:00" },
+    ]);
+    expect(h.intraday.map((b) => b.spans)).toEqual([[{ start: "2026-11-19T09:00:00.000Z", end: span.end }], [{ start: span.start, end: "2026-11-19T09:00:00.000Z" }]]);
+    expect(h.intraday[0]).toMatchObject({ source: "ibkr", symbol: "AAPL", interval: "1m", delayed: null });
+    expect(h.intraday[0].bars[0]).toEqual({ ts: "2026-11-20T08:59:00.000Z", open: 10, high: 11, low: 9, close: 10.5, volume: 7 });
+    h.bridge.stop();
+  });
+
+  it("intraday bars: unavailable while not connected", async () => {
+    const h = harness({});
+    expect(await h.bridge.intradayBars({ symbol: "AAPL", interval: "5m", spans: [{ start: "2026-11-19T09:00:00Z", end: "2026-11-20T09:00:00Z" }] }))
+      .toEqual({ status: "unavailable", message: "Not connected to IB Gateway / TWS." });
   });
 
   it("reports the last chain round, the last chain and grouped failure reasons in its status", async () => {

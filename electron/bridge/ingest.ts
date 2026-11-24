@@ -41,6 +41,14 @@ export interface UnderlyingStats { source: "ibkr"; session_date: string; ts: str
 export interface IngestQuotes { source: "ibkr"; delayed: boolean; quotes: IngestQuote[] }
 export interface OptionBar { expiry: string; strike: number; right: "C" | "P"; date: string; open: N; high: N; low: N; close: number; volume: N }
 export interface OptionBars { source: "ibkr"; symbol: string; bars: OptionBar[] }
+/** Intraday bars for spans the engine could not fill (INTEGRATION.md §5): `spans` is what was fetched, all hours. */
+export interface IntradayBarsPush {
+  source: "ibkr"; symbol: string; interval: "1m" | "5m" | "15m" | "1h";
+  /** Unknown for historical bars (null). */
+  delayed: boolean | null;
+  spans: { start: string; end: string }[];
+  bars: { ts: string; open: number; high: number; low: number; close: number; volume: N }[];
+}
 /** IBKR lists no options for the symbol (no option parameters / no future expiries): the engine marks it optionable=false. */
 export interface NoOptions { source: "ibkr"; symbol: string }
 /** The bridge accepted (queued) these wants; the engine counts only accepted option_bars offers. */
@@ -70,6 +78,7 @@ export interface IngestApi {
   quotes(b: IngestQuotes): Promise<unknown>;
   underlyingStats(b: UnderlyingStats): Promise<unknown>;
   optionBars(b: OptionBars): Promise<unknown>;
+  intradayBars(b: IntradayBarsPush): Promise<unknown>;
   ackWants(b: AckWants): Promise<unknown>;
   heartbeat(b: Heartbeat): Promise<unknown>;
   refreshResult(b: RefreshResultBody): Promise<unknown>;
@@ -86,6 +95,7 @@ export function ingestApi(http: JsonHttp): IngestApi {
     quotes: (b) => http.post("/api/ingest/quotes", b),
     underlyingStats: (b) => http.post("/api/ingest/underlying-stats", b),
     optionBars: (b) => http.post("/api/ingest/option-bars", b),
+    intradayBars: (b) => http.post("/api/ingest/intraday-bars", b),
     ackWants: (b) => http.post("/api/ingest/ack-wants", b),
     heartbeat: (b) => http.post("/api/ingest/heartbeat", b),
     refreshResult: (b) => http.post("/api/ingest/refresh-result", b),

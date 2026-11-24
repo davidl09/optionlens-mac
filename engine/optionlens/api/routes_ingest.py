@@ -10,7 +10,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import live
 from ..models import normalize_symbol
-from ..services import ingest, refresh
+from ..services import ingest, intraday, refresh
 from .deps import respond, symbol_param
 from .json import ApiJSON
 
@@ -246,6 +246,35 @@ async def option_bars(req: OptionBarsIn):
 @router.post("/ack-wants")
 async def ack_wants(req: AckWantsIn):
     return await respond(ingest.ack_wants, req.model_dump())
+
+
+class IntradayBarIn(_In):
+    ts: AwareDatetime                    # the bar's start
+    open: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    high: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    low: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    close: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+    volume: Count | None = None
+
+
+class SpanIn(_In):
+    start: AwareDatetime
+    end: AwareDatetime
+
+
+class IntradayBarsIn(_In):
+    source: Source
+    symbol: Symbol
+    interval: Literal["1m", "5m", "15m", "1h"]
+    delayed: bool | None = None          # null: unknown
+    spans: list[SpanIn] = Field(min_length=1, max_length=intraday.MAX_PUSH_SPANS)   # what was fetched (all hours)
+    bars: list[IntradayBarIn] = Field(max_length=intraday.MAX_PUSH_BARS)
+
+
+@router.post("/intraday-bars")
+async def intraday_bars(req: IntradayBarsIn):
+    """Intraday bars a client fetched for the `missing` spans of GET /bars?interval=… (docs §5 "Intraday bars")."""
+    return await respond(intraday.store_pushed, req.model_dump())
 
 
 class RefreshResultIn(_In):

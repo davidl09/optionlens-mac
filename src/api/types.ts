@@ -27,6 +27,22 @@ export interface Bar {
   sma20?: number | null; sma50?: number | null; sma200?: number | null;
 }
 
+/** GET /bars?interval=… (INTEGRATION.md §5 "Intraday bars"). */
+export type IntradayInterval = "1m" | "5m" | "15m" | "1h";
+export type IntradayRange = "1d" | "5d" | "1m" | "3m";
+export interface IntradayBar { ts: ISODateTime; open: number; high: number; low: number; close: number; volume: number | null }   // ts: the bar's start
+export interface TimeSpan { start: ISODateTime; end: ISODateTime }
+export interface IntradayBars {
+  symbol: string; interval: IntradayInterval; range: IntradayRange; extended: boolean;
+  start: ISODateTime; end: ISODateTime;
+  bars: IntradayBar[];              // regular hours only unless `extended`
+  has_extended: boolean;            // the stored bars include pre-market / after-hours ones (the toggle is offered)
+  sources: DataSource[];            // of the bars shown, most bars first
+  delayed: boolean | null;          // null: unknown or mixed
+  missing: TimeSpan[];              // spans no engine-side source could fill (the desktop app asks the IBKR bridge)
+  problem: string | null;           // why, when a configured source could not be used (e.g. "questrade: not connected")
+}
+
 // ---------------- status ----------------
 export interface JobRun { job: string; started_at: ISODateTime; finished_at: ISODateTime | null; ok: boolean | null; detail: string | null }
 export interface Status {

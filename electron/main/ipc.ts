@@ -1,7 +1,8 @@
 // IPC handlers for the preload API (electron/shared/api.ts). Only frames served from app://optionlens may
 // call them; every argument from the renderer is validated here.
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
-import { IPC, JOB_KINDS, type AppSettings, type BridgeStatus, type EngineStatus, type JobKind, type LoginItemStatus, type McpSetup, type RefreshResult, type Result, type UpdateStatus } from "../shared/api";
+import { parseIntradayRequest } from "../bridge/intraday";
+import { IPC, JOB_KINDS, type AppSettings, type BridgeStatus, type EngineStatus, type IntradayRequest, type IntradayResult, type JobKind, type LoginItemStatus, type McpSetup, type RefreshResult, type Result, type UpdateStatus } from "../shared/api";
 import { APP_ORIGIN } from "./protocol";
 
 export interface IpcBackend {
@@ -14,6 +15,7 @@ export interface IpcBackend {
   bridgeStatus(): BridgeStatus;
   refreshSymbol(symbol: string): Promise<RefreshResult>;
   cancelRefresh(symbol: string): void;
+  intradayBars(req: IntradayRequest): Promise<IntradayResult>;
   cancelJobs(kind?: JobKind): void;
   updateStatus(): UpdateStatus;
   checkForUpdates(): Promise<void>;
@@ -49,6 +51,10 @@ export function registerIpc(b: IpcBackend): void {
   handle(IPC.cancelRefresh, (sym) => {
     if (typeof sym !== "string" || !SYMBOL_RE.test(sym)) throw new Error("invalid symbol");
     b.cancelRefresh(sym);
+  });
+  handle(IPC.intradayBars, (req) => {
+    const r = parseIntradayRequest(req);
+    return r ? b.intradayBars(r) : ({ status: "failed", message: "invalid request" } satisfies IntradayResult);
   });
   handle(IPC.updateStatus, () => b.updateStatus());
   handle(IPC.checkForUpdates, () => b.checkForUpdates());

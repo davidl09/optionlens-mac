@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
-from ...models import ChainSnapshot, OptionContract, Quote, Right, normalize_symbol
+from ...analytics.calendar import NY
+from ...models import ChainSnapshot, IntradayBar, OptionContract, Quote, Right, normalize_symbol
 from ..osi import PM_ROOTS, format_osi, standard_roots
 
 STANDARD_MULTIPLIER = 100
@@ -205,3 +206,25 @@ def live_option(symbol: str, c: Listed, q: Mapping) -> dict:
     mid = (o.bid + o.ask) / 2.0 if o.bid is not None and o.ask is not None else None
     return {"bid": o.bid, "ask": o.ask, "mid": mid, "last": o.last, "volume": o.volume, "oi": o.oi, "iv": o.iv,
             "delta": o.delta, "gamma": o.gamma, "theta": o.theta, "vega": o.vega, "delayed": is_delayed(q)}
+
+
+# ----------------------------------------------------------------------------- candles
+# GET v1/markets/candles/:id `interval` values (Enumerations, "Historical Data Granularity").
+CANDLE_INTERVAL = {"1m": "OneMinute", "5m": "FiveMinutes", "15m": "FifteenMinutes", "1h": "OneHour"}
+
+
+def candle_time(ts: datetime) -> str:
+    """A candles startTime / endTime: New York time with its offset, as in the docs' sample (2014-10-01T00:00:00-05:00)."""
+    return ts.astimezone(NY).isoformat(timespec="seconds")
+
+
+def candles(payload: Mapping) -> list[IntradayBar]:
+    """`candles` -> IntradayBar (start = the candle's `start`); candles without a positive OHLC are dropped."""
+    out = []
+    for c in payload.get("candles") or []:
+        ts = _ts(c.get("start"))
+        o, h, l, cl = (_price(c.get(k)) for k in ("open", "high", "low", "close"))
+        if ts is None or ts.tzinfo is None or None in (o, h, l, cl):
+            continue
+        out.append(IntradayBar(ts, o, h, l, cl, _count(c.get("volume"))))
+    return out

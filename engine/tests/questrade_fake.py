@@ -4,6 +4,7 @@ shapes of questrade.com/api/documentation. One underlying, XYZ (symbolId 1000): 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 import httpx
@@ -47,6 +48,9 @@ class FakeQuestrade:
         self.stream_port = 0        # what a `stream=true` quote request answers (live/stream.py): one per session,
         self.option_stream_port: int | None = None   # for equities and options alike, unless this is set
         self.price = 100.2          # XYZ's last trade
+        self.listed = {"XYZ": 1000, "SPY": 1001}   # symbols/search hits
+        self.candle_cap = 2000      # candles per response (documented limit)
+        self.candle_hours = (4, 20)  # ET hours candles exist (pre-market to after-hours)
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -69,9 +73,9 @@ class FakeQuestrade:
         h = self.headers
         if path == "/v1/symbols/search":
             prefix = request.url.params["prefix"]
-            hits = [{"symbol": prefix, "symbolId": 1000 if prefix == "XYZ" else 1001, "securityType": "Stock",
+            hits = [{"symbol": prefix, "symbolId": self.listed[prefix], "securityType": "Stock",
                      "currency": "USD", "listingExchange": "NYSE", "isQuotable": True, "isTradable": True}] \
-                if prefix in ("XYZ", "SPY") else []
+                if prefix in self.listed else []
             return httpx.Response(200, json={"symbols": hits}, headers=h)
         if path == "/v1/symbols/1000":
             return httpx.Response(200, json={"symbols": [{"symbol": "XYZ", "symbolId": 1000, "hasOptions": True,
@@ -89,7 +93,29 @@ class FakeQuestrade:
                 port = self.stream_port if self.option_stream_port is None else self.option_stream_port
                 return httpx.Response(200, json={"streamPort": port}, headers=h)
             return httpx.Response(200, json={"optionQuotes": self._option_quotes(body)}, headers=h)
+        if path.startswith("/v1/markets/candles/"):
+            return httpx.Response(200, json={"candles": self.candles(request.url.params)}, headers=h)
         return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
+
+    STEP = {"OneMinute": 60, "FiveMinutes": 300, "FifteenMinutes": 900, "OneHour": 3600}
+
+    def candles(self, params) -> list[dict]:
+        """Candles every interval from startTime to endTime on weekdays within candle_hours ET (EST, -05:00), at most
+        candle_cap (the first ones), prices a slow ramp."""
+        from optionlens.analytics.calendar import NY
+        step = timedelta(seconds=self.STEP[params["interval"]])
+        t, end = datetime.fromisoformat(params["startTime"]), datetime.fromisoformat(params["endTime"])
+        t = datetime.fromtimestamp(-(-t.timestamp() // step.total_seconds()) * step.total_seconds(), timezone.utc)
+        out = []
+        while t <= end and len(out) < self.candle_cap:
+            ny = t.astimezone(NY)
+            if ny.weekday() < 5 and self.candle_hours[0] <= ny.hour < self.candle_hours[1]:
+                p = 100 + (t.timestamp() % 86400) / 8640
+                out.append({"start": ny.isoformat(timespec="microseconds"), "end": (ny + step).isoformat(timespec="microseconds"),
+                            "low": round(p - 0.2, 2), "high": round(p + 0.3, 2), "open": round(p, 2),
+                            "close": round(p + 0.1, 2), "volume": 1000})
+            t += step
+        return out
 
     def _login(self, request: httpx.Request) -> httpx.Response:
         form = parse_qs(request.content.decode())

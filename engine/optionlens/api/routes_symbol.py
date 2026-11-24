@@ -1,17 +1,20 @@
 """/api/symbol/{sym}/... — per-symbol pages (SPEC §8, §10)."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, get_args
 
 from fastapi import APIRouter, Depends, Query
 
-from ..services import refresh, symbol, symbol_company, symbol_earnings, symbol_options, symbol_vol
+from ..services import intraday, refresh, symbol, symbol_company, symbol_earnings, symbol_options, symbol_vol
+from ..services.errors import BadRequest
 from .deps import respond, symbol_param
 from .json import ApiJSON
 
 router = APIRouter(prefix="/api/symbol/{sym}", tags=["symbol"])
 Sym = Depends(symbol_param)
 Range = Literal["1m", "3m", "6m", "1y", "3y", "5y", "10y", "max"]
+IntradayRange = Literal["1d", "5d", "1m", "3m"]
+Interval = Literal["1m", "5m", "15m", "1h"]
 
 
 @router.post("/refresh")
@@ -31,8 +34,17 @@ async def summary(sym: str = Sym):
 
 
 @router.get("/bars")
-async def bars(sym: str = Sym, range: Range = "1y"):
-    return await respond(symbol.bars, sym, range)
+async def bars(sym: str = Sym, range: str = "1y", interval: Interval | None = None, extended: bool = False):
+    """Daily bars (Bar[]) of `range`; with `interval`, intraday bars (IntradayBars) of an intraday `range`."""
+    if interval is not None:
+        return ApiJSON(await intraday.bars(sym, interval, _literal(range, IntradayRange), extended))
+    return await respond(symbol.bars, sym, _literal(range, Range))
+
+
+def _literal(value: str, allowed) -> str:
+    if value not in get_args(allowed):
+        raise BadRequest(f"range must be one of {', '.join(get_args(allowed))}")
+    return value
 
 
 @router.get("/price-action")

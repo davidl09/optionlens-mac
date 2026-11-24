@@ -27,7 +27,11 @@ export interface OptionParams { exchange: string; tradingClass: string; multipli
 
 export type WhatToShow = "OPTION_IMPLIED_VOLATILITY" | "HISTORICAL_VOLATILITY" | "TRADES";
 
-export interface HistoricalRequest { duration: string; whatToShow: WhatToShow; useRth: boolean }
+export type BarSize = "1 day" | "1 min" | "5 mins" | "15 mins" | "1 hour";
+
+/** `barSize` (default "1 day"): intraday sizes answer bar times as epoch seconds (formatDate 2). `endDateTime`:
+ * "yyyyMMdd-HH:mm:ss" UTC (default: now). */
+export interface HistoricalRequest { duration: string; whatToShow: WhatToShow; useRth: boolean; barSize?: BarSize; endDateTime?: string }
 
 /** A market-data event for one subscription. Field numbers are IBKR tick types. */
 export type TickEvent =

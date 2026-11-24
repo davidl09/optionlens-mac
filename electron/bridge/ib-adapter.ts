@@ -2,7 +2,7 @@
 // that knows the library; it maps request ids to promises/handlers, applies per-request timeouts and
 // shields the bridge from listener exceptions (a bad tick never crashes the process).
 import { BarSizeSetting, EventName, IBApi, isNonFatalError, MarketDataType, type Contract, type ContractDetails, type SecType as IbSecType } from "@stoqey/ib";
-import { CODE, TwsRequestError, TwsTimeoutError, type ConnectOptions, type HistBar, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import { CODE, TwsRequestError, TwsTimeoutError, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
 
 /** Outgoing messages per second: @stoqey/ib queues every request and cancel and sends at this rate. */
 const MSG_RATE = 40;
@@ -153,7 +153,7 @@ class IbSession implements TwsSession {
     });
   }
 
-  async historical(contract: TwsContract, req: { duration: string; whatToShow: string; useRth: boolean }, signal: AbortSignal): Promise<HistBar[]> {
+  async historical(contract: TwsContract, req: HistoricalRequest, signal: AbortSignal): Promise<HistBar[]> {
     const ibc = toIb(contract);
     const bars: HistBar[] = [];
     let listener: ((...a: unknown[]) => void) | null = null;
@@ -164,7 +164,8 @@ class IbSession implements TwsSession {
         bars.push({ time: String(time), open: Number(open), high: Number(high), low: Number(low), close: Number(close), volume: Number.isFinite(Number(volume)) && Number(volume) >= 0 ? Number(volume) : null });
       };
       this.ib.on(EventName.historicalData, listener);
-      this.ib.reqHistoricalData(reqId, ibc, "", req.duration, BarSizeSetting.DAYS_ONE, req.whatToShow as never, req.useRth ? 1 : 0, 1, false);
+      const size = (req.barSize ?? BarSizeSetting.DAYS_ONE) as BarSizeSetting;
+      this.ib.reqHistoricalData(reqId, ibc, req.endDateTime ?? "", req.duration, size, req.whatToShow as never, req.useRth ? 1 : 0, size === BarSizeSetting.DAYS_ONE ? 1 : 2, false);
     }, (reqId) => this.ib.cancelHistoricalData(reqId));
     return p.finally(() => { if (listener) this.ib.off(EventName.historicalData, listener); });
   }

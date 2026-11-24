@@ -239,6 +239,7 @@ async function main(): Promise<void> {
     bridgeStatus: () => bridge.status(),
     refreshSymbol: (sym) => bridge.refreshSymbol(sym),
     cancelRefresh: (sym) => bridge.cancelRefresh(sym),
+    intradayBars: (req) => bridge.intradayBars(req),
     cancelJobs: (kind?: JobKind) => bridge.cancel(kind),
     updateStatus: () => updater.status(),
     checkForUpdates: () => updater.check(),

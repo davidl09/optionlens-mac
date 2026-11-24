@@ -369,7 +369,7 @@ test("stock backtest: the entry rule select works with the keyboard", async ({ p
 
 test("chart: SMAs from the full stored history; a too-short history is said, not drawn", async ({ page }) => {
   const p = await setup(page, [/404/]);
-  await page.goto("/s/AAPL/chart?range=1m");
+  await page.goto("/s/AAPL/chart?range=1m&interval=1d");   // 1M of daily bars (1M is 15-min bars by default)
   await expect(page.locator(".legend-note")).toContainText("SMAs use the full stored price history");
   await expect(page.locator(".legend-note")).not.toContainText("not enough stored history");
   await page.goto("/s/DELL/chart");

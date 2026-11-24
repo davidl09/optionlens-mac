@@ -81,6 +81,17 @@ class Bar:
 
 
 @dataclass(frozen=True, slots=True)
+class IntradayBar:
+    """One intraday OHLCV bar; `ts` is its start (aware)."""
+    ts: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class EarningsEvent:
     symbol: str
     date: date

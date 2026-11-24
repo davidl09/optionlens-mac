@@ -1,68 +1,173 @@
 // Stock group: chart, price action, dividends.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
-import type { Bar, ColumnDef, PriceAction, ReportRow } from "../../api/types";
+import type { Bar, ColumnDef, IntradayBar, IntradayBars, PriceAction, ReportRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
-import { CandlesVolume, ChartMarker, SMA_LENGTHS, type SmaLength, smasWithData } from "../../components/charts/Candles";
+import { type CandleSeries, CandlesVolume, ChartMarker, dailySeries, SMA_LENGTHS, type SmaLength, smasWithData } from "../../components/charts/Candles";
 import { LineChart, LineSeries } from "../../components/charts/Charts";
 import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
-import { Async, Card, EmptyNotice, InfoBox, Segmented } from "../../components/ui";
+import { Async, Card, EmptyNotice, InfoBox, Segmented, SourceBadge } from "../../components/ui";
+import { desktop } from "../../desktop";
+import type { IntradayResult } from "../../../electron/shared/api";
+import { barLabel, barTitle, CHART_RANGES, chartView, inRegularHours, INTERVAL_LABEL, INTERVAL_MS, RANGE_INTERVALS, smaOf, type ChartView } from "../../lib/chartRange";
 import { todayNY } from "../../lib/dates";
 import { fmt } from "../../lib/format";
 import { isFlowing, useLive, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
+import { nextCandle, withLiveCandle, type LiveCandle } from "../../live/candles";
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 
-const RANGES = ["1m", "3m", "6m", "1y", "3y", "5y", "10y"] as const;
-
 /** The candles with today's bar following the live price (at most once a second; only while quotes flow). */
-function LiveCandles({ sym, bars, smas, markers }: { sym: string; bars: Bar[]; smas: SmaLength[]; markers: ChartMarker[] }) {
+function LiveDailyCandles({ sym, bars, smas, markers }: { sym: string; bars: Bar[]; smas: SmaLength[]; markers: ChartMarker[] }) {
   useLive({ symbols: [sym] });
   const flowing = isFlowing(useLiveStatus());
   const patch = useThrottled(useLiveQuote(sym), 1000);
   const shown = useMemo(() => (flowing ? withLiveBar(bars, patch, todayNY()) : bars), [bars, patch, flowing]);
-  return <CandlesVolume bars={shown} smas={smas} markers={markers} />;
+  const series = useMemo(() => dailySeries(shown, smas, markers), [shown, smas, markers]);
+  return <CandlesVolume series={series} live />;
 }
 
-export function ChartTab() {
-  const sym = useSym();
-  const [range, setRange] = useQueryValue("range", "1y");
-  const [smas, setSmas] = useState<SmaLength[]>([50, 200]);
-  const bars = useApi(() => api.bars(sym, range ?? "1y"), [sym, range]);
+function DailyChart({ sym, range, smas }: { sym: string; range: string; smas: SmaLength[] }) {
+  const bars = useApi(() => api.bars(sym, range), [sym, range]);
   const events = useApi(() => api.events(sym), [sym]);
   const markers = useMemo<ChartMarker[]>(() => (events.data?.items ?? [])
     .filter((e) => e.past && (e.kind === "earnings" || e.kind === "ex_dividend"))
     .map((e) => ({ date: e.date, kind: e.kind === "earnings" ? "E" : "D", label: `${e.date}: ${e.label}` })), [events.data]);
+  return (
+    <Async state={bars}>{(b) => {
+      if (!b.length) return <EmptyNotice>No daily price history stored for {sym} yet (it is collected from Nasdaq every evening).</EmptyNotice>;
+      const missing = smas.filter((n) => !smasWithData(b, [n]).length);
+      return (
+        <>
+          <LiveDailyCandles sym={sym} bars={b} smas={smas} markers={markers} />
+          <div className="legend-note small muted">
+            <span className="dot e" /> E = earnings · <span className="dot d" /> D = ex-dividend · SMAs use the full stored price history
+            {missing.length > 0 && <> · {missing.map((n) => `SMA ${n}`).join(", ")}: not enough stored history yet</>}
+          </div>
+        </>
+      );
+    }}</Async>
+  );
+}
 
+/**
+ * The intraday bars' missing spans from the IBKR bridge (desktop app only): asked once per series shown, then the
+ * bars are reloaded. Returns the bridge's answer (null: not asked).
+ */
+function useBridgeFill(sym: string, data: IntradayBars | null, reload: () => void): IntradayResult | "fetching" | null {
+  const [state, setState] = useState<IntradayResult | "fetching" | null>(null);
+  const asked = useRef(new Set<string>());
+  const key = data ? `${sym}|${data.interval}|${data.range}` : null;
+  useEffect(() => { setState(null); }, [key]);
+  useEffect(() => {
+    if (!desktop || !data || !key || !data.missing.length || asked.current.has(key)) return undefined;
+    asked.current.add(key);
+    let alive = true;
+    setState("fetching");
+    desktop.intradayBars({ symbol: sym, interval: data.interval, spans: data.missing }).then((r) => {
+      if (!alive) return;
+      setState(r);
+      if (r.status === "fetched" && r.bars > 0) reload();
+    }, (e: unknown) => { if (alive) setState({ status: "failed", message: (e as Error).message }); });
+    return () => { alive = false; };
+  }, [sym, key, data, reload]);
+  return state;
+}
+
+/** The last bar following the live price while quotes flow (at most once a second; regular hours unless extended). */
+function useLiveCandle(sym: string, bars: IntradayBar[], intervalMs: number, extended: boolean): IntradayBar[] {
+  useLive({ symbols: [sym] });
+  const flowing = isFlowing(useLiveStatus());
+  const patch = useThrottled(useLiveQuote(sym), 1000);
+  const [candle, setCandle] = useState<LiveCandle | null>(null);
+  useEffect(() => setCandle(null), [bars, intervalMs]);   // new stored bars: start again from them
+  useEffect(() => {
+    if (!flowing || patch?.price == null) return;
+    const at = patch.ts ? Date.parse(patch.ts) : Date.now();
+    if (!extended && !inRegularHours(at)) return;
+    setCandle((c) => nextCandle(c, { price: patch.price as number, volume: patch.volume ?? null, at }, intervalMs, bars[bars.length - 1]));
+  }, [patch, flowing, extended, intervalMs, bars]);
+  return useMemo(() => withLiveCandle(bars, flowing ? candle : null), [bars, candle, flowing]);
+}
+
+function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[]): CandleSeries {
+  return {
+    labels: bars.map((b) => barLabel(b.ts, range)), titles: bars.map((b) => barTitle(b.ts)), bars,
+    smas: smas.filter((n) => bars.length >= n).map((n) => ({ label: `SMA ${n} (bars)`, length: n, values: smaOf(bars, n) })),
+    markers: [],
+  };
+}
+
+function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; smas: SmaLength[]; fill: IntradayResult | "fetching" | null }) {
+  const shown = useLiveCandle(sym, d.bars, INTERVAL_MS[d.interval], d.extended);
+  const series = useMemo(() => intradaySeries(shown, d.range, smas), [shown, d.range, smas]);
+  const short = smas.filter((n) => shown.length < n);
+  const bridge = fill === "fetching" ? "Fetching the missing bars from IBKR…"
+    : fill && fill.status !== "fetched" ? `IBKR: ${fill.message}` : null;
+  return (
+    <>
+      {d.bars.length > 0 ? <CandlesVolume series={series} live key={`${d.range}|${d.interval}|${d.extended}`} />
+        : <EmptyNotice>{bridge ?? `No ${d.interval} bars stored for ${sym} in this range yet${d.problem ? ` (${d.problem})` : ""}. They come from Questrade (Settings → Data sources) or, in the desktop app, from the IBKR bridge.`}</EmptyNotice>}
+      <div className="legend-note small muted">
+        Times in New York (ET) · {d.extended ? "including pre-market and after-hours" : "regular hours"} · overnight and weekend gaps collapsed
+        {d.sources.length > 0 && <> · Source {d.sources.map((s) => <SourceBadge key={s} source={s} />)}{d.delayed && <SourceBadge source={null} delayed />}</>}
+        {smas.length > 0 && <> · SMAs over the loaded bars</>}
+        {short.length > 0 && <> · {short.map((n) => `SMA ${n}`).join(", ")}: fewer than {short[0]} bars loaded</>}
+        {d.bars.length > 0 && bridge && <> · {bridge}</>}
+        {d.bars.length > 0 && d.problem && !bridge && d.missing.length > 0 && <> · Some bars missing ({d.problem})</>}
+      </div>
+    </>
+  );
+}
+
+function IntradayChart({ sym, view, extended, smas, onExtended }: {
+  sym: string; view: Extract<ChartView, { kind: "intraday" }>; extended: boolean; smas: SmaLength[]; onExtended: (available: boolean) => void;
+}) {
+  const st = useApi(() => api.intradayBars(sym, view.interval, view.range, extended), [sym, view.interval, view.range, extended]);
+  const fill = useBridgeFill(sym, st.data, st.reload);
+  const hasExtended = st.data?.has_extended ?? false;
+  useEffect(() => onExtended(hasExtended), [hasExtended, onExtended]);
+  return <Async state={st}>{(d) => <IntradayBody sym={sym} d={d} smas={smas} fill={fill} />}</Async>;
+}
+
+export function ChartTab() {
+  const sym = useSym();
+  const [rangeQ, setRange] = useQueryValue("range", "1y");
+  const [intervalQ, setIntervalQ] = useQueryValue("interval", null);
+  const [extQ, setExt] = useQueryValue("ext", null);
+  const view = chartView(rangeQ, intervalQ);
+  const extended = extQ === "1";
+  const [smas, setSmas] = useState<SmaLength[]>([50, 200]);
+  const [extAvailable, setExtAvailable] = useState(false);   // the source has pre-market / after-hours bars here
+  const offered = RANGE_INTERVALS[view.range];
+  const interval = view.kind === "daily" ? "1d" : view.interval;
   return (
     <Card title="Price chart" actions={
       <div className="toolbar">
-        <Segmented label="Range" value={range ?? "1y"} onChange={setRange} options={RANGES.map((r) => ({ value: r, label: r.toUpperCase() }))} />
+        <Segmented label="Range" value={view.range} onChange={setRange} options={CHART_RANGES.map((r) => ({ value: r, label: r.toUpperCase() }))} />
+        {offered.length > 1 && (
+          <Segmented label="Interval" value={interval} onChange={(i) => setIntervalQ(i === offered[0] ? null : i)}
+            options={offered.map((i) => ({ value: i, label: INTERVAL_LABEL[i], title: i === "1d" ? "Daily bars" : `${i} bars` }))} />
+        )}
+        {view.kind === "intraday" && (extAvailable || extended) && (
+          <label className={`chip ${extended ? "on" : ""}`} title="Show pre-market (from 04:00 ET) and after-hours (to 20:00 ET) bars where the source has them">
+            <input type="checkbox" checked={extended} onChange={() => setExt(extended ? null : "1")} />Extended hours
+          </label>
+        )}
         <div className="toggle-chips">
           {SMA_LENGTHS.map((n) => (
             <label key={n} className={`chip ${smas.includes(n) ? "on" : ""}`}>
               <input type="checkbox" checked={smas.includes(n)} onChange={() => setSmas((s) => (s.includes(n) ? s.filter((x) => x !== n) : [...s, n].sort((a, b) => a - b)))} />
-              SMA {n}
+              SMA {n}{view.kind === "intraday" ? " (bars)" : ""}
             </label>
           ))}
         </div>
       </div>
     }>
-      <Async state={bars}>{(b) => {
-        if (!b.length) return <EmptyNotice>No daily price history stored for {sym} yet (it is collected from Nasdaq every evening).</EmptyNotice>;
-        const missing = smas.filter((n) => !smasWithData(b, [n]).length);
-        return (
-          <>
-            <LiveCandles sym={sym} bars={b} smas={smas} markers={markers} />
-            <div className="legend-note small muted">
-              <span className="dot e" /> E = earnings · <span className="dot d" /> D = ex-dividend · SMAs use the full stored price history
-              {missing.length > 0 && <> · {missing.map((n) => `SMA ${n}`).join(", ")}: not enough stored history yet</>}
-            </div>
-          </>
-        );
-      }}</Async>
+      {view.kind === "daily" ? <DailyChart sym={sym} range={view.range} smas={smas} />
+        : <IntradayChart sym={sym} view={view} extended={extended} smas={smas} onExtended={setExtAvailable} />}
     </Card>
   );
 }

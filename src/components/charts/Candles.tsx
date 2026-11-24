@@ -1,4 +1,5 @@
-// Candlestick + volume (two stacked grids sharing one category axis), SMA overlays, event markers.
+// Candlestick + volume (two stacked grids sharing one category axis), SMA overlays, event markers. One category per
+// bar, so nights and weekends take no room on intraday charts.
 import { useMemo } from "react";
 import type { Bar } from "../../api/types";
 import { fmt } from "../../lib/format";
@@ -11,6 +12,17 @@ export const SMA_LENGTHS = [20, 50, 200] as const;
 export type SmaLength = (typeof SMA_LENGTHS)[number];
 const SMA_KEY = { 20: "sma20", 50: "sma50", 200: "sma200" } as const;
 
+export interface CandleBar { open: number; high: number; low: number; close: number; volume: number | null }
+
+/** What the chart draws: per bar an axis label, a tooltip title and OHLCV; SMA lines; markers by bar index. */
+export interface CandleSeries {
+  labels: string[];
+  titles: string[];
+  bars: CandleBar[];
+  smas: { label: string; length: SmaLength; values: (number | null)[] }[];
+  markers: { index: number; kind: "E" | "D"; label: string }[];
+}
+
 /** The engine's full-history SMA of each bar (null before enough history). */
 export function smaSeries(bars: Bar[], n: SmaLength): (number | null)[] {
   return bars.map((b) => b[SMA_KEY[n]] ?? null);
@@ -21,37 +33,46 @@ export function smasWithData(bars: Bar[], smas: readonly SmaLength[]): SmaLength
   return smas.filter((n) => bars.some((b) => b[SMA_KEY[n]] != null));
 }
 
-export function CandlesVolume({ bars, smas: wanted, markers, height = 460 }: { bars: Bar[]; smas: readonly SmaLength[]; markers: ChartMarker[]; height?: number }) {
+/** Daily bars as a chart series: date labels, the engine's SMAs, markers on the first bar on/after their date. */
+export function dailySeries(bars: Bar[], smas: readonly SmaLength[], markers: ChartMarker[]): CandleSeries {
+  const dates = bars.map((b) => b.date);
+  const index = new Map(dates.map((d, i) => [d, i]));
+  return {
+    labels: dates, titles: dates, bars,
+    smas: smasWithData(bars, smas).map((n) => ({ label: `SMA ${n}`, length: n, values: smaSeries(bars, n) })),
+    markers: markers.flatMap((m) => {
+      const i = index.get(m.date) ?? dates.findIndex((d) => d >= m.date);
+      return i < 0 ? [] : [{ index: i, kind: m.kind, label: m.label }];
+    }),
+  };
+}
+
+/** `live`: the series updates in place (live candle): the user's zoom is kept across updates. */
+export function CandlesVolume({ series, height = 460, live = false }: { series: CandleSeries; height?: number; live?: boolean }) {
   const p = usePalette();
   const option = useMemo(() => {
-    const dates = bars.map((b) => b.date);
-    const smas = smasWithData(bars, wanted);
-    const index = new Map(dates.map((d, i) => [d, i]));
-    const smaColors = [p.series[3], p.series[4], p.series[6]];
-    const markPoints = markers
-      .map((m) => {
-        // snap to the first bar on/after the event date
-        let i = index.get(m.date);
-        if (i === undefined) { i = dates.findIndex((d) => d >= m.date); if (i < 0) return null; }
-        const b = bars[i];
-        return {
-          coord: [dates[i], m.kind === "E" ? b.high : b.low], value: m.kind, name: m.label,
-          symbol: "pin", symbolSize: 26, symbolOffset: [0, m.kind === "E" ? -6 : 6], symbolRotate: m.kind === "E" ? 0 : 180,
-          itemStyle: { color: m.kind === "E" ? p.series[6] : p.series[2] },
-          label: { color: "#fff", fontSize: 10, fontWeight: 600, formatter: m.kind, offset: [0, m.kind === "E" ? 0 : 3] },
-        };
-      })
-      .filter(Boolean);
+    const { labels, titles, bars, smas } = series;
+    const smaColor = (n: SmaLength) => [p.series[3], p.series[4], p.series[6]][SMA_LENGTHS.indexOf(n)];
+    const markPoints = series.markers.map((m) => {
+      const b = bars[m.index];
+      return {
+        coord: [labels[m.index], m.kind === "E" ? b.high : b.low], value: m.kind, name: m.label,
+        symbol: "pin", symbolSize: 26, symbolOffset: [0, m.kind === "E" ? -6 : 6], symbolRotate: m.kind === "E" ? 0 : 180,
+        itemStyle: { color: m.kind === "E" ? p.series[6] : p.series[2] },
+        label: { color: "#fff", fontSize: 10, fontWeight: 600, formatter: m.kind, offset: [0, m.kind === "E" ? 0 : 3] },
+      };
+    });
     return {
       animation: false,
-      legend: smas.length ? { ...legendStyle(p), data: smas.map((n) => `SMA ${n}`) } : undefined,
+      legend: smas.length ? { ...legendStyle(p), data: smas.map((s) => s.label) } : undefined,
       tooltip: {
         trigger: "axis", ...tooltipStyle(p), axisPointer: { type: "cross", lineStyle: { color: p.muted } },
         formatter: (items: { dataIndex: number }[]) => {
-          const b = bars[items[0]?.dataIndex ?? -1];
+          const i = items[0]?.dataIndex ?? -1;
+          const b = bars[i];
           if (!b) return "";
-          const chg = items[0].dataIndex > 0 ? b.close / bars[items[0].dataIndex - 1].close - 1 : null;
-          return `<b>${b.date}</b><br/>O ${fmt(b.open, "num2")} H ${fmt(b.high, "num2")}<br/>L ${fmt(b.low, "num2")} C ${fmt(b.close, "num2")}<br/>Chg ${fmt(chg, "pct_signed")} · Vol ${fmt(b.volume, "int")}`;
+          const chg = i > 0 ? b.close / bars[i - 1].close - 1 : null;
+          return `<b>${titles[i]}</b><br/>O ${fmt(b.open, "num2")} H ${fmt(b.high, "num2")}<br/>L ${fmt(b.low, "num2")} C ${fmt(b.close, "num2")}<br/>Chg ${fmt(chg, "pct_signed")} · Vol ${fmt(b.volume, "int")}`;
         },
       },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
@@ -60,8 +81,8 @@ export function CandlesVolume({ bars, smas: wanted, markers, height = 460 }: { b
         { left: 8, right: 16, top: "76%", bottom: 34, containLabel: true },
       ],
       xAxis: [
-        { type: "category", data: dates, ...axisStyle(p), axisLabel: { show: false }, splitLine: { show: false }, boundaryGap: true },
-        { type: "category", data: dates, gridIndex: 1, ...axisStyle(p), splitLine: { show: false }, boundaryGap: true },
+        { type: "category", data: labels, ...axisStyle(p), axisLabel: { show: false }, splitLine: { show: false }, boundaryGap: true },
+        { type: "category", data: labels, gridIndex: 1, ...axisStyle(p), splitLine: { show: false }, boundaryGap: true },
       ],
       yAxis: [
         { type: "value", scale: true, ...axisStyle(p, "money") },
@@ -77,9 +98,9 @@ export function CandlesVolume({ bars, smas: wanted, markers, height = 460 }: { b
           itemStyle: { color: p.up, color0: p.down, borderColor: p.up, borderColor0: p.down },
           markPoint: { data: markPoints, tooltip: { ...tooltipStyle(p), formatter: (it: { name: string }) => it.name } },
         },
-        ...smas.map((n) => ({
-          name: `SMA ${n}`, type: "line", data: smaSeries(bars, n), showSymbol: false, connectNulls: false,
-          lineStyle: { width: 1.5, color: smaColors[SMA_LENGTHS.indexOf(n)] }, itemStyle: { color: smaColors[SMA_LENGTHS.indexOf(n)] },
+        ...smas.map((s) => ({
+          name: s.label, type: "line", data: s.values, showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.5, color: smaColor(s.length) }, itemStyle: { color: smaColor(s.length) },
         })),
         {
           name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
@@ -87,6 +108,18 @@ export function CandlesVolume({ bars, smas: wanted, markers, height = 460 }: { b
         },
       ],
     };
-  }, [p, bars, wanted, markers]);
-  return <EChart option={option} height={height} ariaLabel="Price candlestick chart with volume" />;
+  }, [p, series]);
+  const n = series.bars.length;
+  const last = series.bars[n - 1];
+  return (
+    <>
+      <EChart option={option} height={height} keepZoom={live} ariaLabel="Price candlestick chart with volume" />
+      {last && (
+        <p className="sr-only chart-summary" data-bars={n}>
+          {n} bars; last bar {series.titles[n - 1]}: open {fmt(last.open, "num2")}, high {fmt(last.high, "num2")}, low {fmt(last.low, "num2")},
+          close {fmt(last.close, "num2")}, volume {fmt(last.volume, "int")}
+        </p>
+      )}
+    </>
+  );
 }

@@ -51,9 +51,11 @@ export interface EChartProps {
   height?: number;
   onClick?: (params: ChartClick) => void;
   ariaLabel?: string;
+  /** Keep the user's zoom (dataZoom start/end, in %) when the option changes, e.g. on live updates. */
+  keepZoom?: boolean;
 }
 
-export function EChart({ option, height = 260, onClick, ariaLabel }: EChartProps) {
+export function EChart({ option, height = 260, onClick, ariaLabel, keepZoom = false }: EChartProps) {
   const el = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
   const clickRef = useRef(onClick);
@@ -70,8 +72,14 @@ export function EChart({ option, height = 260, onClick, ariaLabel }: EChartProps
   }, []);
 
   useEffect(() => {
-    chart.current?.setOption(option, { notMerge: true, lazyUpdate: true });
-  }, [option]);
+    const c = chart.current;
+    if (!c) return;
+    const zoom = keepZoom ? (c.getOption() as { dataZoom?: { start?: number; end?: number }[] } | undefined)?.dataZoom?.[0] : undefined;
+    c.setOption(option, { notMerge: true, lazyUpdate: true });
+    if (zoom && zoom.start !== undefined && zoom.end !== undefined && (zoom.start > 0 || zoom.end < 100)) {
+      c.dispatchAction({ type: "dataZoom", start: zoom.start, end: zoom.end });
+    }
+  }, [option, keepZoom]);
 
   return <div ref={el} className="echart" style={{ height }} role="img" aria-label={ariaLabel} />;
 }

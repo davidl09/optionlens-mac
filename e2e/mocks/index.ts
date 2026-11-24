@@ -1,5 +1,5 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
-import type { CalcRequest, Watchlist } from "../../src/api/types";
+import type { CalcRequest, IntradayInterval, IntradayRange, Watchlist } from "../../src/api/types";
 import * as live from "./live";
 import * as mcp from "./mcp";
 import * as m from "./market";
@@ -88,7 +88,9 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
     }
     switch (parts[3]) {
       case "summary": return ok(s.summary(sym));
-      case "bars": return ok(s.bars(sym, q.get("range") ?? "1y"));
+      case "bars":
+        if (q.get("interval")) return ok(s.intradayBars(sym, q.get("interval") as IntradayInterval, (q.get("range") ?? "1d") as IntradayRange, q.get("extended") === "1"));
+        return ok(s.bars(sym, q.get("range") ?? "1y"));
       case "price-action": return ok(s.priceAction());
       case "chain": return ok(s.chain(sym, exp));
       case "activity": return ok(s.activity(sym, exp));

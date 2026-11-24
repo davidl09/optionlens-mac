@@ -8,6 +8,11 @@ One chain = (cached) symbol id + (daily) symbol info + 3 market-data calls:
   GET v1/symbols/:id/options        the chain structure (expiries, strikes, option symbol ids)
   POST v1/markets/quotes/options    quotes + greeks of the first `expiries` expiries within ±`moneyness` (one
                                     filter per expiry, all in one request)
+Intraday bars (fetch_candles):
+  GET v1/markets/candles/:id        OHLCV candles of startTime..endTime at `interval`; at most MAX_CANDLES per
+                                    response ("This call is limited to returning 2,000 candlesticks in a single
+                                    response"), so longer spans are asked for window by window (a Market Data call:
+                                    the same rate gate as every other call)
 """
 from __future__ import annotations
 
@@ -18,17 +23,18 @@ from typing import Callable
 
 import httpx
 
+from ...analytics import intraday
 from ...analytics.calendar import now_ny
 from ...fileio import read_json, write_json_atomic
-from ...models import ChainSnapshot
+from ...models import ChainSnapshot, IntradayBar
 from ...net import FetchError
 from ..chain_source import NotListed
 from ..osi import format_osi
 from .auth import TokenError, TokenManager, TokenStore
 from .client import QuestradeClient
 from .errors import QuestradeError
-from .mapping import (Listed, SymbolInfo, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
-                      pick_symbol_id, snapshot, symbol_info)
+from .mapping import (CANDLE_INTERVAL, Listed, SymbolInfo, candle_time, candles, listed_contracts, option_filters,
+                      option_quotes, parse_quote, pick_expiries, pick_symbol_id, snapshot, symbol_info)
 from .ratelimit import RateGate
 
 log = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ log = logging.getLogger(__name__)
 NAME = "questrade"
 NEGATIVE_TTL = timedelta(days=7)
 VERIFY_SYMBOL = "SPY"   # a liquid symbol every market-data permission can search
+MAX_CANDLES = 2000   # documented per-response limit of markets/candles
 KEEPALIVE_S = 24 * 3600   # refresh an idle token daily: an unused refresh token lapses (reportedly after ~7 days)
 
 
@@ -176,3 +183,20 @@ class QuestradeSource:
         snap = snapshot(quote, band, oq, fetched)
         self.last_delayed = snap.delayed
         return snap
+
+    async def fetch_candles(self, symbol: str, interval: str, start: datetime, end: datetime) -> list[IntradayBar]:
+        """Candles of `symbol` starting in [start, end] (every hour Questrade has), ascending. One request per
+        intraday.request_windows window; a response of MAX_CANDLES candles may be cut short, so the rest of its window
+        is asked for from after its last candle. Raises NotListed, QuestradeError."""
+        sid = await self.symbol_id(symbol)
+        step = timedelta(seconds=intraday.INTERVAL_S[interval])
+        out: dict[datetime, IntradayBar] = {}
+        for a, b in intraday.request_windows((start, end), interval, MAX_CANDLES):
+            while a < b:
+                got = candles(await self.api.get(f"markets/candles/{sid}", {
+                    "startTime": candle_time(a), "endTime": candle_time(b), "interval": CANDLE_INTERVAL[interval]}))
+                out.update((c.ts, c) for c in got if start <= c.ts <= end)
+                if len(got) < MAX_CANDLES:
+                    break
+                a = max(c.ts for c in got) + step
+        return [out[t] for t in sorted(out)]

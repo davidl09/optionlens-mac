@@ -158,6 +158,20 @@ CREATE TABLE IF NOT EXISTS eod_catchup (
     PRIMARY KEY (date, symbol)
 );
 
+-- Intraday bars (GET /api/symbol/{sym}/bars?interval=...), kept per interval for its retention (analytics/intraday.py):
+-- `ts` is the bar's start (UTC). intraday_spans: the time spans already fetched for (symbol, interval), so only the
+-- missing windows are asked for again (a span may hold no bars: nights, weekends).
+CREATE TABLE IF NOT EXISTS intraday_bars (
+    symbol VARCHAR NOT NULL, interval VARCHAR NOT NULL, ts TIMESTAMP NOT NULL,
+    open DOUBLE NOT NULL, high DOUBLE NOT NULL, low DOUBLE NOT NULL, close DOUBLE NOT NULL, volume BIGINT,
+    source VARCHAR NOT NULL, delayed BOOLEAN,
+    PRIMARY KEY (symbol, interval, ts)
+);
+CREATE TABLE IF NOT EXISTS intraday_spans (
+    symbol VARCHAR NOT NULL, interval VARCHAR NOT NULL, start_ts TIMESTAMP NOT NULL, end_ts TIMESTAMP NOT NULL,
+    source VARCHAR NOT NULL, fetched_at TIMESTAMP NOT NULL
+);
+
 -- Migration of databases created before the `source` columns: existing rows came from CBOE. The default
 -- only back-fills those rows; new rows always state their source (NULL when unknown).
 ALTER TABLE quotes_latest ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'cboe';

@@ -1,7 +1,7 @@
 // IBKR bridge orchestrator: keeps the TWS session (TwsSupervisor), heartbeats the engine, polls
 // /api/ingest/wants and turns the plan into scheduler tasks in the §6 priority order, serves
 // client-triggered refreshes and reports status. All TWS / HTTP specifics live in jobs.ts and below.
-import type { BridgeSettings, BridgeStatus, JobKind, RefreshResult } from "../shared/api";
+import type { BridgeSettings, BridgeStatus, IntradayRequest, IntradayResult, JobKind, RefreshResult } from "../shared/api";
 import type { Logger } from "../main/log";
 import { batchLines } from "../main/settings";
 import { FULL_CHAIN, underlyingContract, type ChainShape } from "./chain";
@@ -10,12 +10,13 @@ import { ContractCache, type ContractStore } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { FailureLog } from "./failures";
 import type { IngestApi, RefreshResultBody } from "./ingest";
-import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
+import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushIndexBars, pushIndexQuotes, pushIntradayBars, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
 import { OptionsFeed, type OptionsFeedStore } from "./options-feed";
-import { HistoricalPacer } from "./pacer";
+import { chunks, durationOf } from "./intraday";
+import { HistoricalPacer, IntradayGate, type Gate } from "./pacer";
 import { Parked, RetryLater, Scheduler, URGENT, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
 import { HIST_RETRY_MS, ledgerKey, parseLiveWants, parseWants, planWants, type Wants } from "./wants";
@@ -86,6 +87,7 @@ export class Bridge {
   readonly scheduler: Scheduler;
   private readonly supervisor: TwsSupervisor;
   private readonly pacer: HistoricalPacer;
+  private readonly intradayGate: IntradayGate;
   private readonly lines: LineBudget;
   private readonly contracts: ContractCache;
   private readonly contractServer: ContractServer;
@@ -130,6 +132,7 @@ export class Bridge {
   constructor(private readonly d: BridgeDeps) {
     this.now = d.now ?? Date.now;
     this.pacer = d.pacer ?? new HistoricalPacer({ now: this.now });
+    this.intradayGate = new IntradayGate({ now: this.now });
     this.lines = new LineBudget(() => batchLines(d.settings()));
     this.scheduler = new Scheduler({ now: this.now, onChange: () => this.emit() });
     this.contracts = new ContractCache(d.contractStore ?? null);
@@ -263,11 +266,17 @@ export class Bridge {
     try { await this.d.ingest.refreshResult(b); } catch (e) { this.d.log.warn(`bridge refresh-result: ${(e as Error).message}`); }
   }
 
-  private async refresh(sym: string): Promise<RefreshResult> {
+  /** Why on-demand work cannot run now (bridge off, not connected, paused), else null. */
+  private unavailable(): string | null {
     const c = this.supervisor.state();
-    if (!this.d.settings().enabled) return { status: "unavailable", message: "The IBKR bridge is turned off." };
-    if (!this.session) return { status: "unavailable", message: "Not connected to IB Gateway / TWS." };
-    if (c.paused) return { status: "unavailable", message: c.paused };
+    if (!this.d.settings().enabled) return "The IBKR bridge is turned off.";
+    if (!this.session) return "Not connected to IB Gateway / TWS.";
+    return c.paused;
+  }
+
+  private async refresh(sym: string): Promise<RefreshResult> {
+    const why = this.unavailable();
+    if (why) return { status: "unavailable", message: why };
     const last = this.lastChainPush.get(sym);
     if (last !== undefined && this.now() - last < (this.wants?.onDemandMaxAgeS ?? 120) * 1000) return { status: "fresh" };
     const marketHours = { status: "unavailable", message: OPTION_QUOTES_CLOSED, waitingFor: "market-hours" } as const;
@@ -280,6 +289,28 @@ export class Bridge {
     if (outcome.error === OPTION_QUOTES_CLOSED) return marketHours;
     if (outcome.error === CONTRACTS_UNAVAILABLE) return contractServer;
     return { status: "failed", message: outcome.error };
+  }
+
+  /**
+   * Intraday bars for the spans the engine could not fill (INTEGRATION.md §5 "Intraday bars"): one on-demand task per
+   * request window (newest first), each paced by the HistoricalPacer and the IntradayGate, pushed as it arrives.
+   */
+  async intradayBars(req: IntradayRequest): Promise<IntradayResult> {
+    const why = this.unavailable();
+    if (why) return { status: "unavailable", message: why };
+    const windows = req.spans.flatMap((s) => chunks(Date.parse(s.start), Date.parse(s.end), req.interval));
+    let bars = 0;
+    for (const c of windows) {
+      const key = `intraday:${req.symbol}:${req.interval}:${c.end}:${durationOf(c)}`;
+      const gate = { readyAt: () => Math.max(this.pacer.readyAt(), this.intradayGate.readyAt(key)) };
+      const outcome = await this.enqueue(this.task(URGENT, key, `${req.symbol} ${req.interval} bars`, async (ctx) => {
+        this.intradayGate.begin(key);
+        bars += await pushIntradayBars(ctx, req.symbol, req.interval, c);
+        this.pushed();
+      }, { gate, symbol: req.symbol }));
+      if (!outcome.ok) return { status: outcome.cancelled ? "unavailable" : "failed", message: outcome.cancelled ? "Cancelled." : outcome.error };
+    }
+    return { status: "fetched", bars };
   }
 
   // ---------------- connection ----------------
@@ -504,11 +535,11 @@ export class Bridge {
    * quotes the account cannot get now are skipped. An on-demand refresh reports both instead (refreshSymbol).
    */
   private task(kind: JobKind, key: string, label: string, work: (ctx: JobContext) => Promise<void>,
-    o: { gate?: HistoricalPacer; ledgerKey?: string; maxAttempts?: number; group?: Group; symbol?: string } = {}): Task {
+    o: { gate?: Gate; ledgerKey?: string; maxAttempts?: number; group?: Group; symbol?: string } = {}): Task {
     return {
       key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id,
       // Historical requests (the pacer-gated tasks) give way to an on-demand refresh at once: aborted, re-queued.
-      preemptible: o.gate !== undefined,
+      preemptible: o.gate !== undefined && kind !== URGENT,
       run: async (signal, checkpoint) => {
         try {
           await work(this.context(signal, checkpoint));

@@ -7,7 +7,7 @@ import type {
   RefreshStatus,
   Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain,
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
-  Fundamentals, ImpliedMoves, Insiders, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, NewsItem, Notification, OpenInterest,
+  Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, NewsItem, Notification, OpenInterest,
   OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, ReportDef, ReportResult,
   McpStatus, QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
   SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist,
@@ -213,6 +213,9 @@ export const api = {
   refreshStatus: (s: string) => get<RefreshStatus>(`${sym(s)}/refresh`, 0),
   summary: (s: string) => get<SymbolSummary>(`${sym(s)}/summary`),
   bars: (s: string, range: string) => get<Bar[]>(`${sym(s)}/bars${qs({ range })}`),
+  /** Not cached: the engine fetches the missing spans and serves the newest bars on every call. */
+  intradayBars: (s: string, interval: IntradayInterval, range: IntradayRange, extended: boolean) =>
+    get<IntradayBars>(`${sym(s)}/bars${qs({ interval, range, extended: extended ? 1 : 0 })}`, 0),
   priceAction: (s: string, range = "1y") => get<PriceAction>(`${sym(s)}/price-action${qs({ range })}`),
   chain: (s: string, expiry?: string | null) => get<Chain>(`${sym(s)}/chain${qs({ expiry })}`),
   activity: (s: string, expiry?: string | null) => get<Activity>(`${sym(s)}/activity${qs({ expiry })}`),
