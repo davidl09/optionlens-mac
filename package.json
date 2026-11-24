@@ -6,7 +6,7 @@
   "author": "OptionLens",
   "license": "UNLICENSED",
   "private": true,
-  "version": "0.1.14",
+  "version": "0.1.15",
   "type": "module",
   "main": "dist-electron/main.cjs",
   "scripts": {
