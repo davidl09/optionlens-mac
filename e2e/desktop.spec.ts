@@ -465,8 +465,7 @@ test("settings: the stream switch toggles the live mode, with Questrade's warnin
     ...STATUS.live, mode, interval_s: mode === "poll" ? 2 : null, fallback: null,
     questrade: { setting: mode, streaming: mode === "stream", fallback: null, fallback_detail: null, retry_at: null, messages_per_s: 4.2,
       last_message_at: "2026-11-24T15:00:00Z", drops_recent: 0,
-      streams: mode === "stream" ? [{ kind: "equity", ids: 3, open: true, port: 1, opened_at: null, last_message_at: null, messages: 5, connects: 1 },
-        { kind: "option", ids: 42, open: true, port: 2, opened_at: null, last_message_at: null, messages: 9, connects: 1 }] : [] },
+      streams: mode === "stream" ? [{ ids: { equity: 3, option: 42 }, open: true, port: 1, opened_at: null, last_message_at: null, messages: 14, connects: 1 }] : [] },
   } }));
   await page.goto("/settings");
   const sw = page.getByRole("switch", { name: "Stream live quotes (tick-by-tick)" });
