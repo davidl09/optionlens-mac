@@ -81,3 +81,22 @@ def test_calc_legs_name_their_contract(client):
     r = client.post("/api/calc/strategy", json={"symbol": "AAPL", "legs": [
         {"kind": "option", "right": "C", "strike": 350, "expiry": "2026-12-18", "qty": 1}, {"kind": "stock", "qty": 100}]}).json()
     assert r["legs"][0]["osi"] == row["osi"] and r["legs"][1]["osi"] is None
+
+
+def test_live_mode_get_put_switches_the_driver_and_persists(client):
+    from optionlens.config import get_settings
+    assert client.get("/api/live/mode").json() == {"mode": "poll", "default": "poll", "saved": False}
+    r = client.put("/api/live/mode", json={"mode": "stream"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"mode": "stream", "default": "poll", "saved": True}
+    assert (get_settings().data_dir / "live_mode.json").is_file()
+    d = live.instance()._driver()
+    assert d is not None and d.mode == "stream"                       # in effect at once, no restart
+    live._mode = None                                                  # a restart reads the saved choice
+    assert client.get("/api/live/mode").json()["mode"] == "stream"
+    st = client.get("/api/live/status").json()
+    assert st["questrade"]["setting"] == "stream" and "messages_per_s" in st["questrade"]
+    for bad in ({"mode": "websocket"}, {}, {"mode": "poll", "extra": 1}):
+        assert client.put("/api/live/mode", json=bad).status_code == 422
+    assert client.put("/api/live/mode", json={"mode": "poll"}).json()["mode"] == "poll"
+    assert d.mode == "poll"

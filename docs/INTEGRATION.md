@@ -25,7 +25,7 @@ API against other local processes and web pages.
 | `OPTIONLENS_CHAIN_SOURCES` | `ibkr-bridge,questrade` | Enabled chain sources (no order: no source is preferred, §6 "Chain precedence"): `ibkr-bridge` = chains pushed by the bridge; `questrade` = the engine's own Questrade sweeps (§8), active once a token is pasted. Unknown names: the engine refuses to start |
 | `OPTIONLENS_QUESTRADE_EXPIRIES` | `8` | Questrade sweeps: first N expiries (on/after today) |
 | `OPTIONLENS_QUESTRADE_MONEYNESS` | `0.25` | Questrade sweeps: strikes within ±this fraction of the underlying price |
-| `OPTIONLENS_QUESTRADE_LIVE` | `poll` | Live quotes from Questrade (§9): `poll` = Level 1 snapshots of what is on screen at a cadence within the rate limits; `stream` = Level 1 WebSocket streams (Questrade: freezes the market data of any other IQ platform open at the same time). Anything else: the engine refuses to start |
+| `OPTIONLENS_QUESTRADE_LIVE` | `poll` | Default live mode until the user chooses one in Settings (`PUT /api/live/mode`, saved in `DATA_DIR/live_mode.json`, §9): `poll` = Level 1 snapshots of what is on screen at a cadence within the rate limits; `stream` = Level 1 WebSocket streams (Questrade: freezes the market data of any other IQ platform open at the same time). Anything else: the engine refuses to start |
 | `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `<userData>/data` (macOS `~/Library/Application Support/OptionLens/data`, Windows `%APPDATA%\OptionLens\data`, Linux `~/.config/OptionLens/data`) |
 
 Launch: `python -m optionlens.cli serve [--port N] [--exit-on-stdin-eof]`. Once the API is ready the engine
@@ -511,7 +511,7 @@ when it is connected (§7).
 - Session: "Keeping a socket open does not extend your session. You need to send requests at least every 30 minutes
   otherwise your socket will get disconnected when the session expires."
 - "If you use L1 Streaming in Trading API, then your market data will freeze in any other IQ Platform that you are using
-  simultaneously." — hence polling is the default and streaming opt-in (`OPTIONLENS_QUESTRADE_LIVE=stream`).
+  simultaneously." — hence polling is the default and streaming opt-in (Settings switch / `PUT /api/live/mode`).
 - Rate limits: market-data calls 20/s and 15,000/h (§8); the table lists `markets/quotes/:id` but not
   `markets/quotes/options` or how streams count, so every quote and stream-port request goes through the same 70% gate.
 - Snap quotes: without a real-time data package "call to get quote is considered snap quote and limit per market can be
@@ -552,9 +552,24 @@ when it is connected (§7).
   300 contracts + 1 underlying (4 calls): 3.2 s; 1,000 contracts (11 calls): 8.8 s. A changed set is polled at once
   (at most once a second). Ids: `symbols/search` (cached), `symbols/:id` once a day (previous close), `symbols/:id/options`
   once per underlying per day (option ids).
-- Streaming mode: one equity and one option stream for the union; reopened after a set change (1 s debounce), renewed 60 s
-  before the access token expires (new port request with a fresh token), reopened after a drop with backoff (2^n s, max
-  30 s); after 3 failed attempts in a row (a stream open ≥ 60 s resets the count) it polls for 15 min, then tries again.
+- Live mode (`live/mode.py`): `GET /api/live/mode` → `{mode: "stream"|"poll", default, saved}`; `PUT /api/live/mode
+  {"mode"}` saves it in `DATA_DIR/live_mode.json` and puts it into effect at once (streams opened / closed, no engine
+  restart). `OPTIONLENS_QUESTRADE_LIVE` is only the default until the user chooses (default `poll`). Settings → Data
+  sources → Questrade: switch "Stream live quotes (tick-by-tick)" (on = stream, off = poll), Questrade's freeze warning
+  under it, and the live status line (from `GET /api/live/status`).
+- Streaming mode: one equity and one option stream for the union (no per-stream limit is documented or observed, so
+  sets are not split). A stream carries the ids of its port request, so a changed set (1 s debounce) reopens only the
+  stream whose ids changed (new port request). Renewed (new port request with a fresh token) 60 s before the access
+  token expires and within 2 s after it was refreshed elsewhere (e.g. by a sweep); reopened after a drop with backoff
+  (1, 2 s). **Falls back to polling** — status `mode: "poll"`, `fallback: <reason>`, header "LIVE · Questrade (polling
+  fallback: <reason>)" — when a handshake fails (port request, socket or token not answered `{"success": true}`), when a
+  stream sends no message within 15 s of its handshake in the regular session, or after ≥ 3 drops in 5 min; streaming
+  is retried every 5 min. Diagnostics: the handshake result and the first 3 raw messages of every connection are logged
+  (INFO, ≤ 300 chars, fields named like token / session / account / key masked; the access token never logged);
+  `GET /api/live/status` adds `questrade: {setting, streaming, fallback, fallback_detail, retry_at, messages_per_s (10 s
+  window), last_message_at, drops_recent, streams: [{kind, ids, open, port, opened_at, last_message_at, messages,
+  connects}]}`. Unverified against the live API: whether Questrade sends an initial snapshot after subscribing (if not,
+  a quiet option stream in the regular session falls back to polling after 15 s).
 - Renderer: `useLive(subscription)` registers what a view shows (refcounted; the window's union is posted, debounced
   250 ms); `useLiveQuote(symbol)` / `useLiveOption(osi)` / `useLiveCell` read values; `merge.ts` patches Quotes,
   OptionRows, report cells and the last daily bar. A changed value gets a 600 ms static tint (no animation, no layout

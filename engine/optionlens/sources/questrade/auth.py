@@ -143,6 +143,11 @@ class TokenManager:
                 raise TokenError(self.detail or "waiting to retry the Questrade login")
             return await self._refresh(self._refresh_token)
 
+    def current(self) -> Access | None:
+        """The access token in use, without refreshing (None after an invalidation): lets a stream opened with an
+        earlier token notice that it was refreshed."""
+        return self._access
+
     def invalidate(self, used: Access) -> None:
         """The API answered 401 for `used`: the next access() refreshes."""
         if self._access is used:

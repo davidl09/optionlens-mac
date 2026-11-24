@@ -589,3 +589,15 @@ code.wrap { word-break: break-all; font-size: 11.5px; }
 .live-flash { border-radius: 2px; }
 .live-flash-up { background-color: var(--up-soft); }
 .live-flash-down { background-color: var(--down-soft); }
+
+/* On/off switch (role="switch"): Settings → Questrade "Stream live quotes". */
+.switch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.switch { position: relative; width: 36px; height: 20px; flex: none; padding: 0; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--panel-3); cursor: pointer; }
+.switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+.switch:disabled { opacity: 0.55; cursor: default; }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg); }
+.switch[aria-checked="true"] .switch-knob { left: 18px; }
+.switch-label { color: var(--fg); font-size: 13px; }
+.live-mode { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.live-mode-warning { margin: 0; }

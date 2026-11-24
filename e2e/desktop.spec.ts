@@ -4,6 +4,7 @@
 // engine-unreachable banner.
 import { expect, Page, test } from "@playwright/test";
 import { handle } from "./mocks";
+import { STATUS } from "./mocks/live";
 import { resetRefresh } from "./mocks/refresh";
 import { questradeStatus } from "./mocks/market";
 import { skew } from "./mocks/symbol";
@@ -449,4 +450,36 @@ test("Settings → Updates: move-to-Applications, rollback notice, automatic mod
   await card.getByLabel("Update source").fill("someone/fork");
   await card.getByRole("button", { name: "Save source" }).click();
   await expect(card.getByText("Saved. OptionLens checks this repository for updates.")).toBeVisible();
+});
+
+test("settings: the stream switch toggles the live mode, with Questrade's warning and the live status", async ({ page }) => {
+  await fakeDesktop(page);
+  await mockEngine(page);
+  let mode: "poll" | "stream" = "poll";
+  const puts: unknown[] = [];
+  await page.route("**/api/live/mode", async (route) => {
+    if (route.request().method() === "PUT") { puts.push(route.request().postDataJSON()); mode = (route.request().postDataJSON() as { mode: "poll" | "stream" }).mode; }
+    await route.fulfill({ json: { mode, default: "poll", saved: puts.length > 0 } });
+  });
+  await page.route("**/api/live/status", (route) => route.fulfill({ json: {
+    ...STATUS.live, mode, interval_s: mode === "poll" ? 2 : null, fallback: null,
+    questrade: { setting: mode, streaming: mode === "stream", fallback: null, fallback_detail: null, retry_at: null, messages_per_s: 4.2,
+      last_message_at: "2026-11-24T15:00:00Z", drops_recent: 0,
+      streams: mode === "stream" ? [{ kind: "equity", ids: 3, open: true, port: 1, opened_at: null, last_message_at: null, messages: 5, connects: 1 },
+        { kind: "option", ids: 42, open: true, port: 2, opened_at: null, last_message_at: null, messages: 9, connects: 1 }] : [] },
+  } }));
+  await page.goto("/settings");
+  const sw = page.getByRole("switch", { name: "Stream live quotes (tick-by-tick)" });
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByText(/While OptionLens streams, market data in other Questrade platforms you have open \(e\.g\. Questrade Edge\) may freeze/)).toBeVisible();
+  const status = page.getByTestId("live-mode-status");
+  await expect(status).toHaveText("Polling: snapshots every 2.0 s.");
+  await sw.focus();
+  await page.keyboard.press("Space");
+  await expect(sw).toHaveAttribute("aria-checked", "true");
+  await expect(status).toHaveText(/^Streaming connected: 3 symbols, 42 options · 4\.2 msg\/s · last message /);
+  await page.keyboard.press("Enter");
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  await expect(status).toHaveText("Polling: snapshots every 2.0 s.");
+  expect(puts).toEqual([{ mode: "stream" }, { mode: "poll" }]);
 });

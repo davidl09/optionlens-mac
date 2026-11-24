@@ -138,3 +138,10 @@ test("a hidden window unsubscribes", async ({ page }) => {
   await expect.poll(() => live.subscriptions.at(-1)).toEqual(expect.objectContaining({ symbols: [], option_contracts: [], chains: [] }));
   await expect(indicator(page)).toHaveCount(0);           // idle: nothing streams while nobody looks
 });
+
+test("header indicator names a polling fallback", async ({ page }) => {
+  const live = await setup(page);
+  live.serve(sse("status", { ...STATUS.live, fallback: "handshake failed" }));
+  await page.goto("/");
+  await expect(indicator(page)).toHaveText("LIVE · Questrade (polling fallback: handshake failed)");
+});

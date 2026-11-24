@@ -10,6 +10,8 @@ export interface LiveStatus {
   session?: "regular" | "extended" | "closed";
   mode?: "poll" | "stream" | "snapshots" | null;
   interval_s?: number | null;
+  /** Streaming is chosen but Questrade is polled meanwhile: why (e.g. "handshake failed"). */
+  fallback?: string | null;
   detail?: string | null;
   symbols?: number;
   contracts?: number;

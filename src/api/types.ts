@@ -76,6 +76,27 @@ export interface QuestradeStatus {
   verification: { ok: boolean; message: string; at: ISODateTime } | null;
 }
 
+/** GET / PUT /api/live/mode (INTEGRATION.md §9): how Questrade keeps the screen live. `default` applies until the user chooses (`saved`). */
+export type LiveMode = "stream" | "poll";
+export interface LiveModeSetting { mode: LiveMode; default: LiveMode; saved: boolean }
+/** One Questrade Level 1 stream (`ids`: symbols or option contracts it carries). */
+export interface LiveStreamInfo {
+  kind: "equity" | "option"; ids: number; open: boolean; port: number | null;
+  opened_at: ISODateTime | null; last_message_at: ISODateTime | null; messages: number; connects: number;
+}
+/** GET /api/live/status → `questrade`: the Questrade driver's details. `fallback`: why it polls although streaming is chosen. */
+export interface QuestradeLiveDiagnostics {
+  setting: LiveMode; streaming: boolean; fallback: string | null; fallback_detail: string | null; retry_at: ISODateTime | null;
+  messages_per_s: number; last_message_at: ISODateTime | null; drops_recent: number; streams: LiveStreamInfo[];
+}
+/** GET /api/live/status: the live status (as on the live channel) plus the Questrade driver's details (null without Questrade). */
+export interface LiveStatusReport {
+  state: "live" | "delayed" | "connecting" | "stale" | "market_closed" | "not_connected" | "idle";
+  source: "questrade" | "ibkr" | null; session: "regular" | "extended" | "closed"; mode: "poll" | "stream" | "snapshots" | null;
+  interval_s: number | null; fallback: string | null; symbols: number; contracts: number; detail: string | null;
+  questrade: QuestradeLiveDiagnostics | null;
+}
+
 /**
  * GET / POST /api/symbol/{sym}/refresh (INTEGRATION.md §7): the on-demand refresh round of every connected chain
  * source, and the chain served now (the best one per §6 "Chain precedence").

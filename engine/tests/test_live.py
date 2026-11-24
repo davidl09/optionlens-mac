@@ -80,6 +80,7 @@ class FakeDriver:
 
     def __init__(self, reason: str | None = None):
         self.reason, self.wanted, self.ok_at, self.error, self.ran = reason, EMPTY, None, None, 0
+        self.mode, self.fallback = "poll", None
 
     def usable(self):
         return self.reason
@@ -87,8 +88,15 @@ class FakeDriver:
     def set_wanted(self, w):
         self.wanted = w
 
+    def set_mode(self, mode):
+        self.mode = mode
+
     def health(self):
-        return {"ok_at": self.ok_at, "error": self.error, "mode": "poll", "interval_s": 2.0}
+        return {"ok_at": self.ok_at, "error": self.error, "mode": "poll" if self.fallback else self.mode,
+                "interval_s": 2.0, "fallback": self.fallback}
+
+    def diagnostics(self):
+        return {"setting": self.mode, "fallback": self.fallback}
 
     async def run(self):
         self.ran += 1
@@ -374,3 +382,41 @@ def test_live_patch_mapping_matches_the_sweep_mapping():
     assert p["bid"] == 11.0 and p["ask"] == 11.2 and p["oi"] == 100 and p["delayed"] is False
     q = mapping.live_quote(fake.equity_quote(), "XYZ", None, datetime(2026, 11, 19, 15, tzinfo=NY))
     assert q["price"] == 100.2 and q["change"] is None and q["volume"] == 1_000_000
+
+
+def test_mode_switch_reaches_the_driver_and_the_status_names_a_polling_fallback():
+    d = FakeDriver()
+    h, clock = make_hub(driver=d)
+    h.subscribe("win-aaaa1", W(["XYZ"]))
+    h.set_mode("stream")
+    assert d.mode == "stream" and h.diagnostics() == {"setting": "stream", "fallback": None}
+    d.ok_at = clock.t
+    h.publish("questrade", {"XYZ": {"price": 1.0, "delayed": False}}, {})
+    h.reconcile()
+    assert h.status()["mode"] == "stream" and h.status()["fallback"] is None
+    d.fallback = "handshake failed"
+    h.reconcile()
+    st = h.status()
+    assert st["state"] == "live" and st["mode"] == "poll" and st["fallback"] == "handshake failed"
+    h, _ = make_hub(driver=None)
+    h.set_mode("poll")                                   # no Questrade: nothing to switch, no error
+    assert h.diagnostics() is None
+
+
+def test_mode_setting_defaults_saves_and_survives_a_restart(tmp_path):
+    from optionlens.live.mode import ModeSetting
+    path = tmp_path / "live_mode.json"
+    m = ModeSetting(path, "poll")
+    assert m.get() == "poll" and m.view() == {"mode": "poll", "default": "poll", "saved": False}
+    m.set("stream")
+    again = ModeSetting(path, "poll")                    # a restart: the saved choice wins over the default
+    assert again.get() == "stream" and again.view() == {"mode": "stream", "default": "poll", "saved": True}
+    assert ModeSetting(path, "stream").get() == "stream"
+    with pytest.raises(ValueError):
+        m.set("websocket")
+    path.write_text("{not json")
+    assert ModeSetting(path, "poll").view() == {"mode": "poll", "default": "poll", "saved": False}
+    path.write_text('{"mode": "turbo"}')
+    assert ModeSetting(path, "stream").get() == "stream"
+    with pytest.raises(ValueError):
+        ModeSetting(path, "turbo")

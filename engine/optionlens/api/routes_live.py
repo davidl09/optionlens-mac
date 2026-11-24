@@ -7,11 +7,12 @@ from __future__ import annotations
 from datetime import date
 
 import anyio.to_thread
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import StreamingResponse
 
 from .. import live
+from ..live.mode import Mode
 from ..live.resolve import MAX_CONTRACTS, MAX_SYMBOLS, resolve
 from .deps import symbol_param
 from .json import ApiJSON
@@ -54,4 +55,25 @@ async def stream(client_id: str = Query(pattern=CLIENT_ID)):
 
 @router.get("/status")
 async def status():
-    return ApiJSON(live.instance().status())
+    """The live status plus the Questrade driver's details (`questrade`: streams, messages/s, fallback)."""
+    return ApiJSON(live.status())
+
+
+class ModeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Mode
+
+
+@router.get("/mode")
+async def get_mode():
+    """{mode, default, saved}: how Questrade keeps the screen live ("stream" | "poll")."""
+    return ApiJSON(live.mode_view())
+
+
+@router.put("/mode")
+async def put_mode(body: ModeIn):
+    """Save the live mode; in effect at once (streams opened or closed without a restart)."""
+    try:
+        return ApiJSON(live.set_mode(body.mode))         # a tiny file; the driver is switched on the event loop
+    except OSError as e:
+        raise HTTPException(500, detail=f"Could not save the live mode: {e}") from e

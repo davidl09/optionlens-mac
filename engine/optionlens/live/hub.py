@@ -55,8 +55,17 @@ class Driver(Protocol):
 
     def set_wanted(self, w: Wanted) -> None: ...
 
+    def set_mode(self, mode: str) -> None:
+        """The user's live mode ("stream" | "poll"), in effect at once."""
+        ...
+
     def health(self) -> dict:
-        """{ok_at: float | None (last success), error: str | None, mode: str, interval_s: float | None}"""
+        """{ok_at: float | None (last success), error: str | None, mode: str, interval_s: float | None,
+        fallback: str | None (why it polls although streaming is chosen)}"""
+        ...
+
+    def diagnostics(self) -> dict:
+        """Details for Settings and the status endpoint (live/questrade.py)."""
         ...
 
     async def run(self) -> None:
@@ -195,6 +204,17 @@ class LiveHub:
     def status(self) -> dict:
         return self._status
 
+    def set_mode(self, mode: str) -> None:
+        """The user switched the Questrade live mode: passed to the driver at once (when there is one)."""
+        if (d := self._driver()) is not None:
+            d.set_mode(mode)
+        self._wake.set()
+
+    def diagnostics(self) -> dict | None:
+        """The Questrade driver's details (streams, messages/s, fallback), or None without a driver."""
+        d = self._driver()
+        return d.diagnostics() if d is not None else None
+
     # ------------------------------------------------------------------ the sources' side
     def publish(self, source: Source, quotes: Mapping[str, Fields], options: Mapping[str, Fields],
                 persist: bool = True) -> None:
@@ -301,7 +321,8 @@ class LiveHub:
     def _compute_status(self, now: float, want: Wanted, q: Driver | None, q_reason: str | None) -> dict:
         union = self.registry.union()
         st: dict[str, Any] = {"session": self.session, "source": self.active, "mode": None, "interval_s": None,
-                              "symbols": len(want.symbols), "contracts": len(want.contracts), "detail": None}
+                              "fallback": None, "symbols": len(want.symbols), "contracts": len(want.contracts),
+                              "detail": None}
         if self.session == "closed":
             nxt = next_live_start(datetime.fromtimestamp(now, timezone.utc))
             return {**st, "state": "market_closed", "detail": f"US markets are closed: showing the last stored values. "
@@ -317,7 +338,7 @@ class LiveHub:
                     "detail": f"No live source: Questrade {why}; IB Gateway not connected."}
         if self.active == "questrade" and q is not None:
             h = q.health()
-            st |= {"mode": h.get("mode"), "interval_s": h.get("interval_s")}
+            st |= {"mode": h.get("mode"), "interval_s": h.get("interval_s"), "fallback": h.get("fallback")}
             ok_at, stale_after = h.get("ok_at"), max(STALE_MIN_S, 3 * (h.get("interval_s") or 0))
             if ok_at is None:
                 return {**st, "state": "stale" if h.get("error") else "connecting", "detail": h.get("error")}

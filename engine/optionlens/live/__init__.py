@@ -7,6 +7,7 @@ the windows as coalesced patches over Server-Sent Events.
 - hub: LiveHub, the subsystem's contract (subscribe, events, publish, bridge_wants, status);
 - questrade: the Questrade driver (polling cadence from the rate gate, or streams);
 - stream: the Questrade Level 1 WebSocket client;
+- mode: the user's choice of streaming or polling (saved in DATA_DIR);
 - resolve / persist: the database side (chain views -> contracts; live values -> quotes_latest / option_latest).
 """
 from __future__ import annotations
@@ -14,21 +15,52 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from .hub import LiveHub
+from .mode import FILE_NAME as MODE_FILE
+from .mode import Mode, ModeSetting
 from .subscriptions import Wanted
 
-__all__ = ["LiveHub", "Wanted", "instance", "start", "stop"]
+__all__ = ["LiveHub", "Wanted", "instance", "mode_view", "set_mode", "start", "status", "stop"]
 
 BRIDGE_CHECK_S = 10.0
 _hub: LiveHub | None = None
+_mode: ModeSetting | None = None
+
+
+def _mode_setting() -> ModeSetting:
+    """The user's live mode, saved in DATA_DIR (the env var OPTIONLENS_QUESTRADE_LIVE is only its default)."""
+    global _mode
+    from ..config import get_settings
+    s = get_settings()
+    path = s.data_dir / MODE_FILE
+    if _mode is None or _mode.path != path or _mode.default != s.questrade_live:
+        _mode = ModeSetting(path, s.questrade_live)  # type: ignore[arg-type]
+    return _mode
+
+
+def mode_view() -> dict:
+    """{mode, default, saved} (GET /api/live/mode)."""
+    return _mode_setting().view()
+
+
+def set_mode(mode: Mode) -> dict:
+    """Save the user's live mode and put it into effect at once (no restart). Raises ValueError / OSError."""
+    _mode_setting().set(mode)
+    instance().set_mode(mode)
+    return mode_view()
+
+
+def status() -> dict:
+    """The live status plus the Questrade driver's details (GET /api/live/status)."""
+    h = instance()
+    return {**h.status(), "questrade": h.diagnostics()}
 
 
 def _questrade_driver():
-    from ..config import get_settings
     from ..sources import chain_source
     from .questrade import QuestradeLive
     if "questrade" not in chain_source.server_source_names():
         return None
-    return QuestradeLive(chain_source.REGISTRY["questrade"](), instance().publish, mode=get_settings().questrade_live)
+    return QuestradeLive(chain_source.REGISTRY["questrade"](), instance().publish, mode=_mode_setting().get())
 
 
 class _BridgeCheck:

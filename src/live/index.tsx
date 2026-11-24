@@ -141,7 +141,9 @@ const SOURCE: Record<string, string> = { questrade: "Questrade", ibkr: "IBKR" };
 export function liveLabel(s: LiveStatus): string {
   const base = LABEL[s.state];
   const withSource = s.source && (s.state === "live" || s.state === "delayed" || s.state === "stale");
-  return withSource ? `${base} · ${SOURCE[s.source!] ?? s.source}` : base;
+  if (!withSource) return base;
+  const fallback = s.source === "questrade" && s.fallback ? ` (polling fallback: ${s.fallback})` : "";
+  return `${base} · ${SOURCE[s.source!] ?? s.source}${fallback}`;
 }
 
 export function liveTitle(s: LiveStatus): string {

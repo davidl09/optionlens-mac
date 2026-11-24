@@ -7,7 +7,7 @@ import type {
   RefreshStatus,
   Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain,
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
-  Fundamentals, ImpliedMoves, Insiders, MarketOverview, NewsItem, Notification, OpenInterest,
+  Fundamentals, ImpliedMoves, Insiders, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, NewsItem, Notification, OpenInterest,
   OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, ReportDef, ReportResult,
   QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
   SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist,
@@ -177,6 +177,10 @@ export const api = {
   /** The token goes in the body only; the answer never contains it. */
   connectQuestrade: (refreshToken: string) => mutate<QuestradeStatus>("POST", "/api/sources/questrade/token", { refresh_token: refreshToken }, ["/api/sources", "/api/status"]),
   disconnectQuestrade: () => mutate<QuestradeStatus>("DELETE", "/api/sources/questrade/token", undefined, ["/api/sources", "/api/status"]),
+  liveMode: () => get<LiveModeSetting>("/api/live/mode", 0),
+  /** In effect at once in the engine (streams opened or closed, no restart). */
+  setLiveMode: (mode: LiveMode) => mutate<LiveModeSetting>("PUT", "/api/live/mode", { mode }, ["/api/live"]),
+  liveStatus: () => get<LiveStatusReport>("/api/live/status", 0),
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),
 

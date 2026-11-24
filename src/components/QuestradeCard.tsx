@@ -1,11 +1,12 @@
 // Settings → Data sources → Questrade: the source's status (the same fields as IBKR's, SourceSummary), connect with a
 // refresh token from Questrade's API Centre (checked at once with one market-data call), disconnect (INTEGRATION.md
-// §8). The token is sent once and never shown again.
+// §8); live updates by streaming or polling (LiveModeSwitch, §9). The token is sent once and never shown again.
 import { FormEvent, useState } from "react";
 import { api } from "../api/client";
 import type { QuestradeStatus } from "../api/types";
 import { useApi } from "../api/useApi";
 import { questradeView } from "../lib/sources";
+import { LiveModeSwitch } from "./LiveModeSwitch";
 import { SourceStateBadge, SourceSummary } from "./SourceSummary";
 import { Card, ErrorBox, InfoBox, Spinner } from "./ui";
 
@@ -68,6 +69,7 @@ export function QuestradeCard() {
       {s.verification && (
         <p className={`small ${s.verification.ok ? "pos-text" : "warn-text"}`} role="status">Token check: {s.verification.message}</p>
       )}
+      <LiveModeSwitch />
       <p className="muted small">Chains: first {s.expiries} expiries, strikes ±{Math.round(s.moneyness * 100)}%; at most 70% of Questrade's limits.</p>
       {s.paused_until && <p className="muted small">Pausing calls until {new Date(s.paused_until).toLocaleTimeString()} (rate limit).</p>}
       <form className="settings-form" onSubmit={connect}>

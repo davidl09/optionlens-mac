@@ -22,7 +22,8 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
   if (p === "/api/health") return ok({ ok: true });
   if (p === "/api/live/stream") return { status: 200, body: null, text: live.defaultStream(), contentType: "text/event-stream" };
   if (p === "/api/live/subscribe" && method === "POST") return ok(live.subscribed(body as Parameters<typeof live.subscribed>[0]));
-  if (p === "/api/live/status") return ok(live.STATUS.closed);
+  if (p === "/api/live/status") return ok({ ...live.STATUS.closed, questrade: null });
+  if (p === "/api/live/mode") return ok({ mode: method === "PUT" ? (body as { mode?: string } | null)?.mode ?? "poll" : "poll", default: "poll", saved: method === "PUT" });
   if (p === "/api/ingest/refresh-result" && method === "POST") return ok(refresh.report(body as Parameters<typeof refresh.report>[0]));
   if (p === "/api/status") return ok(m.status());
   if (p === "/api/sources/questrade") return ok(m.questradeStatus());
