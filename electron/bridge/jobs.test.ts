@@ -15,7 +15,7 @@ function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
   return { calls, wants: async () => ({}), liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), dividendHistory: rec("dividendHistory"), quotes: rec("quotes"),
-    underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), intradayBars: rec("intradayBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat"), refreshResult: rec("refreshResult") };
+    underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), intradayBars: rec("intradayBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat"), refreshResult: rec("refreshResult"), positions: rec("positions") };
 }
 
 function ctxFor(session: FakeSession, o: Partial<JobContext> = {}): JobContext & { ingest: ReturnType<typeof fakeIngest> } {

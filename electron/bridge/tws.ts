@@ -60,8 +60,25 @@ export class TwsTimeoutError extends Error {
  */
 export interface TwsSystemMessage { code: number; message: string }
 
+/**
+ * A position as TWS reports it (reqPositions, allowed with the API's Read-Only setting): `avgCost` per share for
+ * stocks, per contract (× multiplier) for options. `expiry` YYYYMMDD.
+ */
+export interface TwsPosition {
+  account: string; pos: number; avgCost: number | null;
+  contract: { symbol: string; secType: string; currency: string | null; conId: number | null; expiry: string | null; strike: number | null; right: "C" | "P" | null; multiplier: number | null; tradingClass: string | null };
+}
+/** One account-summary value (reqAccountSummary): e.g. NetLiquidation 50000 USD, ExchangeRate 0.72 CAD. */
+export interface AccountValue { account: string; tag: string; value: string; currency: string }
+/** A read-only account subscription's events. */
+export interface AccountHandlers<T> { onData(v: T): void; onEnd(): void; onError(e: TwsRequestError): void }
+
 export interface TwsSession {
   readonly accounts: string[];
+  /** Subscribes to every account's positions (reqPositions: initial list, end, then changes); returns cancel. Read-only. */
+  positions(h: AccountHandlers<TwsPosition>): () => void;
+  /** Subscribes to the account summary of all accounts for `tags` (reqAccountSummary, group "All"); returns cancel. Read-only. */
+  accountSummary(tags: string, h: AccountHandlers<AccountValue>): () => void;
   historical(contract: TwsContract, req: HistoricalRequest, signal: AbortSignal): Promise<HistBar[]>;
   contractDetails(contract: TwsContract, signal: AbortSignal): Promise<TwsContract[]>;
   /** `timeoutMs`: how long to wait for the answer (the adapter's default when omitted). */

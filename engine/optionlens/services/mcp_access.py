@@ -6,6 +6,10 @@ the stdio MCP server (`python -m optionlens.mcp`) reads to reach the running eng
 every start (it binds a random port). Turning access off removes the file and revokes the key at once; turning it on
 again, or "Regenerate", makes a new key. The key is never logged or returned by the API.
 
+"Allow agents to see my portfolio" (`portfolio`, default off) is a second, separate permission kept in the same file
+(so the MCP server can hide the portfolio tools): turning agent access off removes it with the file, so it is off
+again whenever access is turned back on.
+
 Which requests the key may make is decided by the engine's auth (api/auth.py) from the MCP tool catalog."""
 from __future__ import annotations
 
@@ -45,6 +49,7 @@ class McpAccess:
         self._port: int | None = None
         self._last_call: dict | None = None
         self._clients: dict[str, float] = {}
+        self._portfolio = False
         self._token = self._load()
 
     def _load(self) -> str | None:
@@ -53,6 +58,7 @@ class McpAccess:
         if raw is not None and not (isinstance(token, str) and len(token) >= 32):
             log.warning("ignoring an unreadable MCP connection file (%s): MCP access is off", self.path)
             return None
+        self._portfolio = token is not None and raw.get("portfolio") is True
         return token
 
     # ------------------------------------------------------------------ state
@@ -62,6 +68,20 @@ class McpAccess:
     @property
     def enabled(self) -> bool:
         return self._token is not None
+
+    def allows(self, gate: str | None) -> bool:
+        """Whether agents may use the tools of `gate` (None: no gate of their own)."""
+        return gate is None or (gate == "portfolio" and self._token is not None and self._portfolio)
+
+    def set_portfolio(self, on: bool) -> dict:
+        """"Allow agents to see my portfolio". ValueError while agent access is off."""
+        with self._lock:
+            if self._token is None:
+                raise ValueError("MCP access is off")
+            self._portfolio = bool(on)
+            self._write()
+            log.info("MCP portfolio access %s", "allowed" if on else "not allowed")
+        return self.status()
 
     def listening(self, port: int) -> None:
         """The engine bound `port`: an enabled connection file gets it (the port changes on every start)."""
@@ -83,6 +103,7 @@ class McpAccess:
         """Off: the key is revoked at once and the connection file removed."""
         with self._lock:
             self._token = None
+            self._portfolio = False
             self._clients.clear()
             self.path.unlink(missing_ok=True)
             log.info("MCP access disabled")
@@ -100,7 +121,8 @@ class McpAccess:
         return self.status()
 
     def _write(self) -> None:
-        write_json_atomic(self.path, {"port": self._port, "mcp_token": self._token}, mode=0o600)
+        write_json_atomic(self.path, {"port": self._port, "mcp_token": self._token, "portfolio": self._portfolio},
+                          mode=0o600)
 
     # ------------------------------------------------------------------ activity
     def record(self, client: str | None, tool_path: str) -> None:
@@ -114,12 +136,14 @@ class McpAccess:
                 del self._clients[min(self._clients, key=self._clients.__getitem__)]
 
     def status(self) -> dict:
-        """GET /api/mcp: {enabled, connection_file, port, last_call, clients[{name, last_seen_at}]} (no key)."""
+        """GET /api/mcp: {enabled, portfolio, connection_file, port, last_call, clients[{name, last_seen_at}]} (no
+        key)."""
         now = self.clock()
         with self._lock:
             recent = sorted(((n, t) for n, t in self._clients.items() if now - t <= CLIENT_WINDOW_S),
                             key=lambda x: -x[1])
-            return {"enabled": self._token is not None, "connection_file": str(self.path), "port": self._port,
+            return {"enabled": self._token is not None, "portfolio": self._token is not None and self._portfolio,
+                    "connection_file": str(self.path), "port": self._port,
                     "last_call": self._last_call if self._token is not None else None,
                     "clients": [{"name": n, "last_seen_at": _iso(t)} for n, t in recent]}
 

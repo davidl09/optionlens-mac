@@ -64,6 +64,14 @@ class Engine:
             raise EngineError(NOT_RUNNING)
         return f"http://127.0.0.1:{port}", token
 
+    def allows(self, gate: str | None) -> bool:
+        """Whether the user allowed the tools of `gate` (the connection file's `portfolio`; None: no gate). Read on
+        every call, like the key: no restart needed when the user changes it."""
+        if gate is None:
+            return True
+        raw = read_json(self.path)
+        return isinstance(raw, dict) and raw.get(gate) is True
+
     async def call(self, method: str, path: str, query: Mapping[str, str] | None = None, body: Any = None,
                    client: str | None = None) -> Any:
         """The JSON answer of `method path` (path may carry its own query string). EngineError otherwise."""

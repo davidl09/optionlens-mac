@@ -1,0 +1,17 @@
+{
+  "_note": "Doc-shaped answer of GET v1/symbols?ids= (fields of symbols/:id): the stock XYZ, a call on it, and THI.TO",
+  "symbols": [
+    {"symbol": "XYZ", "symbolId": 1000, "prevDayClosePrice": 98.0, "currency": "USD", "securityType": "Stock",
+     "optionType": null, "optionRoot": "", "optionContractDeliverables": {"underlyings": [], "cashInLieu": 0},
+     "optionExpiryDate": null, "optionStrikePrice": null, "listingExchange": "NYSE", "hasOptions": true},
+    {"symbol": "XYZ18Dec26C110.00", "symbolId": 2030220, "prevDayClosePrice": 1.4, "currency": "USD",
+     "securityType": "Option", "optionType": "Call", "optionDurationType": "Monthly", "optionRoot": "XYZ",
+     "optionContractDeliverables": {"underlyings": [{"multiplier": 100, "underlyingSymbol": "XYZ",
+                                                     "underlyingSymbolId": 1000}], "cashInLieu": 0},
+     "optionExerciseType": "American", "optionExpiryDate": "2026-12-18T00:00:00.000000-05:00",
+     "optionStrikePrice": 110, "listingExchange": "OPRA", "hasOptions": false},
+    {"symbol": "THI.TO", "symbolId": 38738, "prevDayClosePrice": 59.8, "currency": "CAD", "securityType": "Stock",
+     "optionType": null, "optionRoot": "", "optionContractDeliverables": {"underlyings": [], "cashInLieu": 0},
+     "optionExpiryDate": null, "optionStrikePrice": null, "listingExchange": "TSX", "hasOptions": true}
+  ]
+}

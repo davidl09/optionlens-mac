@@ -70,6 +70,15 @@ export function McpCard() {
         <span id="mcp-label" className="switch-label">Allow AI agents (MCP)</span>
       </div>
       <p className="small warn-text">{MCP_WARNING}</p>
+      {on && status && (
+        <div className="switch-row">
+          <button type="button" role="switch" className="switch" aria-checked={status.portfolio} aria-labelledby="mcp-portfolio-label" disabled={busy} onClick={() => void act(() => api.setMcpPortfolio(!status.portfolio))}>
+            <span className="switch-knob" aria-hidden="true" />
+          </button>
+          <span id="mcp-portfolio-label" className="switch-label">Allow agents to see my portfolio</span>
+          <span className="muted small">{status.portfolio ? "On: agents can read positions, P/L and balances (account numbers masked; still no trading)" : "Off: portfolio tools hidden from agents"}</span>
+        </div>
+      )}
       <p className="muted small">An AI agent on this computer (Claude Code, Claude Desktop, any MCP client) can then use OptionLens like you do: every page's data, reports, what you are looking at, watchlists, alerts and presets. OptionLens must be running.</p>
       {status && (
         <div className="small" role="status" data-testid="mcp-status">

@@ -16,12 +16,13 @@ function signGradient(ys: number[], up: string, down: string) {
   return { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: up }, { offset: z, color: up }, { offset: z, color: down }, { offset: 1, color: down }] };
 }
 
-/** `scaleKey`: what the chart shows (position, eval date, IV shift); a new one rescales the axes. */
-export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { result: CalcResult; evalLabel: string; scaleKey?: string; height?: number }) {
+/** `scaleKey`: what the chart shows (position, eval date, IV shift); a new one rescales the axes. `evalLabel` null: no
+ * separate eval-date curve (it is today's). */
+export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { result: Pick<CalcResult, "prices" | "pnl_expiry" | "pnl_eval" | "pnl_today" | "spot" | "breakevens">; evalLabel: string | null; scaleKey?: string; height?: number }) {
   const p = usePalette();
   const yRange = useRef<{ key: string; range: Range } | null>(null);
   const option = useMemo(() => {
-    const data = extent(result.pnl_expiry, result.pnl_eval, result.pnl_today) ?? [0, 0];
+    const data = extent(result.pnl_expiry, ...(evalLabel ? [result.pnl_eval] : []), result.pnl_today) ?? [0, 0];
     const range = stableRange(yRange.current?.key === scaleKey ? yRange.current.range : null, data);
     yRange.current = { key: scaleKey, range };
     const xStyle = axisStyle(p, "money");
@@ -33,7 +34,7 @@ export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { res
     return {
       animation: false,
       grid: { ...GRID, top: 32 },
-      legend: { ...legendStyle(p), data: ["At expiry", evalLabel, "Today"] },
+      legend: { ...legendStyle(p), data: ["At expiry", ...(evalLabel ? [evalLabel] : []), "Today"] },
       tooltip: {
         trigger: "axis", ...tooltipStyle(p), axisPointer: { type: "line", lineStyle: { color: p.muted, type: "dashed" } },
         formatter: (items: { value: [number, number]; seriesName: string; marker: string }[]) => {
@@ -59,7 +60,7 @@ export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { res
             ],
           },
         },
-        { name: evalLabel, type: "line", data: pts(result.pnl_eval), showSymbol: false, lineStyle: { width: 2, type: "dashed", color: p.series[6] }, itemStyle: { color: p.series[6] } },
+        ...(evalLabel ? [{ name: evalLabel, type: "line", data: pts(result.pnl_eval), showSymbol: false, lineStyle: { width: 2, type: "dashed", color: p.series[6] }, itemStyle: { color: p.series[6] } }] : []),
         { name: "Today", type: "line", data: pts(result.pnl_today), showSymbol: false, lineStyle: { width: 1.5, type: "dotted", color: p.series[3] }, itemStyle: { color: p.series[3] } },
       ],
     };

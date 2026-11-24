@@ -69,6 +69,18 @@ export interface Heartbeat {
   options_subscription: "unknown" | "realtime" | "delayed_only";
 }
 
+/** One position as TWS reports it (reqPositions): `avg_cost` per share (STK), per contract (OPT, × multiplier). */
+export interface IngestPosition {
+  account: string; sec_type: string; symbol: string; currency: string; qty: number; avg_cost: N;
+  multiplier: N; expiry: string | null; strike: N; right: "C" | "P" | null; trading_class: string | null; con_id: N;
+}
+/** The accounts' summary (base currency) and exchange rates (`rate`: base-currency value of 1 `currency`). */
+export interface IngestAccountSummary { account: string; currency: string; net_liquidation: N; cash: N; buying_power: N }
+export interface IngestPositions {
+  source: "ibkr"; fetched_at: string; positions: IngestPosition[]; accounts: IngestAccountSummary[];
+  fx: { currency: string; base: string; rate: number }[];
+}
+
 export interface IngestApi {
   wants(): Promise<unknown>;
   /** The symbols on screen to snapshot now (INTEGRATION.md §9; none unless the bridge is the live fallback). */
@@ -85,6 +97,8 @@ export interface IngestApi {
   ackWants(b: AckWants): Promise<unknown>;
   heartbeat(b: Heartbeat): Promise<unknown>;
   refreshResult(b: RefreshResultBody): Promise<unknown>;
+  /** The accounts' positions and summary (read-only account data, INTEGRATION.md §6 / §11). */
+  positions(b: IngestPositions): Promise<unknown>;
 }
 
 export function ingestApi(http: JsonHttp): IngestApi {
@@ -103,5 +117,6 @@ export function ingestApi(http: JsonHttp): IngestApi {
     ackWants: (b) => http.post("/api/ingest/ack-wants", b),
     heartbeat: (b) => http.post("/api/ingest/heartbeat", b),
     refreshResult: (b) => http.post("/api/ingest/refresh-result", b),
+    positions: (b) => http.post("/api/ingest/positions", b),
   };
 }

@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
 
 API = "https://api07.iq.questrade.com"
+FIXTURES = Path(__file__).parent / "fixtures" / "questrade"
+
+
+def fixture(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_text())
 EXPIRIES = ("2026-11-13", "2026-11-20", "2026-11-27", "2026-12-18")
 STRIKES = tuple(range(70, 140, 10))
 
@@ -55,6 +61,14 @@ class FakeQuestrade:
         self.info_extra: dict = {}  # more GET v1/symbols/1000 fields (reference data)
         self.quote_extra: dict = {}  # more equity quote fields (VWAP, isHalted, lastTradeTime, ...)
         self.candle_vwap = False    # candles carry their own VWAP
+        # Account calls (read-only): the doc samples, plus US positions on XYZ; without the app's account permission
+        # every account call answers 403 code 1016 (market data unaffected).
+        self.account_scope_denied = False
+        self.accounts = fixture("doc_accounts.json")
+        self.positions = {"26598145": {"positions": fixture("doc_accounts_positions.json")["positions"]
+                                       + fixture("accounts_positions_us.json")["positions"]}}
+        self.balances = fixture("doc_accounts_balances.json")
+        self.symbol_details = {s["symbolId"]: s for s in fixture("symbols_ids.json")["symbols"]}
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -75,6 +89,12 @@ class FakeQuestrade:
         if self.scope_denied:
             return httpx.Response(403, json={"code": 1016, "message": "Request is out of allowed OAuth scopes"})
         h = self.headers
+        if path.startswith("/v1/accounts"):
+            return self._account(path, request.method)
+        if path == "/v1/symbols":
+            ids = [int(i) for i in request.url.params.get("ids", "").split(",") if i]
+            return httpx.Response(200, json={"symbols": [self.symbol_details[i] for i in ids
+                                                         if i in self.symbol_details]}, headers=h)
         if path == "/v1/symbols/search":
             prefix = request.url.params["prefix"]
             hits = [{"symbol": prefix, "symbolId": self.listed[prefix], "securityType": "Stock",
@@ -99,6 +119,23 @@ class FakeQuestrade:
             return httpx.Response(200, json={"optionQuotes": self._option_quotes(body)}, headers=h)
         if path.startswith("/v1/markets/candles/"):
             return httpx.Response(200, json={"candles": self.candles(request.url.params)}, headers=h)
+        return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
+
+    def _account(self, path: str, method: str) -> httpx.Response:
+        if method != "GET":
+            return httpx.Response(405, json={"code": 1012, "message": "Method unsupported by endpoint"})
+        if self.account_scope_denied:
+            return httpx.Response(403, json={"code": 1016, "message": "Request is out of allowed OAuth scopes"})
+        parts = path.split("/")          # ["", "v1", "accounts", number, what]
+        if len(parts) == 3:
+            return httpx.Response(200, json=self.accounts)
+        number, what = parts[3], parts[4] if len(parts) > 4 else ""
+        if number not in self.positions:
+            return httpx.Response(404, json={"code": 1018, "message": "Account number not found"})
+        if what == "positions":
+            return httpx.Response(200, json=self.positions[number])
+        if what == "balances":
+            return httpx.Response(200, json=self.balances)
         return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
 
     STEP = {"OneMinute": 60, "FiveMinutes": 300, "FifteenMinutes": 900, "OneHour": 3600}

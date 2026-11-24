@@ -26,6 +26,7 @@ from . import (
     routes_ingest,
     routes_live,
     routes_market,
+    routes_portfolio,
     routes_reports,
     routes_sources,
     routes_symbol,
@@ -127,7 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     _install_errors(app)
     for module in (routes_system, routes_symbol, routes_calc, routes_backtest,
                    routes_reports, routes_market, routes_user, routes_ingest, routes_sources, routes_live,
-                   routes_agents):
+                   routes_portfolio, routes_agents):
         app.include_router(module.router)
     app.add_middleware(BodyLimit)
     if s.auth_enabled:

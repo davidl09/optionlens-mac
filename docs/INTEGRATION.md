@@ -267,10 +267,23 @@ POST /api/ingest/refresh-result            // an on-demand refresh's state (§7)
   "message": "IBKR's contract server is unavailable; …", "waiting_for": "contract-server" }   // both optional
 → 200 RefreshStatus (§7)
 GET /api/ingest/live-wants                 // the symbols on screen to snapshot now (§9): only while the bridge is
-→ 200 {"symbols": ["AAPL", ...], "interval_s": 5}  // the live fallback (Questrade unavailable), else []. The bridge
-                                           // polls it every 5 s while connected and runs one "live" task at a time
+→ 200 {"symbols": ["AAPL", ...], "interval_s": 5,  // the live fallback (Questrade unavailable), else []. The bridge
+       "positions": true}                  // polls it every 5 s while connected and runs one "live" task at a time
                                            // (a weighted share of TWS time, weight 6; never pre-empts), posting the
-                                           // quotes to /api/ingest/quotes as the stats pass does
+                                           // quotes to /api/ingest/quotes as the stats pass does. `positions`: the
+                                           // engine wants the IBKR positions feed (§11: "Show my positions" for IBKR)
+POST /api/ingest/positions                 // the IBKR accounts' positions, read-only (§11)
+{ "source": "ibkr", "fetched_at": "...",
+  "positions": [ { "account": "U1234567", "sec_type": "STK" | "OPT" | ..., "symbol": "AAPL", "currency": "USD",
+                   "qty": 100, "avg_cost": 182.5,            // as TWS reports it: per share (STK), per contract (OPT)
+                   "multiplier": 100, "expiry": "2026-12-18", "strike": 350, "right": "C",   // options
+                   "trading_class": "AAPL", "con_id": 265598 } ],
+  "accounts": [ { "account": "U1234567", "currency": "USD",          // the account's base currency
+                  "net_liquidation": 50000, "cash": 10000, "buying_power": 80000 } ],
+  "fx": [ { "currency": "CAD", "base": "USD", "rate": 0.72 } ] }    // 1 CAD = 0.72 USD ($LEDGER ExchangeRate)
+→ 200 {"stored": n_positions, "accounts": n, "ignored": false}      // ignored: true (nothing kept) while "Show my
+                                                                   // positions" is off for IBKR. Replaces the previous
+                                                                   // push; kept in memory only, never on disk
 POST /api/ingest/ack-wants                 // the bridge accepted (queued) these wants
 { "kind": "option_bars", "items": [ { "symbol": "AAPL", "sessions": ["2026-11-18"] } ] }
 → 200 {"recorded": n_session_symbol_pairs}
@@ -556,6 +569,27 @@ Failure reasons are counted per source over 24 h (jobs/source_health.py) and sho
 (`[{reason, count}]`, top 3), the sweep detail ("failures: 1,141 × 403 code 1016 (missing market-data permission)")
 and the Status line. The IBKR source shows its own the same way (`BridgeStatus.failures`).
 
+**Accounts (read-only, for My → Portfolio, §11)** (`sources/questrade/accounts.py`, `account_mapping.py`). Questrade's
+account pages refuse automated readers, so the shapes are the documented field tables and samples as client libraries
+reproduce them, read tolerantly (fixtures `tests/fixtures/questrade/doc_accounts*.json`): `GET v1/accounts` → `accounts`
+[`type`, `number`, `status`, `isPrimary`, …]; `GET v1/accounts/:id/positions` → `positions` [`symbol`, `symbolId`,
+`openQuantity`, `closedQuantity`, `currentMarketValue`, `currentPrice`, `averageEntryPrice` (per share), `openPnl` /
+`openPnL`, `closedPnl` / `closedPnL`, optional `dayPnl`, …]; `GET v1/accounts/:id/balances` → `perCurrencyBalances`,
+`combinedBalances` (+ start-of-day copies) [`currency`, `cash`, `marketValue`, `totalEquity`, `buyingPower`, …];
+`GET v1/symbols?ids=…` (a market-data call, once per symbol per New York day) → currency, `prevDayClosePrice` and the
+option terms (`optionType`, `optionRoot`, `optionExpiryDate`, `optionStrikePrice`, `optionContractDeliverables.
+underlyings[0].multiplier / underlyingSymbol`). Only GETs; no order, execution or trading call exists anywhere. They
+need the personal app's permission **"Retrieve balances, positions, orders and executions"** (OptionLens reads only
+accounts, positions and balances). Without it `GET v1/accounts` answers **403 code 1016**: that is *not* a market-data
+failure — the account client is built with `flags_forbidden=False`, so the token is not flagged, chains and live quotes
+keep working — the Portfolio's Questrade state is `needs_permission` with "Enable 'Retrieve balances, positions,
+orders and executions' for your Questrade app (API Centre → your personal app), then generate a new manual token and
+paste it in Settings → Data sources → Questrade. …" (also `QuestradeStatus.account_access`, shown on the Questrade
+card); it is asked again only on demand or after a new token is saved (saving a token checks it at once). Account
+calls are paced by their own documented limit (30/s, 30,000/h; 70% of it). The account number appears only in those
+request paths: errors name the path with it masked (`accounts/•••145/positions`), nothing logs it. The FX rate is the
+one Questrade applied: combined CAD total equity ÷ combined USD total equity of an account.
+
 **Connection** (`POST /api/sources/questrade/token {"refresh_token": "…"}` → `QuestradeStatus`, `DELETE` same path,
 `GET /api/sources/questrade`; types.ts `QuestradeStatus`). The engine redeems the pasted token at once (422
 `code: "token_rejected"` when Questrade refuses it, `"upstream"` when its login is unreachable; nothing is stored
@@ -722,7 +756,8 @@ when it is connected (§7).
 
 An AI agent on the same computer (Claude Code, Claude Desktop, any MCP client) can use OptionLens like the user does:
 read every page's data, run reports, see what the user is looking at, and edit watchlists, alerts and presets. No
-trading, orders or account access exist anywhere in OptionLens. Off by default (Settings → AI agents (MCP)).
+trading or orders exist anywhere in OptionLens. Off by default (Settings → AI agents (MCP)). The user's portfolio
+(§11) is a second, separate permission, also off by default: "Allow agents to see my portfolio".
 
 **Server** (`engine/optionlens/mcp/`, the official MCP Python SDK `mcp` 2.x, bundled with the app's Python): a stdio
 MCP server, `python -m optionlens.mcp [--data-dir DIR] [--check]`. It connects to the **running** engine; when the
@@ -745,14 +780,18 @@ with mode 0600 (Windows: the user profile's default ACL); the engine rewrites th
 port) and the MCP server reads the file on every call (a restart or a new key needs no MCP-server restart). The engine
 accepts the key besides the per-launch app token (§2), and only:
 - from a loopback client (127.0.0.0/8, ::1), and without an `Origin` header (never from a web page);
-- for the operations of the MCP tool catalog (below). Anything else with the key: `403 {"detail", "code": "mcp_forbidden"}`.
+- for the operations of the MCP tool catalog (below), and a gated tool only while the user allowed its gate (the
+  portfolio tools: "Allow agents to see my portfolio", kept as `"portfolio": true` in the connection file, so the MCP
+  server can hide them; off again whenever access is turned off). Anything else with the key:
+  `403 {"detail", "code": "mcp_forbidden"}` (for the portfolio the detail says where to allow it).
 Off removes the file and revokes the key at once (`401`); on again, or Regenerate, makes a new key. The key is never
 logged, returned by the API or put in an error message. The app token's access is unchanged.
 
 ```
-GET  /api/mcp              → {enabled, connection_file, port, last_call: {at, operation, client} | null,
+GET  /api/mcp              → {enabled, portfolio, connection_file, port, last_call: {at, operation, client} | null,
                               clients: [{name, last_seen_at}]}     // clients that called in the last 10 min
-PUT  /api/mcp {"enabled"}  → same                                  // on: new key if it was off; off: revoke
+PUT  /api/mcp {"enabled"?, "portfolio"?} → same                    // on: new key if it was off; off: revoke (and
+                                                                   // portfolio off); portfolio: 409 while access is off
 POST /api/mcp/regenerate   → same (409 while off)
 ```
 App token only. `operation` is the endpoint template (`GET /api/symbol/{sym}/summary`), never arguments; `client` is
@@ -770,7 +809,9 @@ optional `anyOf [X, null]` collapsed, enums kept: report ids, alert kinds). Poli
 Read-only POSTs (they compute, nothing is stored): `calc_strategy`, `backtest_stock`, `backtest_options`. Writes
 (annotated `readOnlyHint: false`, `destructiveHint` / `idempotentHint` as they are): `watchlist_create`,
 `watchlist_update`, `watchlist_delete`, `watchlist_add_symbol`, `watchlist_remove_symbol`, `alert_create`,
-`alert_update`, `alert_delete`, `preset_save`, `preset_delete`, `notification_mark_read`. `report_run` takes
+`alert_update`, `alert_delete`, `preset_save`, `preset_delete`, `notification_mark_read`. Gated (read-only, listed and
+callable only while the user allows agents to see the portfolio): `portfolio_positions` (`GET /api/portfolio`),
+`portfolio_risk` (`GET /api/portfolio/risk`); `get_current_view` on the Portfolio page replays them only then too. `report_run` takes
 `report_id` (enum) and `params` (the report's typed params, `report_list` with `report_id` describes them); its query
 is built from them. Plus `describe_units` (local).
 
@@ -778,7 +819,9 @@ is built from them. Plus `describe_units` (local).
 `GET /api/health`, `POST /api/symbol/{sym}/refresh` (a refresh round is orchestrated with the app's bridge),
 `POST|DELETE /api/sources/questrade/token` (a secret), `POST /api/live/subscribe` and `GET /api/live/stream` (the
 renderer's live channel), `PUT /api/live/mode` (switching to streaming freezes the user's other Questrade platforms),
-`GET|PUT /api/mcp`, `POST /api/mcp/regenerate` (agent access administration), `PUT /api/view`. Data import, engine
+`GET|PUT /api/mcp`, `POST /api/mcp/regenerate` (agent access administration), `PUT /api/view`,
+`GET|PUT /api/portfolio/settings` (the user's "Show my positions" switches; `POST /api/ingest/positions` is under the
+ingest prefix). Data import, engine
 restart / quit, updates and the bridge's connection settings are not engine endpoints at all (main-process IPC).
 
 **Output** for agents: compact JSON; every array longer than `limit` (default 100, max 1000) is cut to
@@ -813,3 +856,62 @@ the agent can vary them.
 
 `GET /api/live/quotes?symbols=&contracts=` → `{status, quotes: {SYM: fields}, options: {OSI: fields}}`: the live values in
 memory (§9) of what some window keeps live (default: all of them); the tool `live_quotes`.
+
+---------------------------------------------------------------------------------------------------
+## 11. Portfolio (My → Portfolio; read-only)
+
+The user's own positions from Questrade and IBKR, valued with OptionLens' market data. **Strictly read-only**: no
+order, trade, execution or account-changing endpoint exists anywhere (engine, bridge, renderer); Questrade gets only the
+GETs of §8 "Accounts", TWS only `reqPositions` / `reqAccountSummary` (allowed with the API's "Read-Only API" setting).
+Positions and balances stay in the engine's memory (never on disk, never sent anywhere but this computer's renderer
+and, only if allowed, a local AI agent, §10). Account numbers are masked everywhere they are shown or logged — the
+engine answers only `account` ("Margin •••145": the last 3 characters) and `account_id` (an HMAC of the number under a
+per-process random key: stable while the engine runs, not reversible); the bridge logs `•••567`.
+
+**Sources** (engine `services/portfolio.py`, pure parts in `optionlens/portfolio/`):
+- Questrade: fetched by the engine (§8 "Accounts") when `GET /api/portfolio` finds its data older than 55 s (the
+  Portfolio page polls while it is visible, so: about once a minute while visible, never otherwise) or at once with
+  `?refresh=true` (the page's Refresh). States: `ok`, `needs_permission` (403 code 1016 on `GET v1/accounts`; what to do
+  in `detail`; market data unaffected), `not_connected`, `error` (the last good data stays, as of its time), `disabled`.
+- IBKR: pushed by the bridge (`POST /api/ingest/positions`, §6) while the engine wants it (`live-wants.positions`):
+  `reqPositions` (every account; then each change) and `reqAccountSummary` group "All", tags `NetLiquidation,
+  TotalCashValue,BuyingPower,$LEDGER:ALL` (ExchangeRate per currency); pushed once the first position list is
+  complete, 1 s after a change (debounced) and every 60 s. States: `waiting` (no push yet), `ok`, `stale` (last push
+  older than 3 min: shown as of its time), `disabled`. IBKR's option `avgCost` is per contract: the engine divides it by
+  the multiplier.
+- Settings → Data sources → each broker: **"Show my positions"** (`GET|PUT /api/portfolio/settings {questrade?, ibkr?}`
+  → `{questrade, ibkr}`, `DATA_DIR/portfolio.json`; default on). Off hides the broker's positions and stops fetching
+  them (no Questrade account call; the bridge cancels its subscriptions; pushes are ignored).
+
+**`GET /api/portfolio?currency=USD|CAD&refresh=`** → `Portfolio` (types.ts):
+- `positions` (in `underlyings[].positions`): qty in shares / contracts, `avg_cost` and `price` per share; money in the
+  position's currency. `price`: the live value (§9) while some window keeps the contract live — the Portfolio page
+  subscribes the held US stocks, option contracts and SPY — else the fresher of the stored quote / chain row and the
+  broker's own price (`price_source` live | stored | broker). Market value = price × qty × multiplier; cost basis =
+  avg cost × qty × multiplier; unrealized P/L and % of |cost basis|; day P/L = the broker's figure (`day_pnl_basis`
+  "broker", Questrade's `dayPnl` when sent), else (price − previous close) × qty × multiplier ("prev_close": the live /
+  stored quote's previous close; for options the broker's previous close or the last archived session's mid; exact
+  only for a position held through that close), else null. Greeks from the IV (live, else the chain's, else implied
+  from the price; Black-Scholes as the calculator): `delta` (shares), `delta_dollars` (× underlying price), `gamma`
+  (shares per $1), `theta` ($/day), `vega` ($/vol pt); a stock: delta = qty. `beta` (1-year vs SPY) and
+  `bwd_delta_spy` = delta × price × beta / SPY price (US positions only). Unknown values are null, never 0.
+- Aggregates per underlying (adds `delta`, `gamma`), account, broker and total: `by_currency` sums each currency on its
+  own; `converted` into the reporting currency only with a broker's FX rate (Questrade: combined CAD ÷ combined USD
+  balances; IBKR: `$LEDGER` ExchangeRate; the freshest rate of a pair; direct, inverse or one hop), labelled in
+  `rates` / `fx[].label`; `values: null` with `missing_fx` when a currency has no rate (never a silent cross-currency
+  sum); `unknown` counts the positions a value was unknown for. `balance_totals`: net liquidation, cash, buying power
+  the same way. `beta_weighted`: Σ bwd_delta_spy (SPY shares), × SPY price, positions weighted / excluded.
+- `sources[]`: each broker's `{state, detail, fetched_at, accounts, positions}`; `live`: what the page keeps live.
+
+**`GET /api/portfolio/risk?underlying=`** → `PortfolioRisk`: everything held on one US underlying, across accounts and
+brokers, as one calculator position (analytics.payoff, the calculator engine): each leg at its cost basis (the
+average cost is the entry price), options at their IV (as above); P/L at the nearest expiry and today across underlying
+prices, breakevens, max profit / loss, greeks; legs without an IV or a cost are left out and named in `skipped`.
+
+**Renderer** (`src/pages/Portfolio.tsx`, helpers `src/lib/portfolio.ts`): a totals header (net liquidation, cash,
+buying power, market value, unrealized and day P/L, delta $, theta/day, vega, beta-weighted delta), the FX rate used,
+positions grouped by underlying with expandable legs (source badge Questrade / IBKR, masked account), live P/L with
+600 ms flashes (re-read every 3 s while live quotes flow, else every 60 s, only while the window is visible), a risk
+graph per underlying, "Open in calculator" (the positions at their cost basis as pinned prices — your price, live quotes
+do not move them — the same contract in several accounts as one leg, up to the calculator's 8), each source's state
+with what to do, and empty states ("No open positions", "Connect a broker").

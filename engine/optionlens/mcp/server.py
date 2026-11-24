@@ -72,8 +72,10 @@ class OptionLensTools:
         self._validators = {t.name: jsonschema.Draft202012Validator(t.input_schema) for t in tools}
 
     def listed(self) -> list[types.Tool]:
+        """The tools, without those of a gate the user has not allowed (the portfolio)."""
         return [types.Tool(name=t.name, description=t.description, input_schema=t.input_schema,
-                           annotations=_annotations(t)) for t in self.tools.values()] + [DESCRIBE_UNITS]
+                           annotations=_annotations(t)) for t in self.tools.values()
+                if self.engine.allows(t.gate)] + [DESCRIBE_UNITS]
 
     async def call(self, name: str, args: dict[str, Any], client: str | None = None) -> Any:
         """A tool's answer (JSON-able, already shaped for the agent). EngineError / ValueError for the agent."""
@@ -82,6 +84,8 @@ class OptionLensTools:
         t = self.tools.get(name)
         if t is None:
             raise ValueError(f"unknown tool {name!r}")
+        if not self.engine.allows(t.gate):
+            raise EngineError(catalog.GATES[t.gate])   # type: ignore[index]
         errors = sorted(self._validators[name].iter_errors(args), key=lambda e: list(e.path))
         if errors:
             raise ValueError("; ".join(f"{'.'.join(map(str, e.path)) or 'arguments'}: {e.message}" for e in errors[:5]))
@@ -124,6 +128,9 @@ class OptionLensTools:
             entry: dict[str, Any] = {"request": f"{method} {path}"}
             if t is None or not t.read_only:
                 data.append({**entry, "error": "not available to AI agents"})
+                continue
+            if not self.engine.allows(t.gate):
+                data.append({**entry, "error": catalog.GATES[t.gate]})   # type: ignore[index]
                 continue
             entry["tool"] = t.name
             entry["arguments"] = {**self.arguments(t, path), **(req.get("body") or {})}

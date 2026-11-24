@@ -3,7 +3,10 @@ raise errors.QuestradeError, classified per errors.py:
 
 - 401 (code 1017 "Access token is invalid"): the access token is dropped, refreshed once and the call retried; a
   second 401, any 403 (e.g. 1016 "out of allowed OAuth scopes") and codes 1014-1017: the token manager is told the
-  source needs attention (TokenManager.flag: no further calls until a new token is pasted) and the call fails;
+  source needs attention (TokenManager.flag: no further calls until a new token is pasted) and the call fails.
+  A client for an optional permission (`flags_forbidden=False`: the account calls, which need the app's
+  "Retrieve balances, positions, orders and executions" permission) fails a 403 without flagging: market data keeps
+  working while that permission is missing;
 - 429 (code 1006 "Rate limit exceeded"): the gate pauses until X-RateLimit-Reset, then the call is retried
   (at most RETRIES_429 times);
 - 5xx / timeouts / connection errors: exponential backoff, RETRIES times;
@@ -47,8 +50,9 @@ def _error(url: str, r: httpx.Response) -> QuestradeError:
 
 class QuestradeClient:
     def __init__(self, tokens: TokenManager, gate: RateGate, http: Callable[[], httpx.AsyncClient],
-                 sleep: Callable[[float], Awaitable[object]] = asyncio.sleep):
+                 sleep: Callable[[float], Awaitable[object]] = asyncio.sleep, flags_forbidden: bool = True):
         self.tokens, self.gate, self.http, self.sleep = tokens, gate, http, sleep
+        self.flags_forbidden = flags_forbidden
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._request("GET", path, params=params)
@@ -98,7 +102,8 @@ class QuestradeClient:
                 continue
             if not r.is_success:
                 err = _error(url, r)
-                if err.kind == "auth":   # circuit breaker: every further call would fail the same way
+                if err.kind == "auth" and (self.flags_forbidden or r.status_code != 403):
+                    # circuit breaker: every further call would fail the same way
                     self.tokens.flag(err.attention or err.reason, err.reason)
                     log.warning("questrade: %s; no further calls until a new token is pasted", err.reason)
                 raise err

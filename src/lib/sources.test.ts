@@ -16,7 +16,7 @@ const BRIDGE: BridgeStatus = {
 const QT: QuestradeStatus = {
   name: "questrade", state: "needs_attention", refreshed_at: null, calls_last_hour: 2283, hour_budget: 10500, remaining: null,
   reset_at: null, paused_until: null, delayed: null, expiries: 8, moneyness: 0.25, last_chain_at: null, last_sweep_at: null,
-  last_sweep_detail: null, verification: null,
+  last_sweep_detail: null, verification: null, account_access: { state: "waiting", detail: null },
   detail: "Your Questrade app lacks the 'Retrieve delayed and real-time market data' permission. In Questrade's API Centre enable it for your personal app, generate a new manual token, and paste it here.",
   failures: [{ reason: "403 code 1016 (missing market-data permission)", count: 1141 }],
 };

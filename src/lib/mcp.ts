@@ -3,7 +3,7 @@
 import type { McpSetup } from "../../electron/shared/api";
 
 export const SERVER_NAME = "optionlens";
-export const MCP_WARNING = "Agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. No trading is possible.";
+export const MCP_WARNING = "Agents with this access can read all your OptionLens data (your portfolio only if you also allow it below) and edit watchlists/alerts/presets. No trading is possible.";
 
 /** One shell word: always quoted when it is the program (a path), otherwise only when it needs it. */
 function word(s: string, windows: boolean, program = false): string {

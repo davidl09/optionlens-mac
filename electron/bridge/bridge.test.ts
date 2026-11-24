@@ -5,7 +5,7 @@ import type { BridgeStatus } from "../shared/api";
 import { Bridge } from "./bridge";
 import { emptyMarket, FakeConnector, FakeSession, memoryContractStore } from "./fake-tws.test-helper";
 import type { ContractStore } from "./contract-cache";
-import type { Heartbeat, IngestApi, IngestChain, IntradayBarsPush, RefreshResultBody, UnderlyingStats } from "./ingest";
+import type { Heartbeat, IngestApi, IngestChain, IngestPositions, IntradayBarsPush, RefreshResultBody, UnderlyingStats } from "./ingest";
 import { CONTRACTS_UNAVAILABLE, OPTION_QUOTES_CLOSED } from "./jobs";
 import type { OptionsFeedStore } from "./options-feed";
 import { Ledger } from "./ledger";
@@ -35,9 +35,10 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
   const rec = (name: string) => async (b: unknown) => { calls.push(`${name}:${(b as { symbol?: string })?.symbol ?? ""}`); return {}; };
   const quoteBodies: unknown[] = [];
   const intraday: IntradayBarsPush[] = [];
+  const positionBodies: IngestPositions[] = [];
   const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), dividendHistory: rec("divs"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
     underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), intradayBars: async (b) => { intraday.push(b); return rec("intraday")(b); }, heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
-    refreshResult: async (b) => { reports.push(b); return {}; } };
+    refreshResult: async (b) => { reports.push(b); return {}; }, positions: async (b) => { positionBodies.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);
   const statuses: BridgeStatus[] = [];
   const bridge = new Bridge({
@@ -46,7 +47,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
     contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
   });
-  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies, intraday };
+  return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies, intraday, positionBodies };
 }
 
 const WANTS = {
@@ -96,6 +97,30 @@ describe("Bridge", () => {
     live = { symbols: [], interval_s: 5 };
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.quoteBodies.length).toBe(2);
+    h.bridge.stop();
+  });
+
+  it("positions feed: read-only subscriptions while the engine wants them, cancelled when it stops wanting them", async () => {
+    let live: unknown = { symbols: [], interval_s: 5, positions: false };
+    const h = harness({}, market(), { live: () => live });
+    h.bridge.start();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(h.session.positionSubs).toHaveLength(0);                       // not wanted: nothing asked of TWS
+    live = { symbols: [], interval_s: 5, positions: true };
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(h.session.positionSubs).toHaveLength(1);
+    expect(h.session.summarySubs.map((x) => x.tags)).toEqual(["NetLiquidation,TotalCashValue,BuyingPower,$LEDGER:ALL"]);
+    const pos = h.session.positionSubs[0].h;
+    pos.onData({ account: "U7654321", pos: 10, avgCost: 150, contract: { symbol: "AAPL", secType: "STK", currency: "USD", conId: 1, expiry: null, strike: null, right: null, multiplier: null, tradingClass: null } });
+    pos.onEnd();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.positionBodies).toHaveLength(1);
+    expect(h.positionBodies[0].positions).toMatchObject([{ account: "U7654321", symbol: "AAPL", qty: 10, avg_cost: 150 }]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.session.positionSubs).toHaveLength(1);                       // the same session: not subscribed twice
+    live = { symbols: [], interval_s: 5, positions: false };
+    await vi.advanceTimersByTimeAsync(5_500);
+    expect(h.session.positionSubs[0].cancelled && h.session.summarySubs[0].cancelled).toBe(true);
     h.bridge.stop();
   });
 

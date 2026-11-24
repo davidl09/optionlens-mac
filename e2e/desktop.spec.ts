@@ -7,6 +7,7 @@ import { handle } from "./mocks";
 import { STATUS } from "./mocks/live";
 import * as mcp from "./mocks/mcp";
 import { resetRefresh } from "./mocks/refresh";
+import { resetPortfolio, settings as portfolioSettings } from "./mocks/portfolio";
 import { questradeStatus } from "./mocks/market";
 import { skew } from "./mocks/symbol";
 
@@ -399,6 +400,36 @@ test("engine unreachable: banner with retry, then recovery reloads the page", as
   await expect(page.locator(".conn-banner")).toHaveCount(0);
 });
 
+test("Settings → Data sources: \"Show my positions\" per broker (on by default); MCP portfolio access off by default", async ({ page }) => {
+  resetPortfolio();
+  await fakeDesktop(page);
+  const seen = await mockEngine(page);
+  await page.goto("/settings");
+  const qt = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "Questrade", exact: true }) });
+  const ib = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "IBKR", exact: true }) });
+  const qSwitch = qt.getByRole("switch", { name: "Show my positions" });
+  const iSwitch = ib.getByRole("switch", { name: "Show my positions" });
+  await expect(qSwitch).toHaveAttribute("aria-checked", "true");
+  await expect(iSwitch).toHaveAttribute("aria-checked", "true");
+  await expect(ib.getByText("“Read-Only API” setting can stay on")).toBeVisible();
+  await iSwitch.click();
+  await expect(iSwitch).toHaveAttribute("aria-checked", "false");
+  await expect(ib.getByText("Off: hidden, not fetched")).toBeVisible();
+  expect(portfolioSettings()).toEqual({ questrade: true, ibkr: false });
+  await expect(qt.getByText("Retrieve balances, positions, orders and executions")).toBeAttached();   // the token steps name it
+  const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "AI agents (MCP)" }) });
+  await expect(card.getByRole("switch", { name: "Allow agents to see my portfolio" })).toHaveCount(0);   // only while access is on
+  await card.getByRole("switch", { name: "Allow AI agents (MCP)" }).click();
+  const pf = card.getByRole("switch", { name: "Allow agents to see my portfolio" });
+  await expect(pf).toHaveAttribute("aria-checked", "false");
+  await pf.click();
+  await expect(pf).toHaveAttribute("aria-checked", "true");
+  await card.getByRole("switch", { name: "Allow AI agents (MCP)" }).click();
+  await expect(pf).toHaveCount(0);
+  expect(mcp.status().portfolio).toBe(false);                                         // off resets it
+  expect(seen.unmocked).toEqual([]);
+});
+
 test("Settings → Updates: up to date, available (notes as plain text), downloading %, ready, error", async ({ page }) => {
   await fakeDesktop(page);
   await mockEngine(page);
@@ -499,7 +530,7 @@ test("Settings → AI agents (MCP): off by default; on shows the warning, who is
   const sw = card.getByRole("switch", { name: "Allow AI agents (MCP)" });
   await expect(sw).toHaveAttribute("aria-checked", "false");
   await expect(card.getByTestId("mcp-status")).toHaveText("Off: no agent can connect.");
-  await expect(card.getByText("Agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. No trading is possible.")).toBeVisible();
+  await expect(card.getByText("Agents with this access can read all your OptionLens data (your portfolio only if you also allow it below) and edit watchlists/alerts/presets. No trading is possible.")).toBeVisible();
   const claudeCode = 'claude mcp add optionlens -- "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"';
   await expect(card.getByLabel("Claude Code", { exact: true })).toHaveText(claudeCode);
   await expect(card.getByLabel("Claude Desktop", { exact: true })).toContainText('"command": "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"');

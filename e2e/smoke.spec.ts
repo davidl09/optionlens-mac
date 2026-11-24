@@ -58,6 +58,7 @@ const PAGES: [string, string | RegExp][] = [
   ["/compare/volatility?symbols=SPY,QQQ,IWM", "IV30 overlay"],
   ["/compare/straddle?symbols=SPY,QQQ&dte=30", "Compare straddles"],
   ["/watchlists", "Earnings plays"],
+  ["/portfolio", "Positions"],
   ["/alerts", "Your alerts"],
   ["/status", "Job runs"],
   ["/about", "Not available (no free source)"],

@@ -1,7 +1,8 @@
 // /s/:sym/* — quote header, grouped tab sub-nav, and tab routes (registry is the single source).
 import { ComponentType } from "react";
-import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api } from "../../api/client";
+import type { Leg } from "../../api/types";
 import { useApi } from "../../api/useApi";
 import { AddToWatchlist } from "../../components/AddToWatchlist";
 import { AfterHoursBadge, AsOf, ErrorBox, HaltedBadge, SourceBadge, Spinner } from "../../components/ui";
@@ -129,10 +130,15 @@ function SubNav({ sym }: { sym: string }) {
   );
 }
 
+/** Calculator legs a navigation hands over (Portfolio → "Open in calculator"): read once when the symbol's pages mount
+ * (switching tabs keeps the legs, as before). */
+export interface SymbolNavState { legs?: Leg[] }
+
 export default function SymbolLayout() {
   const sym = useSym();
+  const handed = (useLocation().state as SymbolNavState | null)?.legs;
   return (
-    <LegsProvider key={sym}>
+    <LegsProvider key={sym} initial={handed}>
       <SymbolRefreshProvider sym={sym}>
         <div className="symbol-page">
           <QuoteHeader sym={sym} />

@@ -1,6 +1,6 @@
 // Scriptable in-memory TwsSession / TwsConnector for unit tests (no TWS needed).
 import type { ContractStore } from "./contract-cache";
-import { TwsRequestError, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import { TwsRequestError, type AccountHandlers, type AccountValue, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsPosition, type TwsSession, type TwsSystemMessage } from "./tws";
 
 export interface FakeMarket {
   /** Ticks delivered (synchronously) when a contract is streamed, keyed by contractId(). */
@@ -90,6 +90,20 @@ export class FakeSession implements TwsSession {
       rec.cancelled = true;
       this.send(() => { if (live) { live = false; this.open -= 1; } });
     };
+  }
+
+  /** Read-only account subscriptions the bridge opened, with their handlers (tests emit through them). */
+  readonly positionSubs: { h: AccountHandlers<TwsPosition>; cancelled: boolean }[] = [];
+  readonly summarySubs: { tags: string; h: AccountHandlers<AccountValue>; cancelled: boolean }[] = [];
+  positions(h: AccountHandlers<TwsPosition>): () => void {
+    const rec = { h, cancelled: false };
+    this.positionSubs.push(rec);
+    return () => { rec.cancelled = true; };
+  }
+  accountSummary(tags: string, h: AccountHandlers<AccountValue>): () => void {
+    const rec = { tags, h, cancelled: false };
+    this.summarySubs.push(rec);
+    return () => { rec.cancelled = true; };
   }
 
   onSystemMessage(cb: (m: TwsSystemMessage) => void): void { this.sys.push(cb); }

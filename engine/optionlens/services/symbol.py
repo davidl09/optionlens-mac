@@ -9,6 +9,7 @@ import numpy as np
 from ..analytics import dividends as divs_a
 from ..analytics import stats, vol
 from ..analytics.calendar import is_monthly_expiry
+from ..models import normalize_symbol
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
 from ..repo import metrics as metrics_repo
@@ -125,6 +126,12 @@ def _beta_corr(symbol: str, a: stats.BarArrays) -> tuple[float | None, float | N
         return (1.0, 1.0) if len(a) > 20 else (None, None)
     spy = stats.bar_arrays(ctx.load_bars(SPY, ctx.today() - timedelta(days=400), live=False))
     return stats.beta_corr(a.dates, a.close, spy.dates, spy.close)
+
+
+def beta_1y(symbol: str) -> float | None:
+    """The symbol's 1-year beta vs SPY (daily log returns; None without enough bars). Portfolio beta weighting."""
+    sym = normalize_symbol(symbol)
+    return _beta_corr(sym, stats.bar_arrays(ctx.load_bars(sym, ctx.today() - timedelta(days=400), live=False)))[0]
 
 
 def _iv_hv_1y(symbol: str, a: stats.BarArrays) -> list[dict]:

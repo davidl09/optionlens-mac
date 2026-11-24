@@ -235,6 +235,25 @@ Nasdaq's history where it has one, else dividends derived from IBKR's dividend-a
 backfills ten years per symbol, a few hours on the first connection), else Questrade's current dividend — each with
 its source, and amounts that disagree between sources flagged.
 
+## Portfolio (read-only)
+
+**My → Portfolio** shows your positions from Questrade and IBKR: totals (net liquidation, cash, buying power, market
+value, unrealized and day P/L, delta $, theta, vega, beta-weighted delta vs SPY), positions grouped by underlying
+with live prices and P/L, option greeks, a risk graph per underlying and **Open in calculator** (your positions at
+their cost basis). Totals in USD or CAD use the exchange rate your broker reported (shown); without one, each currency
+is shown on its own. OptionLens only *reads* positions and balances — it has no way to place, change or cancel
+orders — account numbers show only their last 3 digits, and nothing leaves your computer.
+
+- **Questrade**: your personal app also needs the permission **Retrieve balances, positions, orders and executions**.
+  In Questrade's **API Centre** open your personal app, tick that permission (keep **Retrieve delayed and real-time
+  market data**; never enable trading), save, then **New manual authorization** → **Generate new token** → **Copy
+  token**, and paste it in **Settings → Data sources → Questrade** → **Connect**. Until then the Portfolio page and the
+  Questrade card say what to enable; market data keeps working.
+- **IBKR**: nothing to set up beyond the bridge (IB Gateway / TWS connected); the API's "Read-Only API" setting can stay
+  on.
+- **Settings → Data sources → Show my positions** (per broker, on by default) hides a broker's positions and stops
+  fetching them.
+
 ## Live quotes
 
 While the market is open, what is on screen updates by itself: the symbol header, the option chain (the expiry and
@@ -267,13 +286,16 @@ a **Regenerate key** button, and copyable setup snippets with this computer's pa
 
 OptionLens must be running (the agent's tools then say "OptionLens is not running" until it is). About 60 tools in groups —
 `symbol_*` (26: summary, chain, volatility, earnings, …), `report_list` / `report_run`, `market_overview`,
-`compare_*`, `watchlist_*`, `alert_*`, `preset_*`, `notification_*`, `live_*`, `calc_*`, `backtest_*`,
+`compare_*`, `watchlist_*`, `alert_*`, `preset_*`, `notification_*`, `live_*`, `calc_*`, `backtest_*`, `portfolio_*` (only when allowed),
 `system_status`, `source_questrade_status`, `get_current_view` and `describe_units` (units: percentages and IV are
 fractions, option prices are per share). Long tables come in pages of 100 rows (`limit` / `offset`, `columns` to pick
 report columns). Resources: `optionlens://current-view`, `optionlens://status`, `optionlens://conventions`,
 `optionlens://symbol/{symbol}/summary`.
 
-Security: agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. The MCP key
+Security: agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. Your
+portfolio is separate: agents see it (tools `portfolio_positions`, `portfolio_risk`; account numbers masked) only
+after you also turn on **Allow agents to see my portfolio** (off by default, and off again whenever agent access is
+turned off). The MCP key
 is separate from the app's per-launch token, lives only in `mcp-connection.json` in the data folder (readable by your
 user only), is accepted from this computer only (loopback, never from a web page) and only for the agent tools;
 internal endpoints (the IBKR bridge's ingest, the Questrade token, live-mode switching, agent-access settings) refuse

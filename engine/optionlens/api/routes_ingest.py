@@ -10,7 +10,7 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import live
 from ..models import normalize_symbol
-from ..services import ingest, intraday, refresh
+from ..services import ingest, intraday, portfolio, refresh
 from .deps import respond, symbol_param
 from .json import ApiJSON
 
@@ -319,5 +319,56 @@ async def wants():
 
 @router.get("/live-wants")
 async def live_wants():
-    """The visible symbols the bridge should snapshot now (only while it is the live fallback, docs §9)."""
-    return ApiJSON(live.instance().bridge_wants())
+    """The visible symbols the bridge should snapshot now (only while it is the live fallback, docs §9), and whether
+    the engine wants the IBKR positions feed (`positions`: "Show my positions" for IBKR, docs §11)."""
+    return ApiJSON({**live.instance().bridge_wants(), "positions": portfolio.wanted("ibkr")})
+
+
+Account = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._-]+$")]
+Money = Annotated[float, Field(allow_inf_nan=False)]
+Ccy = Annotated[str, Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")]
+
+
+class PositionIn(_In):
+    account: Account
+    sec_type: Annotated[str, Field(min_length=1, max_length=8)]     # STK, OPT, FUT, CASH, ... (as TWS names it)
+    symbol: Annotated[str, Field(min_length=1, max_length=24)]
+    currency: Ccy = "USD"
+    qty: Num
+    avg_cost: Num | None = None          # as TWS reports it: per share (STK), per contract (OPT, x multiplier)
+    multiplier: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None
+    expiry: date | None = None
+    strike: Strike | None = None
+    right: Literal["C", "P"] | None = None
+    trading_class: Annotated[str, Field(max_length=12)] | None = None
+    con_id: int | None = None
+
+
+class AccountSummaryIn(_In):
+    account: Account
+    currency: Ccy = "USD"
+    net_liquidation: Money | None = None
+    cash: Money | None = None
+    buying_power: Money | None = None
+
+
+class FxIn(_In):
+    currency: Ccy
+    base: Ccy
+    rate: Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
+class PositionsIn(_In):
+    source: Literal["ibkr"]
+    fetched_at: AwareDatetime | None = None
+    positions: list[PositionIn] = Field(default_factory=list, max_length=5000)
+    accounts: list[AccountSummaryIn] = Field(default_factory=list, max_length=100)
+    fx: list[FxIn] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/positions")
+async def ingest_positions(body: PositionsIn):
+    """The IBKR accounts' positions (reqPositions), account summary and exchange rates (reqAccountSummary), read-only
+    (docs §6, §11). Replaces IBKR's previous push; ignored while "Show my positions" is off for IBKR. Account numbers
+    are masked in every answer and never logged."""
+    return await respond(portfolio.ingest_ibkr, body.model_dump())

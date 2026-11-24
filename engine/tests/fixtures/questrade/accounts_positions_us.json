@@ -1,0 +1,14 @@
+{
+  "_note": "Doc-shaped (the field table of accounts/:id/positions, the table's capitalised PnL spellings and an optional dayPnl): a US stock, a short call on it, one closed today",
+  "positions": [
+    {"symbol": "XYZ", "symbolId": 1000, "openQuantity": 200, "closedQuantity": 0, "currentMarketValue": 20040,
+     "currentPrice": 100.2, "averageEntryPrice": 90.5, "closedPnL": 0, "openPnL": 1940, "dayPnl": 440,
+     "totalCost": 18100, "isRealTime": true, "isUnderReorg": false},
+    {"symbol": "XYZ18Dec26C110.00", "symbolId": 2030220, "openQuantity": -2, "closedQuantity": 0,
+     "currentMarketValue": -250, "currentPrice": 1.25, "averageEntryPrice": 2.1, "closedPnL": 0, "openPnL": 170,
+     "totalCost": -420, "isRealTime": true, "isUnderReorg": false},
+    {"symbol": "OLD", "symbolId": 777, "openQuantity": 0, "closedQuantity": 50, "currentMarketValue": 0,
+     "currentPrice": 10.0, "averageEntryPrice": 9.0, "closedPnL": 50, "openPnL": 0, "totalCost": 0,
+     "isRealTime": true, "isUnderReorg": false}
+  ]
+}

@@ -3,7 +3,7 @@
 // mutations invalidate the affected URL prefixes.
 // In the desktop app the engine's base URL and per-launch token come from the preload (memory only,
 // never persisted); in a plain browser requests are same-origin without a token.
-import type { Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain, CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, KeyStats, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, McpStatus, NewsItem, Notification, OpenInterest, OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, QuestradeStatus, RefreshStatus, ReportDef, ReportResult, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef, SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist } from "./types";
+import type { Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain, CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, KeyStats, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, McpStatus, NewsItem, Notification, OpenInterest, OptionsBacktestRequest, Preset, PresetPayload, Portfolio, PortfolioRisk, PortfolioSettings, PriceAction, Profile, QuestradeStatus, RefreshStatus, ReportDef, ReportResult, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef, SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist } from "./types";
 import type { CurrentView, DataRequest } from "../state/view";
 
 export class ApiError extends Error {
@@ -194,11 +194,19 @@ export const api = {
   /** AI-agent access (Settings → AI agents): never returns the key. */
   mcpStatus: () => get<McpStatus>("/api/mcp", 0),
   setMcp: (enabled: boolean) => request<McpStatus>("PUT", "/api/mcp", { enabled }),
+  /** "Allow agents to see my portfolio" (only while agent access is on). */
+  setMcpPortfolio: (portfolio: boolean) => request<McpStatus>("PUT", "/api/mcp", { portfolio }),
   regenerateMcpKey: () => request<McpStatus>("POST", "/api/mcp/regenerate"),
   /** What the user is looking at, for agents (get_current_view). */
   reportView: (view: CurrentView) => request<{ ok: boolean }>("PUT", "/api/view", view),
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),
+
+  /** The user's positions (read-only, INTEGRATION.md §11); `refresh` fetches Questrade's accounts now. Never cached. */
+  portfolio: (currency: string, refresh = false) => get<Portfolio>(`/api/portfolio${qs({ currency, refresh: refresh ? "true" : null })}`, 0),
+  portfolioRisk: (underlying: string) => get<PortfolioRisk>(`/api/portfolio/risk${qs({ underlying })}`, 0),
+  portfolioSettings: () => get<PortfolioSettings>("/api/portfolio/settings", 0),
+  setPortfolioSettings: (s: Partial<PortfolioSettings>) => mutate<PortfolioSettings>("PUT", "/api/portfolio/settings", s, ["/api/portfolio"]),
 
   /** Starts (or joins) the on-demand refresh round of every connected chain source (INTEGRATION.md §7). */
   startRefresh: (s: string) => request<RefreshStatus>("POST", `${sym(s)}/refresh`, undefined, GET_TIMEOUT_MS),

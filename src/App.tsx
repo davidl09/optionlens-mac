@@ -6,6 +6,7 @@ import { OptionsBacktest, StockBacktest, StraddleWingBacktest } from "./pages/Ba
 import { CompareStraddlePage, CompareVolatilityPage } from "./pages/Compare";
 import Dashboard from "./pages/Dashboard";
 import { AboutPage, NotFound, StatusPage } from "./pages/InfoPages";
+import PortfolioPage from "./pages/Portfolio";
 import ReportPage from "./pages/ReportPage";
 import ReportsIndex from "./pages/ReportsIndex";
 import SettingsPage from "./pages/SettingsPage";
@@ -36,6 +37,7 @@ export default function App() {
                 <Route path="/compare/volatility" element={<CompareVolatilityPage />} />
                 <Route path="/compare/straddle" element={<CompareStraddlePage />} />
                 <Route path="/watchlists" element={<Watchlists />} />
+                <Route path="/portfolio" element={<PortfolioPage />} />
                 <Route path="/alerts" element={<Alerts />} />
                 <Route path="/status" element={<StatusPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

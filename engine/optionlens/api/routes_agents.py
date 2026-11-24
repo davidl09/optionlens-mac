@@ -16,21 +16,30 @@ router = APIRouter(prefix="/api", tags=["agents"])
 
 class McpIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    enabled: bool
+    enabled: bool | None = None
+    portfolio: bool | None = None      # "Allow agents to see my portfolio" (only while access is on)
 
 
 @router.get("/mcp")
 async def mcp_status():
-    """{enabled, connection_file, port, last_call, clients}: never the key."""
+    """{enabled, portfolio, connection_file, port, last_call, clients}: never the key."""
     return ApiJSON(mcp_access.instance().status())
 
 
 @router.put("/mcp")
 async def mcp_set(body: McpIn):
-    """Turn agent access on (a new key when it was off) or off (key revoked, connection file removed)."""
+    """Turn agent access on (a new key when it was off) or off (key revoked, connection file removed, portfolio
+    access off too); `portfolio` allows or stops agents seeing the portfolio (409 while access is off)."""
     a = mcp_access.instance()
     try:
-        return ApiJSON(a.enable() if body.enabled else a.disable())
+        out = a.status()
+        if body.enabled is not None:
+            out = a.enable() if body.enabled else a.disable()
+        if body.portfolio is not None and (body.enabled is not False):
+            out = a.set_portfolio(body.portfolio)
+        return ApiJSON(out)
+    except ValueError as e:
+        raise HTTPException(409, detail=str(e)) from e
     except OSError as e:
         raise HTTPException(500, detail=f"Could not write the MCP connection file: {e}") from e
 

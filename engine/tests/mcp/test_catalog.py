@@ -66,7 +66,7 @@ def test_names_are_unique_grouped_snake_case(tools):
     names = [t.name for t in tools]
     assert len(names) == len(set(names))
     groups = ("symbol_", "report_", "market_", "compare_", "watchlist_", "alert_", "preset_", "notification_",
-              "live_", "source_", "calc_", "backtest_", "system_", "get_current_view")
+              "live_", "source_", "calc_", "backtest_", "system_", "portfolio_", "get_current_view")
     for n in names:
         assert re.fullmatch(r"[a-z][a-z0-9_]*", n) and n.startswith(groups), n
 

@@ -15,6 +15,7 @@ import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
 import { nyDate } from "./ny";
 import { OptionsFeed, type OptionsFeedStore } from "./options-feed";
+import { PositionsFeed } from "./positions";
 import { chunks, durationOf } from "./intraday";
 import { HistoricalPacer, IntradayGate, type Gate } from "./pacer";
 import { Parked, RetryLater, Scheduler, URGENT, type Outcome, type Task } from "./scheduler";
@@ -93,6 +94,8 @@ export class Bridge {
   private readonly contracts: ContractCache;
   private readonly contractServer: ContractServer;
   private readonly optionsFeed: OptionsFeed;
+  /** The read-only positions feed (INTEGRATION.md §11), on while the engine wants it. */
+  readonly positionsFeed: PositionsFeed;
   private readonly now: () => number;
   /** The sec-def farm state last seen (its return to OK resumes parked chains). */
   private secDefState: FarmState = "unknown";
@@ -139,6 +142,7 @@ export class Bridge {
     this.contracts = new ContractCache(d.contractStore ?? null);
     this.contractServer = new ContractServer(() => this.supervisor.state().farms.secDef.state, this.now);
     this.optionsFeed = new OptionsFeed(d.optionsFeedStore ?? null);
+    this.positionsFeed = new PositionsFeed({ ingest: d.ingest, log: d.log, now: this.now });
     this.failures = new FailureLog(this.now);
     this.supervisor = new TwsSupervisor({
       connector: d.connector, settings: d.settings, log: d.log, now: this.now,
@@ -159,6 +163,7 @@ export class Bridge {
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    this.positionsFeed.stop();
     this.scheduler.dispose();
     this.supervisor.stop();
     this.d.ledger.flush();
@@ -319,7 +324,7 @@ export class Bridge {
   private onSession(s: TwsSession | null): void {
     this.session = s;
     this.lines.reset();
-    if (!s) { this.resetFill(); this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
+    if (!s) { this.positionsFeed.stop(); this.resetFill(); this.scheduler.cancel(); this.scheduler.pause(); this.emit(); return; }
     this.contractServer.answered();   // a new Gateway session: contract requests are tried afresh
     this.onConnectionChange();
     void this.heartbeat();
@@ -383,14 +388,17 @@ export class Bridge {
    * snapshot task of them at a time (a "live" share of TWS time, never pre-empting other work).
    */
   async pollLive(): Promise<void> {
-    if (!this.session || this.supervisor.state().paused || this.scheduler.has(LIVE_KEY)) return;
-    let symbols: string[];
+    if (!this.session) return;
+    let wants: ReturnType<typeof parseLiveWants>;
     try {
-      symbols = parseLiveWants(await this.d.ingest.liveWants()).symbols;
+      wants = parseLiveWants(await this.d.ingest.liveWants());
     } catch {
       return;   // an older engine without live quotes, or not up yet: next poll
     }
-    if (!symbols.length) return;
+    // Account data (read-only) is not market data: it flows even while market data is paused.
+    this.positionsFeed.update(this.session, wants.positions);
+    const symbols = wants.symbols;
+    if (this.supervisor.state().paused || this.scheduler.has(LIVE_KEY) || !symbols.length) return;
     void this.enqueue(this.task("live", LIVE_KEY, `live quotes (${symbols.length} symbols)`, async (ctx) => { if (await pushLiveQuotes(ctx, symbols)) this.pushed(); }));
   }
 

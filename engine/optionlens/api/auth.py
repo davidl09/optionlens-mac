@@ -4,7 +4,8 @@ answered by the CORS middleware, which wraps this one.
 
 The MCP key (AI agents, services/mcp_access.py) is accepted besides the app's token while agent access is on, and
 only: from a loopback client, without an `Origin` header (no browser page), for the operations of the MCP tool
-catalog (mcp/catalog.py). Anything else with that key: 403."""
+catalog (mcp/catalog.py), and a gated tool (the portfolio) only while the user allowed that gate. Anything else with
+that key: 403."""
 from __future__ import annotations
 
 import hmac
@@ -67,4 +68,9 @@ class BearerAuth:
         if self._matcher is None:
             self._matcher = catalog.Matcher(catalog.build(scope["app"].openapi()))
         tool = self._matcher.match(scope["method"], scope["path"])
-        return tool, "" if tool else f"{scope['method']} {scope['path']} is not available to AI agents"
+        if tool is None:
+            return None, f"{scope['method']} {scope['path']} is not available to AI agents"
+        gate = self.mcp() if self.mcp is not None else None
+        if tool.gate is not None and (gate is None or not gate.allows(tool.gate)):
+            return None, catalog.GATES[tool.gate]
+        return tool, ""

@@ -51,7 +51,7 @@ export function buildMenus(defs: ReportDef[]): Menu[] {
       { to: "/backtest/straddle-wing", label: "Straddle / wing (iron fly) backtest" },
     ] }] },
     { label: "My", sections: [{ items: [
-      { to: "/watchlists", label: "Watchlists" }, { to: "/alerts", label: "Alerts & notifications" },
+      { to: "/watchlists", label: "Watchlists" }, { to: "/portfolio", label: "Portfolio" }, { to: "/alerts", label: "Alerts & notifications" },
       { to: "/status", label: "Data status" }, { to: "/settings", label: "Settings" }, { to: "/about", label: "About & data limits" },
     ] }] },
   ].map((m) => ({ ...m, sections: m.sections.filter((s) => s.items.length) }));

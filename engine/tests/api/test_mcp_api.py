@@ -52,11 +52,11 @@ def test_enable_writes_a_private_connection_file(app_client):
     key = enable(app_client)
     path = mcp_access.instance().path
     assert path.name == "mcp-connection.json" and path.parent == get_settings().data_dir
-    assert set(read_json(path)) == {"port", "mcp_token"} and len(key) >= 32
+    assert set(read_json(path)) == {"port", "mcp_token", "portfolio"} and len(key) >= 32
     if sys.platform != "win32":
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     mcp_access.instance().listening(54321)            # the engine bound its port: the file says so
-    assert read_json(path) == {"port": 54321, "mcp_token": key}
+    assert read_json(path) == {"port": 54321, "mcp_token": key, "portfolio": False}
     assert app_client.put("/api/mcp", json={"enabled": True}, headers=as_app()).status_code == 200
     assert read_json(path)["mcp_token"] == key           # turning on again keeps the key
 
@@ -144,7 +144,7 @@ def test_the_key_survives_an_engine_restart(tmp_path):
     key = a.token()
     b = mcp_access.McpAccess(tmp_path / "mcp-connection.json")     # the next engine start
     b.listening(40000)
-    assert b.token() == key and read_json(b.path) == {"port": 40000, "mcp_token": key}
+    assert b.token() == key and read_json(b.path) == {"port": 40000, "mcp_token": key, "portfolio": False}
 
 
 # ----------------------------------------------------------------------------- the current view

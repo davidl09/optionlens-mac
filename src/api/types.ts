@@ -102,6 +102,9 @@ export interface QuestradeStatus {
   failures: FailureCount[];
   /** The one market-data call made right after a token was saved ("Token OK: market data permitted" or what failed). */
   verification: { ok: boolean; message: string; at: ISODateTime } | null;
+  /** The Portfolio's account access (INTEGRATION.md §11): needs_permission = the app lacks "Retrieve balances,
+   * positions, orders and executions" (market data unaffected); `detail` says what to do. */
+  account_access: { state: PortfolioSourceState; detail: string | null };
 }
 
 /** GET / PUT /api/live/mode (INTEGRATION.md §9): how Questrade keeps the screen live. `default` applies until the user chooses (`saved`). */
@@ -484,7 +487,64 @@ export interface Notification { id: number; ts: ISODateTime; alert_id: number | 
 // ---------------- AI agents (MCP, INTEGRATION.md §10) ----------------
 /** GET /api/mcp: never the key. `clients`: MCP clients that called in the last 10 minutes. */
 export interface McpStatus {
-  enabled: boolean; connection_file: string; port: number | null;
+  /** `portfolio`: "Allow agents to see my portfolio" (off by default; off again whenever access is turned off). */
+  enabled: boolean; portfolio: boolean; connection_file: string; port: number | null;
   last_call: { at: ISODateTime; operation: string; client: string } | null;
   clients: { name: string; last_seen_at: ISODateTime }[];
 }
+
+// ---------------- portfolio (INTEGRATION.md §11, read-only) ----------------
+export type Broker = "questrade" | "ibkr";
+export type PortfolioSourceState = "ok" | "needs_permission" | "not_connected" | "error" | "disabled" | "waiting" | "stale";
+export interface PortfolioSource {
+  broker: Broker; label: string; enabled: boolean; state: PortfolioSourceState; detail: string | null;
+  fetched_at: ISODateTime | null; attempted_at: ISODateTime | null; accounts: number; positions: number;
+}
+/** A position: qty in shares / contracts (+ long, − short); avg_cost, price per share; money in the position's currency. */
+export interface PortfolioPosition {
+  id: string; broker: Broker; account_id: string; account: string; kind: "stock" | "option" | "other";
+  symbol: string; underlying: string; osi: string | null; expiry: ISODate | null; right: Right | null; strike: number | null;
+  qty: number; multiplier: number; currency: string; avg_cost: number | null;
+  price: number | null; price_source: "live" | "stored" | "broker" | null; price_ts: ISODateTime | null; delayed: boolean | null;
+  spot: number | null; iv: number | null;
+  market_value: number | null; cost_basis: number | null; unrealized_pnl: number | null; unrealized_pct: number | null;
+  /** `day_pnl_basis`: "broker" (the broker's figure) | "prev_close" (price − previous close: exact if held at that close). */
+  day_pnl: number | null; day_pnl_basis: "broker" | "prev_close" | null;
+  /** Position greeks: delta in shares, delta_dollars, gamma (shares per $1), theta ($/day), vega ($/vol pt). */
+  delta: number | null; delta_dollars: number | null; gamma: number | null; theta: number | null; vega: number | null;
+  beta: number | null; bwd_delta_spy: number | null;
+  /** A US-listed stock / option: its symbol page, live quotes and the calculator apply. */
+  linkable: boolean;
+}
+/** Sums per currency; `unknown` counts the rows a value was unknown for (left out of the sum). */
+export type PortfolioSums = Record<string, number | null> & { unknown: Record<string, number> };
+export interface FxRateView { base: string; quote: string; rate: number; source: string; asof: ISODateTime; label: string }
+export interface PortfolioAggregate {
+  by_currency: Record<string, PortfolioSums>;
+  /** Converted into the reporting currency with the brokers' rates; `values` null when a rate is missing (`missing_fx`). */
+  converted: { currency: string; values: PortfolioSums | null; missing_fx: string[]; rates: FxRateView[] };
+  positions: number;
+}
+export interface PortfolioBalance { currency: string; net_liquidation: number | null; cash: number | null; buying_power: number | null }
+export interface PortfolioAccount { broker: Broker; account_id: string; account: string; balances: PortfolioBalance[]; balance_totals: PortfolioAggregate; totals: PortfolioAggregate }
+export interface PortfolioUnderlying {
+  underlying: string; currencies: string[]; spot: number | null; linkable: boolean;
+  /** A risk graph is available (options on a US underlying). */
+  risk: boolean;
+  totals: PortfolioAggregate; bwd_delta_spy: number | null; positions: PortfolioPosition[];
+}
+export interface Portfolio {
+  currency: string; asof: ISODateTime; sources: PortfolioSource[]; fx: FxRateView[];
+  totals: PortfolioAggregate; balance_totals: PortfolioAggregate;
+  beta_weighted: { spy_shares: number | null; dollars: number | null; spy_price: number | null; positions: number; excluded: number };
+  brokers: { broker: Broker; label: string; totals: PortfolioAggregate; balance_totals: PortfolioAggregate }[];
+  accounts: PortfolioAccount[]; underlyings: PortfolioUnderlying[];
+  /** What the page keeps live (held US stocks / options and SPY). */
+  live: { symbols: string[]; contracts: string[] };
+}
+export interface PortfolioRisk extends Partial<CalcResult> {
+  underlying: string; currency: string; spot: number;
+  positions: { symbol: string; account: string; broker: Broker; kind: "stock" | "option" | "other"; qty: number; avg_cost: number | null; osi: string | null; expiry: ISODate | null; right: Right | null; strike: number | null; multiplier: number }[];
+  skipped: { symbol: string; account: string; reason: string }[];
+}
+export interface PortfolioSettings { questrade: boolean; ibkr: boolean }

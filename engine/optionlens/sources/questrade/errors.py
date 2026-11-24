@@ -52,6 +52,17 @@ ATTENTION = {
 }
 
 
+ACCOUNT_ACCESS = ("Enable 'Retrieve balances, positions, orders and executions' for your Questrade app (API Centre → "
+                  "your personal app), then generate a new manual token and paste it in Settings → Data sources → "
+                  "Questrade. Market data keeps working meanwhile; OptionLens only reads accounts, positions and "
+                  "balances.")
+
+
+def scope_missing(status: int | None, code: int | None) -> bool:
+    """A call refused because the personal app lacks the permission it needs (403, code 1016 or none)."""
+    return status == 403 and code in (None, 1016)
+
+
 def classify(status: int | None, code: int | None) -> Kind:
     if status in (401, 403) or code in AUTH_CODES:
         return "auth"

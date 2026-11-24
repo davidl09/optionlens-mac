@@ -7,6 +7,7 @@ import type { QuestradeStatus } from "../api/types";
 import { useApi } from "../api/useApi";
 import { questradeView } from "../lib/sources";
 import { LiveModeSwitch } from "./LiveModeSwitch";
+import { PositionsSwitch } from "./PositionsSwitch";
 import { SourceStateBadge, SourceSummary } from "./SourceSummary";
 import { Card, ErrorBox, InfoBox, Spinner } from "./ui";
 
@@ -16,7 +17,8 @@ function Help() {
       <summary>How to get a refresh token</summary>
       <ol>
         <li>Log in to Questrade and open <b>API Centre</b> from the menu under your name (activate the API once and accept the agreement).</li>
-        <li>Click <b>Register a personal app</b>, give it a name, enable the permission <b>Retrieve delayed and real-time market data</b>, and save.</li>
+        <li>Click <b>Register a personal app</b>, give it a name, enable the permission <b>Retrieve delayed and real-time market data</b> (and, for
+          My → Portfolio, <b>Retrieve balances, positions, orders and executions</b>: OptionLens only reads positions and balances; never enable trading), and save.</li>
         <li>Under the app, click <b>New manual authorization</b> → <b>Generate new token</b>, then <b>Copy token</b>.</li>
         <li>Paste it here and click Connect. OptionLens exchanges it at once; each exchange gives a new token, which the engine
           stores privately on this computer. A token that was already used or left unused too long stops working — then
@@ -26,6 +28,15 @@ function Help() {
         are labelled so. The engine uses at most 70% of Questrade's limits (20 calls/s, 15,000/h).</p>
     </details>
   );
+}
+
+/** The Portfolio's account access: the app needs "Retrieve balances, positions, orders and executions" (read only). */
+function AccountAccess({ s }: { s: QuestradeStatus }) {
+  const a = s.account_access;
+  if (a.state === "needs_permission") return <div className="warn-box" role="alert" data-testid="questrade-account-access">{a.detail}</div>;
+  if (a.state === "ok") return <p className="small pos-text" data-testid="questrade-account-access">Account access: positions and balances readable (read-only).</p>;
+  if (a.state === "error" && a.detail) return <p className="small warn-text" data-testid="questrade-account-access">Account access: {a.detail}</p>;
+  return null;
 }
 
 export function QuestradeCard() {
@@ -70,6 +81,8 @@ export function QuestradeCard() {
         <p className={`small ${s.verification.ok ? "pos-text" : "warn-text"}`} role="status">Token check: {s.verification.message}</p>
       )}
       <LiveModeSwitch />
+      <PositionsSwitch broker="questrade" />
+      <AccountAccess s={s} />
       <p className="muted small">Chains: first {s.expiries} expiries, strikes ±{Math.round(s.moneyness * 100)}%; at most 70% of Questrade's limits.</p>
       {s.paused_until && <p className="muted small">Pausing calls until {new Date(s.paused_until).toLocaleTimeString()} (rate limit).</p>}
       <form className="settings-form" onSubmit={connect}>

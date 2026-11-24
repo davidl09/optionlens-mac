@@ -191,9 +191,11 @@ export function durationFor(from: string, now: Date): string {
 }
 
 /** GET /api/ingest/live-wants (INTEGRATION.md §9): the symbols on screen to snapshot while the bridge is the live fallback. */
-export interface LiveWants { symbols: string[]; intervalMs: number }
+/** `positions`: the engine wants the IBKR positions feed ("Show my positions" for IBKR; absent = an older engine: no). */
+export interface LiveWants { symbols: string[]; intervalMs: number; positions: boolean }
 
 export function parseLiveWants(raw: unknown): LiveWants {
   const w = obj(raw, "live-wants");
-  return { symbols: symbols(w.symbols ?? [], "live-wants.symbols").slice(0, 50), intervalMs: num(w.interval_s, "live-wants.interval_s", 1, 3600) * 1000 };
+  return { symbols: symbols(w.symbols ?? [], "live-wants.symbols").slice(0, 50), intervalMs: num(w.interval_s, "live-wants.interval_s", 1, 3600) * 1000,
+    positions: w.positions === true };
 }

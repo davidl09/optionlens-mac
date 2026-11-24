@@ -1,7 +1,8 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
-import type { CalcRequest, IntradayInterval, IntradayRange, Watchlist } from "../../src/api/types";
+import type { CalcRequest, IntradayInterval, IntradayRange, PortfolioSettings, Watchlist } from "../../src/api/types";
 import * as live from "./live";
 import * as mcp from "./mcp";
+import * as portfolio from "./portfolio";
 import * as m from "./market";
 import * as refresh from "./refresh";
 import { reportResult, REPORT_DEFS } from "./reports";
@@ -22,7 +23,10 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
 
   if (p === "/api/health") return ok({ ok: true });
   if (p === "/api/view") return ok(method === "PUT" ? mcp.reportView(body as Parameters<typeof mcp.reportView>[0]) : mcp.currentView());
-  if (p === "/api/mcp") return ok(method === "PUT" ? mcp.set((body as { enabled: boolean }).enabled) : mcp.status());
+  if (p === "/api/mcp") return ok(method === "PUT" ? mcp.set(body as { enabled?: boolean; portfolio?: boolean }) : mcp.status());
+  if (p === "/api/portfolio") return ok(portfolio.portfolio(q.get("currency") ?? "USD", q.get("refresh") === "true"));
+  if (p === "/api/portfolio/risk") return ok(portfolio.risk(q.get("underlying") ?? ""));
+  if (p === "/api/portfolio/settings") return ok(method === "PUT" ? portfolio.setSettings(body as Partial<PortfolioSettings>) : portfolio.settings());
   if (p === "/api/mcp/regenerate" && method === "POST") { const r = mcp.regenerate(); return r ? ok(r) : { status: 409, body: { detail: "MCP access is off" } }; }
   if (p === "/api/live/stream") return { status: 200, body: null, text: live.defaultStream(), contentType: "text/event-stream" };
   if (p === "/api/live/subscribe" && method === "POST") return ok(live.subscribed(body as Parameters<typeof live.subscribed>[0]));

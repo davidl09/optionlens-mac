@@ -1,4 +1,4 @@
-// Calculator legs shared between the Chain and Calculator tabs of one symbol.
+// Calculator legs shared between the Chain and Calculator tabs of one symbol (and handed over by the Portfolio page).
 import { createContext, ReactNode, useCallback, useContext, useMemo, useState } from "react";
 import type { Leg } from "../api/types";
 
@@ -6,8 +6,9 @@ interface LegsState { legs: Leg[]; setLegs: (legs: Leg[]) => void; addLeg: (leg:
 
 const LegsCtx = createContext<LegsState | null>(null);
 
-export function LegsProvider({ children }: { children: ReactNode }) {
-  const [legs, setLegs] = useState<Leg[]>([]);
+/** `initial`: legs to start with (e.g. the Portfolio's "Open in calculator": positions at their cost basis, pinned). */
+export function LegsProvider({ children, initial }: { children: ReactNode; initial?: Leg[] }) {
+  const [legs, setLegs] = useState<Leg[]>(() => initial ?? []);
   const addLeg = useCallback((leg: Leg) => setLegs((ls) => [...ls, leg]), []);
   const value = useMemo(() => ({ legs, setLegs, addLeg }), [legs, addLeg]);
   return <LegsCtx.Provider value={value}>{children}</LegsCtx.Provider>;

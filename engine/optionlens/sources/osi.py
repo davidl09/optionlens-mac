@@ -31,8 +31,12 @@ def parse_osi(osi: str) -> tuple[str, date, Right, float]:
     return root, date(2000 + int(yy), int(mm), int(dd)), right, int(strike) / 1000.0  # type: ignore[return-value]
 
 
+def osi_code(root: str, expiry: date, right: str, strike: float) -> str:
+    """OSI code of a contract of a known root: root + YYMMDD + C/P + round(strike x 1000) as 8 digits."""
+    return f"{root}{expiry:%y%m%d}{right}{round(strike * 1000):08d}"
+
+
 def format_osi(symbol: str, expiry: date, right: str, strike: float) -> str:
     """OSI code of a standard contract: root (PM root SPXW/NDXP/RUTW for SPX/NDX/RUT, else the symbol
     without dots) + YYMMDD + C/P + round(strike x 1000) as 8 digits."""
-    root = PM_ROOTS.get(symbol, symbol.replace(".", ""))
-    return f"{root}{expiry:%y%m%d}{right}{round(strike * 1000):08d}"
+    return osi_code(PM_ROOTS.get(symbol, symbol.replace(".", "")), expiry, right, strike)

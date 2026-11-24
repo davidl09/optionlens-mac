@@ -29,6 +29,10 @@ vi.mock("@stoqey/ib", async (importOriginal) => {
     reqSecDefOptParams(reqId: number, symbol: string, futFopExchange: string, secType: string, conId: number) { this.calls.push(`reqSecDefOptParams:${reqId}:${symbol}:${JSON.stringify(futFopExchange)}:${secType}:${conId}`); }
     reqMktData(reqId: number, contract: Record<string, unknown>) { this.calls.push("reqMktData"); if (this.validate(reqId, contract)) this.emit("tickPrice", reqId, 1, 2.5); }
     cancelMktData() { this.calls.push("cancelMktData"); }
+    reqPositions() { this.calls.push("reqPositions"); }
+    cancelPositions() { this.calls.push("cancelPositions"); }
+    reqAccountSummary(reqId: number, group: string, tags: string) { this.calls.push(`reqAccountSummary:${reqId}:${group}:${tags}`); }
+    cancelAccountSummary(reqId: number) { this.calls.push(`cancelAccountSummary:${reqId}`); }
   }
   return { ...actual, IBApi: FakeIBApi };
 });
@@ -188,5 +192,36 @@ describe("ibConnector", () => {
     s.stream({ symbol: "DELL", secType: "STK", exchange: "SMART", currency: "USD" }, "", h);
     await new Promise((r) => setTimeout(r, 200));
     expect(ib.calls.filter((c) => c.startsWith("req"))).toEqual(["reqMarketDataType:4", "reqMarketDataType:3", "reqMktData", "reqMktData", "reqMarketDataType:4", "reqMktData"]);
+  });
+  it("account data: reqPositions / reqAccountSummary (read-only), events mapped, cancelled on request", async () => {
+    const p = connect();
+    lastIb().emit(EventName.managedAccounts, "U1234567");
+    lastIb().emit(EventName.nextValidId, 1);
+    const s = await p;
+    const ib = lastIb();
+    const got: unknown[] = [];
+    const values: unknown[] = [];
+    let ends = 0;
+    const stopP = s.positions({ onData: (x) => got.push(x), onEnd: () => { ends += 1; }, onError: () => undefined });
+    const stopS = s.accountSummary("NetLiquidation,$LEDGER:ALL", { onData: (v) => values.push(v), onEnd: () => { ends += 1; }, onError: () => undefined });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ib.calls).toContain("reqPositions");
+    const summaryCall = ib.calls.find((c) => c.startsWith("reqAccountSummary:"))!;
+    expect(summaryCall.endsWith(":All:NetLiquidation,$LEDGER:ALL")).toBe(true);
+    const reqId = Number(summaryCall.split(":")[1]);
+    ib.emit(EventName.position, "U1234567", { symbol: "SPX", secType: "OPT", currency: "USD", conId: 9, lastTradeDateOrContractMonth: "20261218", strike: 6000, right: "C", multiplier: 100, tradingClass: "SPXW" }, -2, 245.5);
+    ib.emit(EventName.positionEnd);
+    ib.emit(EventName.accountSummary, reqId, "U1234567", "NetLiquidation", "50000", "USD");
+    ib.emit(EventName.accountSummary, reqId + 99, "U1234567", "NetLiquidation", "1", "USD");   // another request's
+    ib.emit(EventName.accountSummaryEnd, reqId);
+    expect(got).toEqual([{ account: "U1234567", pos: -2, avgCost: 245.5, contract: { symbol: "SPX", secType: "OPT", currency: "USD", conId: 9, expiry: "20261218", strike: 6000, right: "C", multiplier: 100, tradingClass: "SPXW" } }]);
+    expect(values).toEqual([{ account: "U1234567", tag: "NetLiquidation", value: "50000", currency: "USD" }]);
+    expect(ends).toBe(2);
+    stopP();
+    stopS();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ib.calls).toContain("cancelPositions");
+    expect(ib.calls).toContain(`cancelAccountSummary:${reqId}`);
+    expect(ib.calls.some((c) => /order/i.test(c))).toBe(false);
   });
 });

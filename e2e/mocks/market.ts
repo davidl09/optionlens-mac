@@ -167,5 +167,6 @@ export function questradeStatus(state: QuestradeStatus["state"] = "disconnected"
     last_sweep_detail: connected ? "questrade: 1140 chains, 2 not optionable, 3 not listed, 0 failed, 96s" : null,
     failures: state === "needs_attention" ? [{ reason: "403 code 1016 (missing market-data permission)", count: 1141 }] : [],
     verification: connected ? { ok: true, message: "Token OK: market data permitted", at: "2026-11-19T15:30:00-05:00" } : null,
+    account_access: connected ? { state: "ok", detail: null } : { state: "not_connected", detail: "Connect Questrade in Settings → Data sources." },
   };
 }

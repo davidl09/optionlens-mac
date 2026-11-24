@@ -7,6 +7,7 @@ import type { Logger } from "../main/log";
 import { portLabel, portsToTry } from "../main/settings";
 import { FarmMonitor, type FarmsStatus } from "./farms";
 import { CODE, TwsRequestError, type TwsConnector, type TwsSession, type TwsSystemMessage } from "./tws";
+import { maskAccount } from "./mask";
 
 export const COMPETING_MESSAGE = "IBKR session in use elsewhere — market data paused";
 export const CONNECTIVITY_MESSAGE = "IB Gateway lost its connection to IBKR — market data paused until it is restored";
@@ -149,7 +150,7 @@ export class TwsSupervisor {
     this.failedRounds = 0;
     this.farms.reset();
     const endpoint = portLabel(port);
-    this.o.log.info(`bridge: connected to ${endpoint} on port ${port} (client id ${clientId}, accounts ${session.accounts.join(",") || "?"})`);
+    this.o.log.info(`bridge: connected to ${endpoint} on port ${port} (client id ${clientId}, accounts ${session.accounts.map(maskAccount).join(",") || "?"})`);
     session.onSystemMessage((m) => this.onSystemMessage(m));
     session.onClose((reason) => {
       if (gen !== this.generation || this.session !== session) return;

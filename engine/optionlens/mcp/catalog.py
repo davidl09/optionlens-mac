@@ -6,7 +6,9 @@ Policy:
 - every GET under /api is a read-only tool, unless EXCLUDED (a new GET endpoint becomes a tool by itself, named
   from its path; CURATED gives it a better name and description);
 - any other method is a tool only when CURATED (each write is a decision: annotations and description);
-- every operation is a tool or EXCLUDED with its reason (tests/mcp enforce it, so nothing drifts silently).
+- every operation is a tool or EXCLUDED with its reason (tests/mcp enforce it, so nothing drifts silently);
+- a tool with a `gate` is listed and callable only while the user allowed that gate (GATES; the engine's auth refuses
+  it otherwise, the MCP server hides it): the portfolio tools need "Allow agents to see my portfolio".
 """
 from __future__ import annotations
 
@@ -35,6 +37,14 @@ EXCLUDED: dict[str, str] = {
     "PUT /api/mcp": "AI-agent access administration (the app's Settings only)",
     "POST /api/mcp/regenerate": "AI-agent access administration (the app's Settings only)",
     "PUT /api/view": "the renderer reports its current view (agents read it with `get_current_view`)",
+    "GET /api/portfolio/settings": "the user's \"Show my positions\" switches (the app's Settings only)",
+    "PUT /api/portfolio/settings": "the user's \"Show my positions\" switches (the app's Settings only)",
+}
+# Gates: tools the user must allow on their own (Settings → AI agents), besides agent access itself.
+PORTFOLIO = "portfolio"
+GATES: dict[str, str] = {
+    PORTFOLIO: "The user has not allowed AI agents to see the portfolio. They can turn it on in the OptionLens app: "
+               "Settings → AI agents (MCP) → \"Allow agents to see my portfolio\".",
 }
 # Not engine endpoints at all (the app's main process, over IPC): data import, quitting / restarting the engine,
 # updates, the IBKR bridge's connection settings. No MCP tool can reach them.
@@ -64,6 +74,8 @@ class Curated:
     local_args: Mapping[str, dict] = field(default_factory=dict)
     # A shaping step of the MCP server (shaping.py) applied to the answer: "report_list" | "current_view".
     post: str | None = None
+    # A permission of its own the user must grant (GATES), else the tool is hidden and refused.
+    gate: str | None = None
 
 
 def _w(name: str, description: str, *, destructive: bool = False, idempotent: bool = True) -> Curated:
@@ -225,6 +237,19 @@ CURATED: dict[str, Curated] = {
                            idempotent=False),
     "PUT /api/alerts/{aid}": _w("alert_update", "Change an alert's fields (only those given).", destructive=True),
     "DELETE /api/alerts/{aid}": _w("alert_delete", "Delete an alert.", destructive=True),
+    # ---- the user's portfolio (read-only; only while the user allowed it: gate "portfolio")
+    "GET /api/portfolio": Curated("portfolio_positions", "The user's brokerage positions (Questrade, IBKR), read-only: "
+                                  "per underlying the positions (qty: shares or contracts, avg_cost and price per "
+                                  "share, market_value / cost_basis / unrealized_pnl / day_pnl in $ of the position's "
+                                  "currency, unrealized_pct a fraction), position greeks (delta in shares, "
+                                  "delta_dollars, gamma per $1, theta $/day, vega $/vol pt), aggregates per account / "
+                                  "broker / total by currency and converted with the brokers' FX rates (null when no "
+                                  "rate), balances, beta-weighted delta in SPY shares. Account numbers are masked. "
+                                  "No trading exists.", gate=PORTFOLIO),
+    "GET /api/portfolio/risk": Curated("portfolio_risk", "Risk graph of the user's positions on one underlying: P/L "
+                                       "($ per position total) at the nearest expiry and today across underlying "
+                                       "prices, each leg at its cost basis; breakevens, max profit / loss, greeks.",
+                                       gate=PORTFOLIO),
     "GET /api/notifications": Curated("notification_list", "Alert notifications (newest first); unread=1 for unread "
                                       "only."),
     "POST /api/notifications/read": _w("notification_mark_read", "Mark notifications read: the given ids, or all "
@@ -280,6 +305,7 @@ class ToolDef:
     params_object: str | None = None
     local_args: tuple[str, ...] = ()
     post: str | None = None
+    gate: str | None = None
 
     @property
     def operation(self) -> str:
@@ -399,7 +425,7 @@ def _tool(method: str, path: str, op: Mapping, cur: Curated | None, components: 
         query_params=tuple(query_params), body_params=body_params, read_only=read_only,
         destructive=bool(cur and cur.destructive), idempotent=cur.idempotent if cur else True,
         params_object=cur.params_object if cur else None, local_args=tuple(cur.local_args) if cur else (),
-        post=cur.post if cur else None)
+        post=cur.post if cur else None, gate=cur.gate if cur else None)
 
 
 _REF = "#/components/schemas/"

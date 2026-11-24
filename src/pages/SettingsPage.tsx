@@ -7,6 +7,7 @@ import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
 import { McpCard } from "../components/McpCard";
+import { PositionsSwitch } from "../components/PositionsSwitch";
 import { QuestradeCard } from "../components/QuestradeCard";
 import { SourceStateBadge, SourceSummary } from "../components/SourceSummary";
 import { ibkrView } from "../lib/sources";
@@ -67,7 +68,8 @@ function IbkrSourceCard({ b }: { b: BridgeStatus }) {
   return (
     <Card title="IBKR" subtitle={<SourceStateBadge v={v} />}>
       <SourceSummary v={v} />
-      <p className="muted small">Via the IBKR bridge and your IB Gateway / TWS on this computer (connection settings below).</p>
+      <PositionsSwitch broker="ibkr" />
+      <p className="muted small">Via the IBKR bridge and your IB Gateway / TWS on this computer (connection settings below). Positions use read-only account requests: the API's “Read-Only API” setting can stay on.</p>
     </Card>
   );
 }

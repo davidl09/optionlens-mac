@@ -2,7 +2,7 @@
 // that knows the library; it maps request ids to promises/handlers, applies per-request timeouts and
 // shields the bridge from listener exceptions (a bad tick never crashes the process).
 import { BarSizeSetting, EventName, IBApi, isNonFatalError, MarketDataType, type Contract, type ContractDetails, type SecType as IbSecType } from "@stoqey/ib";
-import { CODE, TwsRequestError, TwsTimeoutError, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsSession, type TwsSystemMessage } from "./tws";
+import { CODE, TwsRequestError, TwsTimeoutError, type AccountHandlers, type AccountValue, type ConnectOptions, type HistBar, type HistoricalRequest, type MarketDataKind, type OptionParams, type SecType, type TickEvent, type TickHandlers, type TwsConnector, type TwsContract, type TwsPosition, type TwsSession, type TwsSystemMessage } from "./tws";
 
 /** Outgoing messages per second: @stoqey/ib queues every request and cancel and sends at this rate. */
 const MSG_RATE = 40;
@@ -55,6 +55,20 @@ function fromIb(d: ContractDetails): TwsContract | null {
     symbol: c.symbol, secType, exchange: c.exchange ?? "SMART", currency: "USD", conId: c.conId, primaryExchange: c.primaryExch,
     lastTradeDateOrContractMonth: detailsExpiry(c as { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }), strike: c.strike, right, tradingClass: c.tradingClass,
     multiplier: c.multiplier === undefined ? undefined : String(c.multiplier),
+  };
+}
+
+/** A position event's contract as the bridge's TwsPosition (expiry YYYYMMDD, right C / P). */
+export function positionOf(account: string, c: Contract, pos: number, avgCost: number | undefined): TwsPosition {
+  const r = String(c.right ?? "").toUpperCase();
+  const num = (v: unknown) => (v === undefined || v === null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  return {
+    account: String(account), pos: Number(pos), avgCost: num(avgCost),
+    contract: {
+      symbol: String(c.symbol ?? ""), secType: String(c.secType ?? ""), currency: c.currency ? String(c.currency) : null, conId: num(c.conId),
+      expiry: detailsExpiry(c as { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }) ?? null, strike: num(c.strike),
+      right: r.startsWith("C") ? "C" : r.startsWith("P") ? "P" : null, multiplier: num(c.multiplier), tradingClass: c.tradingClass ? String(c.tradingClass) : null,
+    },
   };
 }
 
@@ -224,6 +238,45 @@ class IbSession implements TwsSession {
     return () => {
       if (!this.ticks.delete(reqId) || this.closed) return;
       try { this.send(() => this.ib.cancelMktData(reqId)); } catch { /* ignore */ }
+    };
+  }
+
+  positions(h: AccountHandlers<TwsPosition>): () => void {
+    if (this.closed) { h.onError(new TwsRequestError(CODE.NOT_CONNECTED, "not connected")); return () => undefined; }
+    const onPos = (account: string, c: Contract, pos: number, avgCost?: number) => this.safe(() => h.onData(positionOf(account, c, pos, avgCost)));
+    const onEnd = () => this.safe(() => h.onEnd());
+    this.ib.on(EventName.position, onPos);
+    this.ib.on(EventName.positionEnd, onEnd);
+    this.send(() => this.ib.reqPositions());
+    let open = true;
+    return () => {
+      if (!open) return;
+      open = false;
+      this.ib.off(EventName.position, onPos);
+      this.ib.off(EventName.positionEnd, onEnd);
+      if (!this.closed) try { this.send(() => this.ib.cancelPositions()); } catch { /* ignore */ }
+    };
+  }
+
+  accountSummary(tags: string, h: AccountHandlers<AccountValue>): () => void {
+    if (this.closed) { h.onError(new TwsRequestError(CODE.NOT_CONNECTED, "not connected")); return () => undefined; }
+    const reqId = this.nextId++;
+    const onValue = (id: number, account: string, tag: string, value: string, currency: string) => {
+      if (id === reqId) this.safe(() => h.onData({ account: String(account), tag: String(tag), value: String(value), currency: String(currency ?? "") }));
+    };
+    const onEnd = (id: number) => { if (id === reqId) this.safe(() => h.onEnd()); };
+    this.ib.on(EventName.accountSummary, onValue);
+    this.ib.on(EventName.accountSummaryEnd, onEnd);
+    this.pending.set(reqId, { onError: (e) => this.safe(() => h.onError(e)) });
+    this.send(() => this.ib.reqAccountSummary(reqId, "All", tags));
+    let open = true;
+    return () => {
+      if (!open) return;
+      open = false;
+      this.pending.delete(reqId);
+      this.ib.off(EventName.accountSummary, onValue);
+      this.ib.off(EventName.accountSummaryEnd, onEnd);
+      if (!this.closed) try { this.send(() => this.ib.cancelAccountSummary(reqId)); } catch { /* ignore */ }
     };
   }
 

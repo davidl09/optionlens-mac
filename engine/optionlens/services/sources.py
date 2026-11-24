@@ -37,11 +37,14 @@ def questrade_status() -> dict:
     """GET /api/sources/questrade: state (disconnected | connected | expired | error | needs_attention), detail,
     last refresh, last chain served, last sweep, the top failure reasons of the last 24 h ([{reason, count}]), call
     pacing (calls in the last hour of the hourly budget, the API's remaining / reset), whether the last chain was
-    delayed, the last token check (verification), the sweep shape."""
+    delayed, the last token check (verification), the sweep shape, and the account access of the Portfolio page
+    (`account_access` {state, detail}: ok | needs_permission | error | not_connected | disabled | waiting)."""
     src = _questrade()
     at, detail = _last_sweep(src.name)
+    from . import portfolio
     return {"name": src.name, **src.status(), "last_chain_at": options_repo.last_fetched_by(src.name),
-            "last_sweep_at": at, "last_sweep_detail": detail, "failures": source_health.top_failures(src.name)}
+            "last_sweep_at": at, "last_sweep_detail": detail, "failures": source_health.top_failures(src.name),
+            "account_access": portfolio.questrade_access()}
 
 
 def _summary(st: dict) -> str:
@@ -71,7 +74,8 @@ async def connect_questrade(refresh_token: str) -> dict:
     """POST /api/sources/questrade/token: redeem and store a pasted refresh token (clearing a needs_attention state
     and the earlier failures), check it with one market-data call (QuestradeSource.verify: "Token OK: market data
     permitted", or the classified error, e.g. the missing market-data permission), and when it passes start
-    collecting at once (a sweep in the session, else the after-hours fill). 422 code "token_rejected" when Questrade
+    collecting at once (a sweep in the session, else the after-hours fill); then the account permission of the
+    Portfolio page is checked (one GET v1/accounts, which never flags the token). 422 code "token_rejected" when Questrade
     refuses the token, "upstream" when its login cannot be reached."""
     src = _questrade()
     try:
@@ -83,13 +87,17 @@ async def connect_questrade(refresh_token: str) -> dict:
     source_health.reset(src.name)
     if (await src.verify())["ok"]:
         scheduler.run_soon("sweep_fill" if after_session(now_ny()) else "sweep")
+    from . import portfolio
+    await portfolio.refresh_questrade(force=True)   # the account permission is checked too (Portfolio)
     return await asyncio.to_thread(questrade_status)
 
 
 def disconnect_questrade() -> dict:
     """DELETE /api/sources/questrade/token: forget the stored token."""
+    from . import portfolio
     src = _questrade()
     src.tokens.disconnect()
+    portfolio.reset_questrade()
     src.verification = None
     source_health.reset(src.name)
     return questrade_status()
