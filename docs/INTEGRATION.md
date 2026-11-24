@@ -45,6 +45,8 @@ replaced while the engine has it open, so the app stops the engine before an imp
   constant-time. CORS preflights (`OPTIONS`) are answered without a token.
 - `GET /api/health` (no auth) → `{"ok": true, "version": "<semver>", "auth": true|false,
   "server_id": "<stable random id stored in DATA_DIR>"}`.
+- While AI-agent access is on, the MCP key (§10) is accepted too: from loopback only, without an `Origin` header, and
+  only for the MCP tool catalog's operations (else 403).
 
 ## 3. (removed — no certificate pinning: the engine is loopback-only, plain HTTP)
 
@@ -591,3 +593,100 @@ when it is connected (§7).
   change, bid / ask / last / mid, volume, IV / greeks of option rows on the current page; the report re-runs quietly every
   45 s while live, keeping sort, filters, page and scroll); the chart's last candle (at most once a second).
   History-based metrics (IV rank, HV, returns, backtests) are not live.
+
+---------------------------------------------------------------------------------------------------
+## 10. AI agents (MCP)
+
+An AI agent on the same computer (Claude Code, Claude Desktop, any MCP client) can use OptionLens like the user does:
+read every page's data, run reports, see what the user is looking at, and edit watchlists, alerts and presets. No
+trading, orders or account access exist anywhere in OptionLens. Off by default (Settings → AI agents (MCP)).
+
+**Server** (`engine/optionlens/mcp/`, the official MCP Python SDK `mcp` 2.x, bundled with the app's Python): a stdio
+MCP server, `python -m optionlens.mcp [--data-dir DIR] [--check]`. It connects to the **running** engine; when the
+app is not running every tool answers "OptionLens is not running…", when agent access is off "…access is off. Turn it
+on in Settings → AI agents (MCP)". `--check` builds the tool catalog, prints a summary and exits (CI). Launchers that
+run the bundled Python (`-I -B -m optionlens.mcp`):
+- macOS: `OptionLens.app/Contents/Resources/mcp/optionlens-mcp` (shell script);
+- Windows: `<install dir>\resources\mcp\optionlens-mcp.cmd`, started as `cmd /c "<path>"` (MCP clients spawn without a
+  shell);
+- Linux: the AppImage itself, `"<AppImage>" --no-sandbox --ozone-platform=headless --mcp` (the AppImage mounts at a new
+  path on every run; `--mcp` runs the server over the process's stdio instead of the app: no window, no engine, no
+  display needed); an unpacked build: `<dir>/resources/mcp/optionlens-mcp`.
+Settings shows the resolved command for this computer with copyable snippets (Claude Code `claude mcp add optionlens --
+"<launcher>"`, the Claude Desktop JSON config, the generic stdio command). Data folder: `--data-dir`, else
+`OPTIONLENS_DATA_DIR`, else the app's (§1).
+
+**Discovery and auth.** Agent access on = a long-lived random MCP key (32 random bytes, URL-safe base64). Its one home is
+the connection file `DATA_DIR/mcp-connection.json` = `{"port": <engine port>, "mcp_token": "<key>"}`, written atomically
+with mode 0600 (Windows: the user profile's default ACL); the engine rewrites the port on every start (it binds a random
+port) and the MCP server reads the file on every call (a restart or a new key needs no MCP-server restart). The engine
+accepts the key besides the per-launch app token (§2), and only:
+- from a loopback client (127.0.0.0/8, ::1), and without an `Origin` header (never from a web page);
+- for the operations of the MCP tool catalog (below). Anything else with the key: `403 {"detail", "code": "mcp_forbidden"}`.
+Off removes the file and revokes the key at once (`401`); on again, or Regenerate, makes a new key. The key is never
+logged, returned by the API or put in an error message. The app token's access is unchanged.
+
+```
+GET  /api/mcp              → {enabled, connection_file, port, last_call: {at, operation, client} | null,
+                              clients: [{name, last_seen_at}]}     // clients that called in the last 10 min
+PUT  /api/mcp {"enabled"}  → same                                  // on: new key if it was off; off: revoke
+POST /api/mcp/regenerate   → same (409 while off)
+```
+App token only. `operation` is the endpoint template (`GET /api/symbol/{sym}/summary`), never arguments; `client` is
+the MCP client's `name/version` from its initialize request (header `X-OptionLens-MCP-Client`).
+
+**Tools** are generated from the engine's OpenAPI schema (`app.openapi()`, built in the MCP process from the same
+engine package, so tools list even while the app is closed) plus a thin curated layer (`mcp/catalog.py` `CURATED`:
+snake_case names in groups — `symbol_*`, `report_*`, `market_*`, `compare_*`, `watchlist_*`, `alert_*`, `preset_*`,
+`notification_*`, `live_*`, `source_*`, `calc_*`, `backtest_*`, `system_*` — descriptions with unit notes, write
+annotations). JSON-schema inputs come from the endpoint's path / query parameters and request body (titles dropped,
+optional `anyOf [X, null]` collapsed, enums kept: report ids, alert kinds). Policy, enforced by tests:
+- every GET under `/api` is a read-only tool unless excluded (a new GET endpoint becomes a tool by itself, named from
+  its path);
+- any other method is a tool only when curated; every operation is a tool or excluded with a reason.
+Read-only POSTs (they compute, nothing is stored): `calc_strategy`, `backtest_stock`, `backtest_options`. Writes
+(annotated `readOnlyHint: false`, `destructiveHint` / `idempotentHint` as they are): `watchlist_create`,
+`watchlist_update`, `watchlist_delete`, `watchlist_add_symbol`, `watchlist_remove_symbol`, `alert_create`,
+`alert_update`, `alert_delete`, `preset_save`, `preset_delete`, `notification_mark_read`. `report_run` takes
+`report_id` (enum) and `params` (the report's typed params, `report_list` with `report_id` describes them); its query
+is built from them. Plus `describe_units` (local).
+
+**Excluded** (never tools, the key is refused): `/api/ingest/*` (the IBKR bridge's ingest and work lists),
+`GET /api/health`, `POST /api/symbol/{sym}/refresh` (a refresh round is orchestrated with the app's bridge),
+`POST|DELETE /api/sources/questrade/token` (a secret), `POST /api/live/subscribe` and `GET /api/live/stream` (the
+renderer's live channel), `PUT /api/live/mode` (switching to streaming freezes the user's other Questrade platforms),
+`GET|PUT /api/mcp`, `POST /api/mcp/regenerate` (agent access administration), `PUT /api/view`. Data import, engine
+restart / quit, updates and the bridge's connection settings are not engine endpoints at all (main-process IPC).
+
+**Output** for agents: compact JSON; every array longer than `limit` (default 100, max 1000) is cut to
+`[offset, offset + limit)` (`offset < 0` counts from the end) and a top-level `_page` `{json.path: {total, offset,
+returned}}` says what was cut; `columns` keeps only those keys in table rows (and a ReportResult's `columns`).
+Numbers keep the API's units (fractions for percentages and IV, per-share prices, position dollars); `describe_units`
+and the `optionlens://conventions` resource explain units and provenance flags (source, delayed, after_hours, model,
+iv_source / greeks_source computed, contracts_from_cache, null = unknown).
+
+**Current view.** The renderer reports what the user is looking at (`PUT /api/view`, debounced 300 ms, on navigation
+and whenever the page's data, table state or details change; memory only, the latest wins):
+```
+{ "route": "/reports/iv-rankings?min_price=5", "title": "IV rankings", "symbol": null, "tab": null,
+  "report_id": "iv-rankings", "details": {"expiry": "2026-12-18", ...},      // page details (chain: expiry, side…)
+  "data": [ { "method": "GET", "path": "/api/reports/iv-rankings?min_price=5",   // exactly as the page requested it
+              "table": {"sort": {"key", "dir"} | null, "filters": {col: {min, max, text, values}}, "hidden": [col],
+                        "symbols": [...] },                                   // "Watchlist only"
+              "rows": {"offset": 0, "limit": 100, "total": 412} } ] }        // the rows on screen
+```
+`data` holds the engine requests of the main content's data hooks (`useApi` inside `<ViewScope>`: not the header's
+search or notifications), at most 20; GETs and the read-style POSTs (calculator, backtests). `GET /api/view` →
+`{view, reported_at, age_s}`. The tool `get_current_view` (and the resource `optionlens://current-view`) returns the
+view and the data the page shows: each request is matched to its tool (only read-only tools are replayed), re-run with
+the same path, query and body, and report-like results (`rows` + `columns`) get the user's filters and sort (the same
+rule as the renderer's tables: `src/lib/table.ts` / `mcp/shaping.py`, shared cases in
+`engine/tests/fixtures/table-state-cases.json`), the visible rows (`rows.offset` / `limit`, at most 100) and the visible
+columns, unless the agent passes `offset` / `limit` / `columns`. Each entry also names the `tool` and its `arguments`, so
+the agent can vary them.
+
+**Resources:** `optionlens://current-view`, `optionlens://status` (`system_status`), `optionlens://conventions`
+(text/markdown), and the template `optionlens://symbol/{symbol}/summary`.
+
+`GET /api/live/quotes?symbols=&contracts=` → `{status, quotes: {SYM: fields}, options: {OSI: fields}}`: the live values in
+memory (§9) of what some window keeps live (default: all of them); the tool `live_quotes`.

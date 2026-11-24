@@ -239,6 +239,39 @@ background sweeps; without Questrade, IB Gateway snapshots the visible symbols. 
 live updates. Questrade's Level 1 streaming (tick-by-tick) can be turned on instead of polling in Settings → Data sources →
 Questrade ("Stream live quotes"; it falls back to polling on its own when streaming fails), but Questrade says it freezes the market data of any other Questrade platform you have open at the same time.
 
+## AI agents (MCP)
+
+OptionLens can give an AI agent on your computer — Claude Code, Claude Desktop or any MCP client — the same view of
+your data that you have: every page (symbols, chains, volatility, earnings…), all reports with their parameters, the
+market overview, comparisons, status, live quotes, your watchlists, alerts, presets and notifications, and **what you
+are looking at right now** (`get_current_view`: the page, its parameters, filters, sort and visible rows, with the same
+data). Agents can also edit watchlists, alerts and presets and mark notifications read. No trading is possible:
+OptionLens has no orders or account access.
+
+Turn it on in **Settings → AI agents (MCP)** (off by default). Settings then shows who is connected and the last call,
+a **Regenerate key** button, and copyable setup snippets with this computer's paths:
+
+- **Claude Code** (macOS): `claude mcp add optionlens -- "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"`
+- **Claude Code** (Windows): `claude mcp add optionlens -- cmd /c "%LOCALAPPDATA%\Programs\optionlens-mac\resources\mcp\optionlens-mcp.cmd"` (Settings shows the expanded path)
+- **Claude Code** (Linux AppImage): `claude mcp add optionlens -- "$HOME/.local/bin/OptionLens.AppImage" --no-sandbox --ozone-platform=headless --mcp`
+- **Claude Desktop**: add the JSON Settings shows to `claude_desktop_config.json` (`{"mcpServers": {"optionlens": {"command": …, "args": […]}}}`).
+- **Any MCP client**: the stdio command Settings shows.
+
+OptionLens must be running (the agent's tools then say "OptionLens is not running" until it is). About 60 tools in groups —
+`symbol_*` (26: summary, chain, volatility, earnings, …), `report_list` / `report_run`, `market_overview`,
+`compare_*`, `watchlist_*`, `alert_*`, `preset_*`, `notification_*`, `live_*`, `calc_*`, `backtest_*`,
+`system_status`, `source_questrade_status`, `get_current_view` and `describe_units` (units: percentages and IV are
+fractions, option prices are per share). Long tables come in pages of 100 rows (`limit` / `offset`, `columns` to pick
+report columns). Resources: `optionlens://current-view`, `optionlens://status`, `optionlens://conventions`,
+`optionlens://symbol/{symbol}/summary`.
+
+Security: agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. The MCP key
+is separate from the app's per-launch token, lives only in `mcp-connection.json` in the data folder (readable by your
+user only), is accepted from this computer only (loopback, never from a web page) and only for the agent tools;
+internal endpoints (the IBKR bridge's ingest, the Questrade token, live-mode switching, agent-access settings) refuse
+it. Turning access off revokes the key at once; turning it on again or **Regenerate key** makes a new one. Details:
+[docs/INTEGRATION.md §10](docs/INTEGRATION.md#10-ai-agents-mcp).
+
 ## Notifications
 
 The app checks your alerts' notifications every minute and shows each new one as a system notification
