@@ -6,7 +6,8 @@ resolved with Questrade — the Toronto listing `<ticker>.TO`, else the TSX Vent
 (mapping.pick_symbol_id) — and described with `symbols/:id` (name, market cap, hasOptions, indicated dividend
 yield, sector). Kept: candidates Questrade lists options for (`hasOptions`); of the stocks the UNIVERSE_CA_STOCKS
 (200) largest by Questrade's market cap, plus every ETF / trust. Weekly (Mondays) and when a Questrade token is
-saved; without a usable Questrade connection the run is skipped and the stored Canadian universe kept.
+saved; without a usable Questrade connection the run is skipped, and when more than 10% of the lookups fail it
+fails: the stored Canadian universe is kept either way.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from ..sources.questrade.mapping import SymbolInfo
 from ._util import log, run_bounded
 
 CONCURRENCY = 4
+MAX_FAILED_SHARE = 0.10   # more failed lookups than this: the run fails and the stored universe is kept
 KINDS = ("stock", "etf")
 
 
@@ -121,9 +123,9 @@ async def universe_ca() -> str:
             resolved.append((c, *got))
 
     _, failed = await run_bounded(cands, one, CONCURRENCY, "universe_ca")
-    if not resolved:
-        raise RuntimeError(f"Questrade resolved none of {len(cands)} Canadian candidates"
-                           + (f" ({len(failed)} failed)" if failed else ""))
+    if not resolved or len(failed) > MAX_FAILED_SHARE * len(cands):   # keep the stored universe over a partial one
+        raise RuntimeError(f"Questrade resolved {len(resolved)} of {len(cands)} Canadian candidates "
+                           f"({len(failed)} failed); the stored Canadian universe is kept")
     members = select(resolved, get_settings().universe_ca_stocks)
     rows = [symbol_row(s, i, c.kind, c.name) for c, s, i in resolved]
 

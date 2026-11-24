@@ -122,6 +122,18 @@ async def test_canadian_universe_is_the_largest_optionable_stocks_plus_etfs(dire
     assert {"RY.TO", "TD.TO", "XIU.TO"} <= set(symbols_repo.universe_symbols(include_unoptionable=True))
 
 
+async def test_a_partial_refresh_keeps_the_stored_canadian_universe(directory):
+    await universe_ca.universe_ca()
+    before = set(symbols_repo.universe_symbols(include_unoptionable=True))
+
+    async def flaky(symbol):
+        raise RuntimeError("503 from Questrade")
+    directory.symbol_info = flaky
+    with pytest.raises(RuntimeError, match="kept"):
+        await universe_ca.universe_ca()
+    assert set(symbols_repo.universe_symbols(include_unoptionable=True)) == before
+
+
 async def test_canadian_universe_is_skipped_without_questrade(tmpdb, monkeypatch):
     monkeypatch.setattr(universe_ca, "directory", lambda: None)
     assert (await universe_ca.universe_ca()).startswith("skipped: Questrade is not connected")
