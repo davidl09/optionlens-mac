@@ -59,6 +59,10 @@ describe("Windows update helper", () => {
   });
 
   // Runs the generated script with Windows PowerShell 5.1 (CI runs this file on windows-latest).
+  // Windows PowerShell 5.1 takes seconds to start on a CI runner (one start per test, plus the installer .bat files and the
+  // detached relaunch): these tests get a timeout sized for that, not vitest's 5 s default.
+  const LAUNCH_WAIT_MS = 10_000;
+  const WINDOWS_TEST_MS = 60_000;
   describe.runIf(process.platform === "win32")("on Windows", () => {
     const deadPid = () => Number(spawnSync("cmd.exe", ["/c", "exit"]).pid);
     function run(o: { installerExit: number; fallback: boolean }) {
@@ -78,7 +82,10 @@ describe("Windows update helper", () => {
       writeFileSync(script, `\ufeff${windowsHelperScript({ pid: deadPid(), installer, fallback, app, logFile, workDir: work })}`);
       const r = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), [...POWERSHELL_ARGS, script], { encoding: "utf8" });
       const read = (f: string) => (existsSync(f) ? readFileSync(f, "utf8").replace(/\r/g, "") : "");
-      for (let i = 0; i < 40 && !read(marks).includes("launched"); i++) spawnSync("powershell.exe", ["-NoProfile", "-Command", "Start-Sleep -Milliseconds 250"]);
+      // The relaunch is detached: wait for its mark up to a deadline, sleeping in-process (spawning a PowerShell per
+      // poll, as before, cost about a second each on CI runners and pushed the test past its timeout).
+      const tick = new Int32Array(new SharedArrayBuffer(4));
+      for (const until = Date.now() + LAUNCH_WAIT_MS; Date.now() < until && !read(marks).includes("launched");) Atomics.wait(tick, 0, 0, 100);
       const out = { status: r.status, marks: read(marks), log: `${read(logFile)}${r.stdout}${r.stderr}`, workGone: !existsSync(work) };
       rmSync(marksDir, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
@@ -90,12 +97,12 @@ describe("Windows update helper", () => {
       expect(r.marks, r.log).toBe("installed /S --updated\nlaunched\n");
       expect(r.log).toMatch(/installed .*setup new.bat/);
       expect(r.workGone).toBe(true);
-    });
+    }, WINDOWS_TEST_MS);
     it("runs the previous version's installer when the new one fails", () => {
       const r = run({ installerExit: 2, fallback: true });
       expect(r.status).toBe(1);
       expect(r.marks, r.log).toBe("installed /S --updated\nrestored /S --updated\nlaunched\n");
       expect(r.log).toMatch(/failed \(exit code 2\)/);
-    });
+    }, WINDOWS_TEST_MS);
   });
 });
