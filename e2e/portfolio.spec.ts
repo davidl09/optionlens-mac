@@ -14,9 +14,7 @@ test.beforeEach(() => resetPortfolio());
 test("positions grouped by underlying, totals with the broker's FX rate, sources and masked accounts", async ({ page }) => {
   const live = await setup(page);
   live.serve(sse("status", STATUS.closed));
-  await page.goto("/");
-  await page.getByRole("button", { name: "My" }).click();
-  await page.getByRole("link", { name: "Portfolio" }).click();
+  await page.goto("/portfolio");
   await expect(page.getByRole("heading", { name: "Portfolio", level: 1 })).toBeVisible();
   await expect(page.getByText("Read-only: OptionLens shows your positions")).toBeVisible();
   await expect(page.getByTestId("source-questrade")).toHaveAttribute("data-state", "ok");
