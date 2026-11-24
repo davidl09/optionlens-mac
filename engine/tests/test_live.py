@@ -117,7 +117,7 @@ def make_hub(session="regular", driver=None, bridge=None, persisted=None):
     async def persist(q, o):
         persisted.append((q, o))
     h = LiveHub(lambda: driver, bridge or Bridge(), persist if persisted is not None else None, clock=clock,
-                session=lambda _ts: session)
+                session=lambda _ts, _market="US": session)
     return h, clock
 
 

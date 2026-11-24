@@ -28,8 +28,8 @@ from typing import Any, Iterable, Mapping
 
 from ...analytics import markets
 from ...analytics.calendar import NY
-from ...models import (ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar, OptionContract, Quote, Right,
-                       normalize_symbol)
+from ...models import (Bar, ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar, OptionContract, Quote,
+                       Right, normalize_symbol)
 from ..osi import PM_ROOTS, format_osi, standard_roots
 
 STANDARD_MULTIPLIER = 100
@@ -302,6 +302,7 @@ def live_option(symbol: str, c: Listed, q: Mapping) -> dict:
 # ----------------------------------------------------------------------------- candles
 # GET v1/markets/candles/:id `interval` values (Enumerations, "Historical Data Granularity").
 CANDLE_INTERVAL = {"1m": "OneMinute", "5m": "FiveMinutes", "15m": "FifteenMinutes", "1h": "OneHour"}
+DAILY_INTERVAL = "OneDay"
 
 
 def candle_time(ts: datetime) -> str:
@@ -320,3 +321,9 @@ def candles(payload: Mapping) -> list[IntradayBar]:
             continue
         out.append(IntradayBar(ts, o, h, l, cl, _count(c.get("volume")), _price(c.get("VWAP"))))
     return out
+
+
+def daily_bars(payload: Mapping, symbol: str) -> list[Bar]:
+    """OneDay `candles` -> daily Bars (the session = the candle's start date in New York), ascending."""
+    out = {c.ts.astimezone(NY).date(): c for c in candles(payload)}
+    return [Bar(symbol, d, c.open, c.high, c.low, c.close, c.volume) for d, c in sorted(out.items())]

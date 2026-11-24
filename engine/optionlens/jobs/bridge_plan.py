@@ -54,19 +54,25 @@ def _unique(*groups) -> list[str]:
     return list(dict.fromkeys(s for g in groups for s in g))
 
 
+def bridge_symbols(symbols) -> list[str]:
+    """Of `symbols`, those the IBKR bridge serves (chain_source.bridge_serves: US listings)."""
+    return [s for s in symbols if chain_source.bridge_serves(s)]
+
+
 def _user_first(now: datetime) -> list[str]:
     """Watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS."""
     return _unique(user_repo.watchlist_symbols(), views_repo.viewed_since(now - timedelta(days=RECENT_VIEW_DAYS)))
 
 
 def chain_universe(now: datetime | None = None) -> list[str]:
-    """Watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS, then the top
+    """The bridge's chain universe (US listings, bridge_symbols): watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS, then the top
     settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions; without
     symbols a chain source confirmed list no options (opening one still asks the bridge on demand)."""
     now = now or now_ny()
     n = getattr(get_settings(), "chain_universe_size", 150)
     none = {r["symbol"] for r in symbols_repo.list_symbols(optionable=False)}
-    return [s for s in _unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []) if s not in none]
+    return [s for s in bridge_symbols(_unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []))
+            if s not in none]
 
 
 def prioritized(symbols: list[str], now: datetime) -> list[str]:
@@ -117,7 +123,7 @@ def underlying_stats_want(now: datetime | None = None) -> dict:
     universe has no metrics row for it: the symbols without one, in `prioritized` order."""
     now = (now or now_ny()).astimezone(NY)
     d = now.date()
-    universe = symbols_repo.universe_symbols()
+    universe = bridge_symbols(symbols_repo.universe_symbols())
     if is_trading_day(d) and datetime.combine(d, OPEN, NY) <= now < eod_deadline(d):
         return {"symbols": universe, "max_age_s": STATS_MAX_AGE_S}
     day = session_date(now)

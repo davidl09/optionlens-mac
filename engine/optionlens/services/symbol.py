@@ -7,8 +7,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from ..analytics import dividends as divs_a
-from ..analytics import stats, vol
-from ..analytics.calendar import is_monthly_expiry
+from ..analytics import markets, stats, vol
 from ..models import normalize_symbol
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
@@ -89,7 +88,8 @@ def events(symbol: str) -> dict:
     for e in (ca.expiries if ca else ())[:EVENT_EXPIRIES]:
         if e >= t:
             items.append({"date": e, "kind": "expiry", "past": False,
-                          "label": "Option expiry (monthly)" if is_monthly_expiry(e) else "Option expiry"})
+                          "label": "Option expiry (monthly)" if markets.calendar_for(sym).is_monthly_expiry(e)
+                          else "Option expiry"})
     items.sort(key=lambda x: (x["date"], x["kind"]))
     return {"symbol": sym, "items": items}
 
@@ -162,7 +162,8 @@ def summary(symbol: str) -> dict:
     ks = {"symbol": sym, "price": quote["price"] if quote else None,
           **fundamentals_svc.for_symbol(row, quote["price"] if quote else None, ctx.today())}
     return {
-        "symbol": sym, "name": row["name"] or sym, "kind": row["kind"], "sector": row["sector"],
+        "symbol": sym, "name": row["name"] or sym, "kind": row["kind"], **markets.describe(sym),
+        "sector": row["sector"],
         "industry": row["industry"], "market_cap": ks["market_cap"], "optionable": row["optionable"],
         "in_universe": bool(row["in_universe"]), "quote": quote, "key_stats": ks,
         "avg_volume_30d": stats.avg_volume(a.volume, 30, exclude_last=True),

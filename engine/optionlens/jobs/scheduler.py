@@ -16,12 +16,12 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Awaitable, Callable
 
 from .. import net
-from ..analytics.calendar import CALENDARS, NY, any_trading_day, latest_close_time, now_ny
+from ..analytics.calendar import CALENDARS, NY, NYSE, any_trading_day, latest_close_time, now_ny
 from ..config import get_settings
 from ..repo import jobs as jobs_repo
 from ..sources import chain_source
 from ..analytics.intraday import extended_window
-from . import calendars, chains, extended, maintenance, marketdata, prices, universe
+from . import calendars, chains, extended, maintenance, marketdata, prices, universe, universe_ca
 from ._util import EOD_DEADLINE, FINAL_DELAY_MIN, current_run_id
 
 log = logging.getLogger("optionlens.scheduler")
@@ -91,10 +91,10 @@ def intraday(interval_min: int, first: time = time(9, 45)) -> Schedule:
 
 
 def extended_hours(interval_min: int) -> Schedule:
-    """Trading days every interval_min inside the pre-market and after-hours windows (analytics.intraday.extended_window,
-    start inclusive, end exclusive)."""
+    """NYSE trading days every interval_min inside the pre-market and after-hours windows (analytics.intraday.
+    extended_window, start inclusive, end exclusive; US listings only: the TSX has no extended-hours trading)."""
     def times(d: date) -> list[time]:
-        if not is_trading_day(d):
+        if not NYSE.is_trading_day(d):
             return []
         out = []
         for market in ("pre", "post"):
@@ -152,6 +152,7 @@ def build_jobs() -> dict[str, Job]:
     server = bool(chain_source.server_source_names())
     jobs = [
         Job("universe", universe.universe, daily(time(6, 0), {MON})),
+        Job("universe_ca", universe_ca.universe_ca, daily(time(6, 5), {MON})),
         Job("prices_backfill", prices.prices_backfill, daily(time(6, 10))),
         Job("prices_refresh", prices.prices_refresh, daily(time(7, 0), {SAT})),
         Job("splits", prices.splits, daily(time(6, 40))),

@@ -252,8 +252,8 @@ def wants(now: datetime | None = None) -> dict:
     on-demand chain freshness bound."""
     now = (now or now_ny()).astimezone(NY)
     last = last_completed_session(now)
-    syms = list(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
-                               *symbols_repo.universe_symbols()]))
+    syms = bridge_plan.bridge_symbols(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
+                                                    *symbols_repo.universe_symbols()]))
     start = date(now.year - IV_HISTORY_YEARS, 1, 1)
     return {
         "iv_history": history_want("iv30", syms, start, last),

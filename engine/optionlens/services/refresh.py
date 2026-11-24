@@ -78,7 +78,7 @@ async def start(symbol: str) -> dict:
     if prev is not None and _pending(prev) and (now - prev.started_at).total_seconds() < BRIDGE_TIMEOUT_S:
         return await asyncio.to_thread(status, sym)
     r = Round(now)
-    if (await asyncio.to_thread(system.bridge))["connected"]:
+    if chain_source.bridge_serves(sym) and (await asyncio.to_thread(system.bridge))["connected"]:
         r.attempts[IBKR] = Attempt("pending", now)
     for src in chain_source.server_sources():
         if not src.connected():

@@ -6,11 +6,13 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from ..analytics import markets
 from ..config import get_settings
 from ..models import normalize_symbol
 from ..net import FetchError
 from ..repo import symbols as symbols_repo
 from ..sources import cboe, nasdaq
+from . import universe_ca
 
 INDICES = {"SPX": "S&P 500 Index", "NDX": "Nasdaq-100 Index", "RUT": "Russell 2000 Index",
            "XSP": "Mini-SPX Index"}
@@ -21,7 +23,7 @@ _LP_UNITS = re.compile(r"(common|partnership|partner) units?|units? representing
 
 
 class UnknownSymbol(LookupError):
-    """Neither CBOE nor Nasdaq knows the symbol."""
+    """No source knows the symbol (Nasdaq for US listings, Questrade for Canadian ones)."""
 
 
 def is_common_stock(row: dict) -> bool:
@@ -87,11 +89,16 @@ async def universe() -> str:
 
 
 async def ensure_symbol(raw: str) -> dict:
-    """symbols row for a symbol, creating it (kind via index list / etfs.txt / Nasdaq info) if unknown.
-    Raises UnknownSymbol when Nasdaq does not know it either."""
+    """symbols row for a symbol, creating it (kind via index list / etfs.txt / Nasdaq info; a Canadian symbol from
+    Questrade) if unknown. Raises UnknownSymbol when the source does not know it either."""
     symbol = normalize_symbol(raw)
     row = await asyncio.to_thread(symbols_repo.get_symbol, symbol)
     if row:
+        return row
+    if markets.is_canadian(symbol):    # Nasdaq does not list Toronto symbols: Questrade does
+        row = await universe_ca.ensure_canadian(symbol)
+        if row is None:
+            raise UnknownSymbol(symbol)
         return row
     if symbol in cboe.INDEX_SYMBOLS:
         new = {"symbol": symbol, "name": INDICES.get(symbol, symbol), "kind": "index"}

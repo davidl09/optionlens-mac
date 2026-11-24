@@ -86,6 +86,7 @@ async def connect_questrade(refresh_token: str) -> dict:
         raise BadRequest(str(e), UPSTREAM) from None
     source_health.reset(src.name)
     if (await src.verify())["ok"]:
+        scheduler.run_soon("universe_ca")    # the Canadian universe is selected with Questrade (jobs/universe_ca.py)
         scheduler.run_soon("sweep_fill" if after_session(now_ny()) else "sweep")
     from . import portfolio
     await portfolio.refresh_questrade(force=True)   # the account permission is checked too (Portfolio)

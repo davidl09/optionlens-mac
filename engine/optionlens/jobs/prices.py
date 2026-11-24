@@ -1,7 +1,8 @@
 """Daily price history: 10y backfill (resumable), catch-up of stale symbols, weekly 30-day refresh.
 
-Stocks/ETFs come from Nasdaq. Indices have no source here (CBOE is not collected): their bars come from
-the IBKR bridge's pushes and the EOD job's stored quotes.
+US stocks/ETFs come from Nasdaq, Canadian listings from Questrade's daily candles (Nasdaq does not cover them; skipped
+with an error while Questrade is not connected). Indices have no source here (CBOE is not collected): their bars come
+from the IBKR bridge's pushes and the EOD job's stored quotes.
 """
 from __future__ import annotations
 
@@ -10,13 +11,16 @@ from datetime import date, timedelta
 
 import numpy as np
 
-from ..analytics.calendar import last_completed_session, now_ny
+from ..analytics import markets
+from ..analytics.calendar import now_ny
 from ..analytics.splits import shows_unadjusted_split
 from ..config import get_settings
 from ..models import Bar
 from ..repo import bars as bars_repo
 from ..repo import symbols as symbols_repo
+from ..net import FetchError
 from ..sources import nasdaq
+from . import universe_ca
 from ._util import run_bounded
 
 HISTORY_YEARS = 10
@@ -36,9 +40,15 @@ def _asset(kind: str) -> nasdaq.AssetClass:
 
 
 async def fetch_bars(symbol: str, kind: str, start: date, end: date) -> list[Bar]:
-    """Daily bars in [start, end] from the right source for the symbol kind ([] if unavailable)."""
+    """Daily bars in [start, end] from the right source for the symbol ([] if unavailable): Questrade for Canadian
+    listings (FetchError while it is not connected), Nasdaq for US stocks / ETFs, none for indices."""
     if kind == "index":
         return []
+    if markets.is_canadian(symbol):
+        src = universe_ca.directory()
+        if src is None:
+            raise FetchError(f"questrade:candles/{symbol}", None, "Questrade is not connected (Canadian price history)")
+        return await src.fetch_daily(symbol, start, end)
     return await nasdaq.fetch_history(symbol, _asset(kind), start, end)
 
 
@@ -81,7 +91,9 @@ async def prices_backfill(symbols: list[str] | None = None, limit: int | None = 
 
     rows, cov = await asyncio.to_thread(load)
     now = now_ny()
-    plan = plan_backfill(rows, cov, now.date(), last_completed_session(now))
+    by_sym = {r["symbol"]: r for r in rows}
+    plan = [item for m, syms in markets.by_market(list(by_sym)).items()
+            for item in plan_backfill([by_sym[s] for s in syms], cov, now.date(), m.calendar.last_completed_session(now))]
     if limit:
         plan = plan[:limit]
     stored = 0

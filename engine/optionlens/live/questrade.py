@@ -35,6 +35,7 @@ from ..sources.questrade.auth import TokenError
 from ..sources.questrade.errors import QuestradeError
 from ..sources.questrade.mapping import Listed, live_option, live_quote, option_quotes
 from .mode import MODES, Mode
+from ..analytics.markets import MARKETS
 from .session import session_at
 from .stream import HandshakeError, Kind, QuoteStream, StreamDropped, StreamSilent
 from .subscriptions import EMPTY, Wanted
@@ -77,7 +78,8 @@ def _iso(ts: float | None) -> str | None:
 
 
 def _regular_now() -> bool:
-    return session_at(datetime.now(timezone.utc)) == "regular"
+    now = datetime.now(timezone.utc)
+    return any(session_at(now, m) == "regular" for m in MARKETS)
 
 
 @dataclass

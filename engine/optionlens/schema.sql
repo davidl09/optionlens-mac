@@ -266,9 +266,6 @@ CREATE TABLE IF NOT EXISTS halt_status (
     source VARCHAR NOT NULL
 );
 
--- Markets (analytics/markets.py, docs/SPEC.md §3 "Symbols"): a symbol's listing exchange ('TSX' | 'TSXV'; NULL = a US
--- listing, venue not tracked) and trading currency ('USD' | 'CAD'; NULL = from the symbol's market), and for Canadian
--- listings Questrade's indicated dividend yield (fraction; NULL = unknown), the BSM q when no dividend history exists.
-ALTER TABLE symbols ADD COLUMN IF NOT EXISTS exchange VARCHAR;
-ALTER TABLE symbols ADD COLUMN IF NOT EXISTS currency VARCHAR;
+-- Questrade's indicated dividend yield of a Canadian listing (fraction; NULL = unknown): the BSM q when no dividend
+-- history exists. A symbol's market, exchange and currency follow from the symbol itself (analytics/markets.py).
 ALTER TABLE symbols ADD COLUMN IF NOT EXISTS dividend_yield DOUBLE;

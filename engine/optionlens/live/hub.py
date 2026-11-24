@@ -27,8 +27,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Mapping, Pr
 
 from ..models import IntradayBar
 from .bars import MinuteBars
+from ..analytics.markets import MARKETS, market_of
+from ..sources.chain_source import bridge_serves
 from .session import Session, next_live_start, session_at
-from .subscriptions import EMPTY, Registry, Wanted, diff, for_session
+from .subscriptions import EMPTY, Registry, Wanted, diff, for_sessions
 
 log = logging.getLogger("optionlens.live")
 
@@ -102,10 +104,13 @@ def _merge(into: dict[str, Fields], key: str, fields: Fields) -> None:
     into[key] = fields if cur is None else {**cur, **fields}
 
 
+_SESSION_RANK: tuple[Session, ...] = ("closed", "extended", "regular")
+
+
 class LiveHub:
     def __init__(self, questrade: Callable[[], Driver | None], bridge_connected: Callable[[], bool],
                  persist: Callable[[list[Fields], list[Fields]], Awaitable[None]] | None = None,
-                 clock: Callable[[], float] = time.time, session: Callable[[datetime], Session] = session_at,
+                 clock: Callable[[], float] = time.time, session: Callable[[datetime, str], Session] = session_at,
                  store_bars: Callable[[dict[str, list[IntradayBar]]], Awaitable[None]] | None = None):
         self._questrade_factory, self._bridge_connected = questrade, bridge_connected
         self._persist, self.clock, self._session_at = persist, clock, session
@@ -124,7 +129,8 @@ class LiveHub:
         self._last_data: dict[str, float] = {}
         self._delayed: dict[str, bool] = {}
         self.active: Source | None = None
-        self.session: Session = "closed"
+        self.session: Session = "closed"            # the most open session of the markets shown (status)
+        self.sessions: dict[str, Session] = {}      # market code -> its session
         self._status: dict = {}
         self._tasks: list[asyncio.Task] = []
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -276,7 +282,8 @@ class LiveHub:
 
     def bridge_wants(self) -> dict:
         """What the IBKR bridge should snapshot now: the visible symbols while it is the live fallback, else none."""
-        syms = sorted(for_session(self.registry.union(), self.session).symbols) if self.active == "ibkr" else []
+        syms = sorted(s for s in for_sessions(self.registry.union(), self.sessions).symbols if bridge_serves(s)) \
+            if self.active == "ibkr" else []
         return {"symbols": syms[:MAX_BRIDGE_SYMBOLS], "interval_s": BRIDGE_INTERVAL_S}
 
     # ------------------------------------------------------------------ control
@@ -306,8 +313,11 @@ class LiveHub:
         broadcast the status when it changed."""
         now = self.clock()
         self._expire_clients(now)
-        self.session = self._session_at(datetime.fromtimestamp(now, timezone.utc))
-        want = for_session(self.registry.union(), self.session)
+        at = datetime.fromtimestamp(now, timezone.utc)
+        self.sessions = {m: self._session_at(at, m) for m in MARKETS}
+        shown = self._markets_shown()
+        self.session = max((self.sessions[m] for m in shown), key=_SESSION_RANK.index)
+        want = for_sessions(self.registry.union(), self.sessions)
         self.bars.forget(set(want.symbols))
         q = self._driver()
         q_reason = q.usable() if q is not None else "not configured"
@@ -347,8 +357,11 @@ class LiveHub:
                               "fallback": None, "symbols": len(want.symbols), "contracts": len(want.contracts),
                               "detail": None}
         if self.session == "closed":
-            nxt = next_live_start(datetime.fromtimestamp(now, timezone.utc))
-            return {**st, "state": "market_closed", "detail": f"US markets are closed: showing the last stored values. "
+            at = datetime.fromtimestamp(now, timezone.utc)
+            shown = self._markets_shown()
+            nxt = min(next_live_start(at, m) for m in shown)
+            where = {("US",): "US markets", ("CA",): "Canadian markets"}.get(tuple(shown), "Markets")
+            return {**st, "state": "market_closed", "detail": f"{where} are closed: showing the last stored values. "
                     f"Live quotes resume {nxt:%a %H:%M} ET."}
         if union.empty:
             return {**st, "state": "idle"}
@@ -381,6 +394,12 @@ class LiveHub:
         if partial and st["detail"] is None:
             st["detail"] = "Extended hours: stock quotes only."
         return {**st, "state": state}
+
+    def _markets_shown(self) -> list[str]:
+        """Codes of the markets of the wanted underlyings and contracts (US when nothing is wanted)."""
+        union = self.registry.union()
+        codes = {market_of(s).code for s in (*union.symbols, *union.contracts.values())}
+        return [m for m in MARKETS if m in codes] or ["US"]
 
     def _set_status(self, st: dict) -> None:
         if st == self._status:

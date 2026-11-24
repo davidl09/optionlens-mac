@@ -1,0 +1,327 @@
+# Canadian universe candidates: the equity and ETF option classes the Montréal Exchange lists
+# (m-x.ca "Options list", read 2026-11-24; adjusted classes, CDRs, currency and index options left out).
+# One per line: TSX / TSX Venture ticker (no exchange suffix), kind, name. jobs/universe_ca.py resolves each
+# with Questrade (TSX .TO, else TSX Venture .VN, CAD) and keeps those Questrade lists options for: the largest
+# UNIVERSE_CA_STOCKS stocks by Questrade market cap, plus every ETF / trust.
+VNP        stock  # 5N Plus Inc.
+ABXX       stock  # ABXX
+AAV        stock  # Advantage Oil & Gas Ltd.
+ARE        stock  # Aecon Group Inc.
+AFN        stock  # Ag Growth International Inc.
+AGF.B      stock  # AGF Management Ltd., Cl. B
+AEM        stock  # Agnico Eagle Mines Limited
+AC         stock  # Air Canada
+AGI        stock  # Alamos Gold Inc.
+AD.UN      stock  # Alaris Equity Partners Income Trust
+ASTL       stock  # Algoma Steel Group Inc.
+AQN        stock  # Algonquin Power & Utilities Corp.
+ATD        stock  # Alimentation Couche Tard Inc.
+AAUC       stock  # Allied Gold Corporation
+AP.UN      stock  # Allied Properties Real Estate Investment Trust
+ALA        stock  # AltaGas Ltd.
+ALS        stock  # Altius Minerals Corporation
+AIF        stock  # Altus Group Limited
+ARG        stock  # Amerigo Resources Ltd.
+APM        stock  # Andean Precious Metals
+APTX       stock  # Apotex Health
+ARIS       stock  # Aris Mining Corporation
+ATZ        stock  # Aritzia Inc.
+ACO.X      stock  # ATCO Ltd.
+ATH        stock  # Athabasca Oil Corp.
+ATRL       stock  # AtkinsRéalis Group Inc.
+AI         stock  # Atrium Mortgage Investment Corporation
+ATS        stock  # ATS Corporation
+ACB        stock  # Aurora Cannabis Inc.
+ACQ        stock  # AutoCanada Inc.
+AYA        stock  # Aya Gold & Silver Inc.
+BTO        stock  # B2Gold Corp.
+BDGI       stock  # Badger Infrastructure Solutions Ltd.
+BLDP       stock  # Ballard Power Systems Inc.
+BMO        stock  # Bank of Montreal
+BNS        stock  # Bank of Nova Scotia (The)
+ABX        stock  # Barrick Gold Corporation
+BHC        stock  # Bausch Health Companies Inc.
+BTE        stock  # Baytex Energy Corp.
+BCE        stock  # BCE Inc.
+BIR        stock  # Birchcliff Energy Limited
+BDT        stock  # Bird Construction Inc.
+BB         stock  # BlackBerry Limited
+BEI.UN     stock  # Boardwalk Real Estate Investment Trust
+BBD.B      stock  # Bombardier Inc., Cl. B
+BYD        stock  # Boyd Group Services Inc.
+BAM        stock  # Brookfield Asset Management Inc
+BBUC       stock  # Brookfield Business Corporation
+BN         stock  # Brookfield Corporation
+BIP        stock  # Brookfield Infrastructure Partners L.P.
+BEPC       stock  # Brookfield Renewable Corporation
+BEP.UN     stock  # Brookfield Renewable Partners L.P.
+DOO        stock  # BRP Inc.
+CAE        stock  # CAE Inc.
+CCO        stock  # Cameco Corporation
+CF         stock  # Canaccord Genuity Group Inc.
+GOOS       stock  # Canada Goose Holdings Inc.
+CAR.UN     stock  # Canadian Apartment Properties Real Estate Investment Trust
+CM         stock  # Canadian Imperial Bank of Commerce
+CNR        stock  # Canadian National Railway Company
+CNQ        stock  # Canadian Natural Resources Limited
+CP         stock  # Canadian Pacific Kansas City Limited
+CTC.A      stock  # Canadian Tire Corporation Limited
+CU         stock  # Canadian Utilities Limited
+CFP        stock  # Canfor Corporation
+WEED       stock  # Canopy Growth Corporation
+CPX        stock  # Capital Power Corporation
+CS         stock  # Capstone Copper Corp.
+CJ         stock  # Cardinal Energy Ltd.
+CJT        stock  # Cargojet Inc.
+CAS        stock  # Cascades Inc.
+CCL.B      stock  # CCL Industries Inc.
+CLS        stock  # Celestica Inc.
+CVE        stock  # Cenovus Energy Inc.
+CG         stock  # Centerra Gold Inc.
+CEU        stock  # CES Energy Solutions Corp.
+GIB.A      stock  # CGI Inc.
+CIA        stock  # Champion Iron Limited
+CSH.UN     stock  # Chartwell Retirement Residences
+CHE.UN     stock  # Chemtrade Logistics Income Fund
+CHP.UN     stock  # Choice Properties Real Estate Investment Trust
+CHR        stock  # Chorus Aviation Inc., Cl. B
+CGX        stock  # Cineplex Inc.
+CCA        stock  # Cogeco Communications Inc.
+CNL        stock  # Collective Mining Ltd
+CMG        stock  # Computer Modelling Group Ltd.
+CVO        stock  # Coveo Solutions Inc.
+CRR.UN     stock  # Crombie Real Estate Investment Trust
+CRON       stock  # Cronos Group Inc.
+CURA       stock  # Curaleaf Holdings, Inc
+DFY        stock  # Definity Financial Corporation
+DML        stock  # Denison Mines Corp.
+DSG        stock  # Descartes Systems Group Inc.
+DSV        stock  # Discovery Mining Ltd.
+DOL        stock  # Dollarama Inc.
+DII.B      stock  # Dorel Industries Inc. Cl. B
+DIR.UN     stock  # Dream Industrial Real Estate Investment Trust
+D.UN       stock  # Dream Office Real Estate Investment Trust
+DPM        stock  # Dundee Precious Metals Inc.
+DND        stock  # Dye & Durham Limited
+ELD        stock  # Eldorado Gold Corp.
+ELVA       stock  # Electrovaya Inc.
+EFN        stock  # Element Fleet Management Corp.
+EMA        stock  # Emera Inc.
+EMP.A      stock  # Empire Company Limited
+ENB        stock  # Enbridge Inc.
+EDV        stock  # Endeavour Mining plc
+EDR        stock  # Endeavour Silver Corp.
+EFX        stock  # Enerflex Ltd.
+EFR        stock  # Energy Fuels Inc.
+EQB        stock  # EQB Inc.
+EQX        stock  # Equinox Gold Corp
+ERO        stock  # Ero Copper Corp.
+EIF        stock  # Exchange Income Corporation
+EXE        stock  # Extendicare Inc.
+FSZ        stock  # Fiera Capital Corporation
+FTT        stock  # Finning International Inc.
+FCR.UN     stock  # First Capital Real Estate Investment Trust
+AG         stock  # First Majestic Silver Corp.
+FM         stock  # First Quantum Minerals Ltd.
+FTS        stock  # Fortis Inc.
+FVI        stock  # Fortuna Mining Corp.
+FNV        stock  # Franco-Nevada Corp.
+FRU        stock  # Freehold Royalties Ltd.
+FEC        stock  # Frontera Energy Corporation
+GMIN       stock  # G Mining Ventures Corp.
+GLXY       stock  # Galaxy Digital Inc.
+WN         stock  # George Weston Limited
+GFL        stock  # GFL Environmental Inc.
+GEI        stock  # Gibson Energy Inc.
+GIL        stock  # Gildan Activewear Inc.
+GSY        stock  # goeasy Ltd.
+GRT.UN     stock  # Granite Real Estate Investment Trust Inc.
+GWO        stock  # Great-West Lifeco Inc.
+GRGD       stock  # Groupe Dynamite Inc.
+HR.UN      stock  # H&R Real Estate Investment Trust
+HPS.A      stock  # Hammond Power Solutions Inc.
+HBM        stock  # Hudbay Minerals Inc.
+HUT        stock  # Hut 8 Corp.
+H          stock  # Hydro One Limited
+IAG        stock  # iA Financial Corporation Inc.
+IMG        stock  # IAMGOLD Corporation
+IGM        stock  # IGM Financial Inc.
+IMO        stock  # Imperial Oil Limited
+IFC        stock  # Intact Financial Corporation
+IFP        stock  # Interfor Corporation
+ISO        stock  # IsoEnergy Ltd.
+IVN        stock  # Ivanhoe Mines Ltd.
+KNT        stock  # K92 Mining Inc.
+KEY        stock  # Keyera Corp.
+KMP.UN     stock  # Killam Apartment Real Estate Investment Trust
+KXS        stock  # Kinaxis Inc.
+K          stock  # Kinross Gold Corporation
+LSPD       stock  # Lightspeed POS Inc.
+LNR        stock  # Linamar Corporation
+LAC        stock  # Lithium Americas Corp.
+L          stock  # Loblaw Companies Ltd.
+LUG        stock  # Lundin Gold Inc.
+LUN        stock  # Lundin Mining Corporation
+MG         stock  # Magna International Inc
+MAI        stock  # MAI
+MDI        stock  # Major Drilling Group International Inc.
+MFC        stock  # Manulife Financial Corporation
+MFI        stock  # Maple Leaf Foods Inc.
+MRE        stock  # Martinrea International Inc.
+MATR       stock  # Mattr Corp.
+MDA        stock  # MDA Space Ltd.
+MX         stock  # Methanex Corporation
+MRU        stock  # Metro Inc.
+MAU        stock  # Montage Gold Corp.
+MTL        stock  # Mullen Group Ltd.
+NA         stock  # National Bank of Canada
+NEO        stock  # Neo Performance Materials Inc.
+NXE        stock  # NexGen Energy Ltd.
+NFI        stock  # NFI Group Inc.
+NPI        stock  # Northland Power Inc.
+VITL.U     stock  # Northwest Healthcare Properties Real Estate Investment Trust
+NG         stock  # NovaGold Resources Inc.
+NTR        stock  # Nutrien Ltd.
+OBE        stock  # Obsidian Energy Ltd.
+OGC        stock  # OceanaGold Corporation
+ONEX       stock  # Onex Corporation
+OTEX       stock  # Open Text Corp.
+OR         stock  # Osisko Gold Royalties Ltd.
+OVV        stock  # Ovintiv Inc.
+PAAS       stock  # Pan American Silver Corporation
+POU        stock  # Paramount Resources Ltd.
+PXT        stock  # Parex Resources Inc.
+PPL        stock  # Pembina Pipeline Corporation
+PPTA       stock  # Perpetua Resources Corp.
+PET        stock  # Pet Valu Holdings Ltd.
+PEY        stock  # Peyto Exploration & Development Corp.
+POW        stock  # Power Corporation of Canada
+PSK        stock  # PrairieSky Royalty Ltd.
+PD         stock  # Precision Drilling Corporation
+PBH        stock  # Premium Brands Holdings Corporation
+PMZ.UN     stock  # Primaris Retail Real Estate Investment Trust
+PRL        stock  # Properl Holdings Inc.
+QBR.B      stock  # Quebecor Inc., Cl. B
+RBA        stock  # RB Global Inc.
+REAL       stock  # Real Matters Inc.
+QSR        stock  # Restaurant Brands International
+REI.UN     stock  # RioCan Real Estate Investment Trust
+RGSI       stock  # Rockpoint Gas Storage
+RCI.B      stock  # Rogers Communication Inc.
+RY         stock  # Royal Bank of Canada
+RUS        stock  # Russel Metals Inc.
+SAP        stock  # Saputo Inc.
+SIS        stock  # Savaria Corporation
+SEA        stock  # Seabridge Gold Inc.
+SGD        stock  # SGD
+SHOP       stock  # Shopify Inc.
+SIA        stock  # Sienna Senior Living Inc.
+SVM        stock  # Silvercorp Metals Inc.
+SKE        stock  # Skeena Resources Limited
+SRU.UN     stock  # SmartCentres Real Estate Investment Trust
+SOBO       stock  # South Bow Corporation
+TOY        stock  # Spin Master Corp.
+SSRM       stock  # SSR Mining Inc.
+STN        stock  # Stantec Inc.
+SJ         stock  # Stella-Jones Inc.
+SVI        stock  # StorageVault Canada Inc.
+SCR        stock  # Strathcona Resources Ltd.
+SU         stock  # Suncor Energy Inc.
+SLF        stock  # SunLife Financial Inc.
+SPB        stock  # Superior Plus Corp.
+TRP        stock  # TC Energy Corporation
+TECK.B     stock  # Teck Resources Limited
+T          stock  # TELUS Corporation
+TNZ        stock  # Tenaz Energy Corp.
+TFII       stock  # TFI International Inc.
+NWC        stock  # The North West Company Inc.
+TRI        stock  # Thomson Reuters Corporation
+TLRY       stock  # Tilray Brands Inc.
+X          stock  # TMX Group Limited
+TPZ        stock  # Topaz Energy Corp.
+TXR        stock  # Torex Resources Inc.
+TIH        stock  # Toromont Industries Ltd.
+TD         stock  # Toronto-Dominion Bank (The)
+TOU        stock  # Tourmaline Oil Corp.
+TA         stock  # TransAlta Corporation
+TCL.A      stock  # Transcontinental Inc.
+TMQ        stock  # Trilogy Metals Inc.
+TFPM       stock  # Triple Flag Precious Metals Corp.
+TSU        stock  # Trisura Group Ltd.
+VLE        stock  # Valeura Energy Inc.
+VET        stock  # Vermilion Energy Inc.
+WCN        stock  # Waste Connections Inc.
+WELL       stock  # WELL Health Technologies Corp.
+WDO        stock  # Wesdome Gold Mines Ltd.
+WFG        stock  # West Fraser Timber Co. Ltd.
+WTE        stock  # Westshore Terminals Investment Corporation
+WPM        stock  # Wheaton Precious Metals Corp.
+WCP        stock  # Whitecap Resources Inc.
+WSP        stock  # WSP Global Inc.
+PHYS       etf    # Sprott Physical Gold Trust
+PSLV       etf    # Sprott Physical Silver Trust
+U.UN       etf    # Sprott Physical Uranium Trust
+BTCQ       etf    # 3iQ Bitcoin ETF
+ETHQ       etf    # 3iQ Ether Staking ETF
+GDXD       etf    # BetaPro Canadian Gold Miners -2x Daily Bear ETF
+GDXU       etf    # BetaPro Canadian Gold Miners 2x Daily Bull ETF
+HOD        etf    # BetaPro Crude Oil Inverse Leveraged Daily Bear ETF
+HND        etf    # BetaPro Natural Gas Inverse Leveraged Daily Bear ETF
+HNU        etf    # BetaPro Natural Gas Leveraged Daily Bull ETF
+ZAG        etf    # BMO Aggregate Bond Index ETF
+ZEB        etf    # BMO Equal Weight Banks Index ETF
+ZUB        etf    # BMO Equal Weight US Banks Hedged to CAD Index ETF
+ZBK        etf    # BMO Equal Weight US Banks Index ETF CAD Units
+ZUT        etf    # BMO Equal Weight Utilities Index ETF
+ZGLD       etf    # BMO Gold Bullion ETF
+ZHY        etf    # BMO High Yield US Corporate Bond Hedged to CAD Index ETF
+ZPR        etf    # BMO Laddered Preferred Share Index ETF
+ZLB        etf    # BMO Low Volatility Canadian Equity ETF
+ZDM        etf    # BMO MSCI EAFE Hedged to CAD Index ETF
+ZUQ        etf    # BMO MSCI USA High Quality Index ETF
+ZQQ        etf    # BMO Nasdaq 100 Equity Hedged to CAD Index ETF
+ZUE        etf    # BMO S&P 500 Hedged to CAD Index ETF
+ZSP        etf    # BMO S&P 500 Index ETF
+ZIU        etf    # BMO S&P/TSX 60 INDEX ETF
+ZCN        etf    # BMO S&P/TSX Capped Composite Index ETF
+BTCX.B     etf    # CI Galaxy Bitcoin ETF
+ETHX.B     etf    # CI Galaxy Ethereum ETF
+EBIT       etf    # Evolve Bitcoin ETF
+ETHR       etf    # Evolve Ether ETF
+TECH       etf    # Evolve FANGMA Index ETF
+QQQT       etf    # Evolve NASDAQ Technology Index Fund
+HPR        etf    # Global X Active Preferref Share ETF
+HBNK       etf    # Global X Equal Weight Canadian Banks Index ETF
+SAFE       etf    # Global X Equal Weight Canadian Insurance Index ETF
+PPLN       etf    # Global X Equal Weight Canadian Pipelines Index ETF
+RING       etf    # Global X Equal Weight Canadian Telecommunications Index ETF
+HMMJ       etf    # Global X Marijuana Life Sciences Index ETF
+HXQ        etf    # Global X Nasdaq-100 Index Corporatw Class ETF
+USSX       etf    # Global X S&P 500 Index ETF
+HXT        etf    # Global X S&P/TSX 60 Index Corporate Class ETF
+CNDX       etf    # Global X S&P/TSX 60 Index ETF
+XCB        etf    # iShares Canadian Corporate Bond Index ETF
+XDV        etf    # iShares Canadian Select Dividend Index ETF
+XSB        etf    # iShares Core Canadian Short Term Bond Index ETF
+XBB        etf    # iShares Core Canadian Universe Bond Index ETF
+XSP        etf    # iShares Core S&P 500 Index ETF (CAD-Hedged)
+XIC        etf    # iShares Core S&P/TSX Capped Composite Index ETF
+XIN        etf    # iShares MSCI EAFE Index ETF (CAD-Hedged)
+XIU        etf    # iShares S&P/TSX 60 Index ETF
+XEG        etf    # iShares S&P/TSX Capped Energy Index ETF
+XFN        etf    # iShares S&P/TSX Capped Financials Index ETF
+XRE        etf    # iShares S&P/TSX Capped REIT Index ETF
+XUT        etf    # iShares S&P/TSX Capped Utilities Index ETF
+XBM        etf    # iShares S&P/TSX Global Base Metals Index ETF
+XGD        etf    # iShares S&P/TSX Global Gold Index ETF
+XSU        etf    # iShares U.S. Small Cap Index ETF (CAD-Hedged)
+BTCC.B     etf    # Purpose Bitcoin ETF CAD ETF Non-currency Hedged Units
+ETHH.B     etf    # Purpose Ether ETF
+KILO.B     etf    # Purpose Gold Bullion Fund
+SOLL       etf    # Purpose Solana ETF Currency Hedged Units
+VAB        etf    # Vanguard Canadian Aggregate Bond Index ETF
+VSB        etf    # Vanguard Canadian Short-Term Bond Index ETF
+VSC        etf    # Vanguard Canadian Short-Term Corporate Bond Index ETF
+VFV        etf    # Vanguard S&P 500 Index ETF
+XRP        etf    # XRP Evolve ETF
+XRPP       etf    # XRP Purpose ETF

@@ -18,6 +18,7 @@ from ..repo import halts as halts_repo
 from ..repo import symbols as symbols_repo
 from ..repo import user as user_repo
 from ..sources import chain_source
+from ..analytics import markets
 from . import hooks
 
 COLLECT_EVERY_MIN = 5
@@ -36,7 +37,9 @@ def _sources() -> list[ExtendedSource]:
 
 
 def _symbols() -> list[str]:
-    return list(dict.fromkeys([*user_repo.watchlist_symbols(), *symbols_repo.universe_symbols(include_unoptionable=True)]))
+    """US listings of the watchlists and the universe (the TSX has no extended-hours trading)."""
+    return [s for s in dict.fromkeys([*user_repo.watchlist_symbols(), *symbols_repo.universe_symbols(include_unoptionable=True)])
+            if markets.market_of(s) is markets.US]
 
 
 def store(market: str, now: datetime, quotes: list[ExtendedQuote], source: str) -> tuple[int, list[str]]:

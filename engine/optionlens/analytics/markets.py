@@ -75,3 +75,9 @@ def by_market(symbols) -> dict[Market, list[str]]:
     for s in symbols:
         out[market_of(s)].append(s)
     return {m: syms for m, syms in out.items() if syms}
+
+
+def describe(symbol: str) -> dict:
+    """The market fields every symbol reference carries in the API: {market, exchange, currency} (exchange: TSX /
+    TSXV for Canadian listings, None for US ones)."""
+    return {"market": market_of(symbol).code, "exchange": listing_exchange(symbol), "currency": currency_of(symbol)}

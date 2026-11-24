@@ -82,7 +82,7 @@ def test_connecting_starts_collecting_when_the_scheduler_runs(client, qt, monkey
     monkeypatch.setattr(sources.scheduler, "run_soon", asked.append)
     monkeypatch.setattr(sources, "after_session", lambda now: True)
     assert client.post("/api/sources/questrade/token", json={"refresh_token": "pasted-token"}).status_code == 200
-    assert asked == ["sweep_fill"]
+    assert asked == ["universe_ca", "sweep_fill"]
     assert not scheduler.is_running()      # API tests run without the scheduler: run_soon is a no-op there
     scheduler.run_soon("sweep")            # no loop needed when not running
 
@@ -112,4 +112,4 @@ def test_saving_a_token_checks_it_and_clears_the_earlier_failures(client, qt, mo
     body = client.post("/api/sources/questrade/token", json={"refresh_token": "fixed-app-token"}).json()
     assert body["state"] == "connected" and body["failures"] == []
     assert body["verification"] == {**body["verification"], "ok": True, "message": "Token OK: market data permitted"}
-    assert asked == ["sweep_fill"]
+    assert asked == ["universe_ca", "sweep_fill"]

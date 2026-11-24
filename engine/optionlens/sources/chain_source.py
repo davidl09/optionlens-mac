@@ -8,11 +8,18 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
+from ..analytics import markets
 from ..config import get_settings
 from ..models import ChainSnapshot
 
 BRIDGE = "ibkr-bridge"
 BRIDGE_TAG = "ibkr"
+
+
+def bridge_serves(symbol: str) -> bool:
+    """Whether the IBKR bridge serves `symbol`: US listings only. Canadian listings (TSX / MX) come from Questrade:
+    IBKR would need Canadian market-data permissions and other contract definitions (docs/INTEGRATION.md §6)."""
+    return markets.market_of(symbol) is markets.US
 
 
 class NotListed(Exception):

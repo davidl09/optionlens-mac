@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 from ..analytics import intraday
 from ..models import IntradayBar
+from ..analytics.markets import calendar_for
 
 MINUTE_S = 60
 
@@ -58,7 +59,8 @@ class MinuteBars:
         s.price = price
         if volume is not None:
             s.volume = volume
-        if prev_price is None or delayed or not intraday.in_sessions(datetime.fromtimestamp(at, timezone.utc)):
+        if prev_price is None or delayed or not intraday.in_sessions(datetime.fromtimestamp(at, timezone.utc),
+                                                                     calendar_for(symbol)):
             return
         if volume is not None and prev_volume is not None:
             if volume <= prev_volume:

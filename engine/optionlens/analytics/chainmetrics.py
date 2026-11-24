@@ -12,7 +12,7 @@ from typing import Mapping
 import numpy as np
 
 from . import vol
-from .calendar import is_monthly_expiry
+from .markets import calendar_for
 from .chain import ChainArrays, option_row
 
 ATM_BAND = 0.025
@@ -99,7 +99,7 @@ def expiry_infos(ca: ChainArrays) -> list[dict]:
         v, oi = ca.volume[sl], ca.oi[sl]
         out.append({
             "expiry": ca.expiries[i], "dte": int(ca.dte[sl][0]),
-            "is_monthly": is_monthly_expiry(ca.expiries[i]), "atm_iv": atm[i]["atm_iv"],
+            "is_monthly": calendar_for(ca.symbol).is_monthly_expiry(ca.expiries[i]), "atm_iv": atm[i]["atm_iv"],
             "atm_iv_computed": atm[i]["atm_iv_computed"],
             "straddle": strad[i]["straddle"],
             "call_volume": int(v[c].sum()), "put_volume": int(v[~c].sum()),

@@ -11,6 +11,10 @@ One chain = (cached) symbol id + (daily) symbol info + 3 market-data calls:
                                     filter per expiry, all in one request)
 Extended-hours quotes of many symbols (fetch_extended):
   GET v1/markets/quotes?ids=…       MAX_IDS ids per call, only symbols whose id is cached (no searches)
+Daily bars of Canadian listings (fetch_daily; Nasdaq does not cover them):
+  GET v1/markets/candles/:id        interval OneDay, the same MAX_CANDLES limit and continuation. Not documented:
+                                    how far back daily candles go and whether they are split / dividend adjusted
+                                    (stored as returned; the weekly refresh replaces the history when it changes)
 Intraday bars (fetch_candles):
   GET v1/markets/candles/:id        OHLCV candles of startTime..endTime at `interval`; at most MAX_CANDLES per
                                     response ("This call is limited to returning 2,000 candlesticks in a single
@@ -20,25 +24,26 @@ Intraday bars (fetch_candles):
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
 import httpx
 
 from ...analytics import intraday
-from ...analytics.calendar import now_ny
+from ...analytics.markets import calendar_for
+from ...analytics.calendar import NY, now_ny
 from ...fileio import read_json, write_json_atomic
-from ...models import ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar
+from ...models import Bar, ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar
 from ...net import FetchError
 from ..chain_source import NotListed
 from ..osi import format_osi
 from .auth import TokenError, TokenManager, TokenStore
 from .client import QuestradeClient
 from .errors import QuestradeError
-from .mapping import (CANDLE_INTERVAL, Listed, SymbolInfo, candle_time, candles, current_dividend, extended_quote,
-                      fundamentals, listed_contracts, option_filters, option_quotes, parse_quote, pick_expiries,
-                      pick_symbol_id, snapshot, symbol_info)
+from .mapping import (CANDLE_INTERVAL, DAILY_INTERVAL, Listed, SymbolInfo, candle_time, candles, current_dividend,
+                      daily_bars, extended_quote, fundamentals, listed_contracts, option_filters, option_quotes,
+                      parse_quote, pick_expiries, pick_symbol_id, snapshot, symbol_info)
 from .ratelimit import RateGate
 
 log = logging.getLogger(__name__)
@@ -230,7 +235,7 @@ class QuestradeSource:
         sid = await self.symbol_id(symbol)
         step = timedelta(seconds=intraday.INTERVAL_S[interval])
         out: dict[datetime, IntradayBar] = {}
-        for a, b in intraday.request_windows((start, end), interval, MAX_CANDLES):
+        for a, b in intraday.request_windows((start, end), interval, MAX_CANDLES, calendar_for(symbol)):
             while a < b:
                 got = candles(await self.api.get(f"markets/candles/{sid}", {
                     "startTime": candle_time(a), "endTime": candle_time(b), "interval": CANDLE_INTERVAL[interval]}))
@@ -240,3 +245,19 @@ class QuestradeSource:
                     break
                 a = max(c.ts for c in got) + step
         return [out[t] for t in sorted(out)]
+
+    async def fetch_daily(self, symbol: str, start: date, end: date) -> list[Bar]:
+        """Daily bars of `symbol` in [start, end], ascending; a response of MAX_CANDLES candles is continued after its
+        last day. Raises NotListed, QuestradeError."""
+        sid = await self.symbol_id(symbol)
+        a, b = datetime.combine(start, time(0), NY), datetime.combine(end, time(23, 59, 59), NY)
+        out: dict[date, Bar] = {}
+        while a <= b:
+            payload = await self.api.get(f"markets/candles/{sid}", {
+                "startTime": candle_time(a), "endTime": candle_time(b), "interval": DAILY_INTERVAL})
+            got = daily_bars(payload, symbol)
+            out.update((x.date, x) for x in got if start <= x.date <= end)
+            if len(payload.get("candles") or []) < MAX_CANDLES or not got:
+                break
+            a = datetime.combine(got[-1].date + timedelta(days=1), time(0), NY)
+        return [out[d] for d in sorted(out)]

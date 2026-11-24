@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from .. import live
-from ..analytics import intraday
+from ..analytics import intraday, markets
 from ..models import IntradayBar, normalize_symbol
 from ..net import FetchError
 from ..repo import intraday as repo
@@ -76,7 +76,8 @@ def _store(symbol: str, interval: str, bars: list[IntradayBar], spans: list[Span
 
 def _gaps(symbol: str, interval: str, want: Span) -> list[Span]:
     """Spans of `want` not fetched yet that hold session hours."""
-    return [g for g in intraday.missing(repo.spans(symbol, interval), want) if intraday.session_windows(g)]
+    cal = markets.calendar_for(symbol)
+    return [g for g in intraday.missing(repo.spans(symbol, interval), want) if intraday.session_windows(g, cal)]
 
 
 async def _fill(symbol: str, interval: str, gaps: list[Span], now: datetime) -> tuple[list[Span], str | None]:
@@ -116,7 +117,8 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
         raise BadRequest(str(e)) from e
     sym = (await asyncio.to_thread(ctx.ensure_known, symbol))["symbol"]
     now = now or datetime.now(timezone.utc)
-    want = intraday.window(rng, now, extended)
+    cal = markets.calendar_for(sym)
+    want = intraday.window(rng, now, extended, cal)
     lock = _locks.setdefault((sym, interval), asyncio.Lock())
     async with lock:
         gaps = await asyncio.to_thread(_gaps, sym, interval, want)
@@ -125,8 +127,8 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
     source = [r for r in stored if r["source"] != repo.LIVE]
     live_rows = await asyncio.to_thread(_live_rows, sym, want, live.pending_bars(sym))
     rows = intraday.with_live(source, live_rows, interval)
-    has_extended = any(not intraday.is_regular(r["ts"]) for r in rows)
-    shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"])]
+    has_extended = any(not intraday.is_regular(r["ts"], cal) for r in rows)
+    shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"], cal)]
     sources, delayed = _summary(shown)
     vwap, vwap_how = intraday.day_vwap(shown)
     return {

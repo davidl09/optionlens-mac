@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from importlib import metadata
 
+from ..analytics import markets
 from ..analytics.calendar import is_market_open, now_ny, prev_trading_day
 from ..config import Settings, get_settings
 from ..jobs import scheduler
@@ -143,4 +144,4 @@ def status() -> dict:
 
 
 def search(q: str) -> list[dict]:
-    return symbols_repo.search_symbols(q, SEARCH_LIMIT)
+    return [{**r, **markets.describe(r["symbol"])} for r in symbols_repo.search_symbols(q, SEARCH_LIMIT)]

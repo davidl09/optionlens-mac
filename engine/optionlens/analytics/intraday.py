@@ -11,7 +11,7 @@ from calendar import monthrange
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable
 
-from .calendar import NY, OPEN, close_time, is_trading_day, prev_trading_day, trading_days
+from .calendar import NY, NYSE, OPEN, TradingCalendar
 
 INTERVAL_S: dict[str, int] = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 # The intervals each range offers (the first is its default): a sensible number of bars on screen.
@@ -40,10 +40,10 @@ def _at(d: date, t: time) -> datetime:
     return datetime.combine(d, t, NY).astimezone(timezone.utc)
 
 
-def _sessions_back(today: date, n: int) -> date:
+def _sessions_back(today: date, n: int, cal: TradingCalendar) -> date:
     d = today
     for _ in range(n - 1):
-        d = prev_trading_day(d)
+        d = cal.prev_trading_day(d)
     return d
 
 
@@ -52,40 +52,42 @@ def _months_back(d: date, months: int) -> date:
     return date(y, m + 1, min(d.day, monthrange(y, m + 1)[1]))
 
 
-def window(rng: str, now: datetime, extended: bool) -> Span:
+# Sessions follow the symbol's exchange calendar (`cal`, analytics.markets.calendar_for; default NYSE).
+def window(rng: str, now: datetime, extended: bool, cal: TradingCalendar = NYSE) -> Span:
     """[start, end] of `rng` as of `now`: from the first session's pre-market open to now. The latest session is today
     once it has started (04:00 ET in the extended view, 09:30 ET otherwise), else the previous trading day."""
     ny = now.astimezone(NY)
-    started = is_trading_day(ny.date()) and ny.time() >= (EXTENDED_OPEN if extended else OPEN)
-    last = ny.date() if started else prev_trading_day(ny.date())
+    started = cal.is_trading_day(ny.date()) and ny.time() >= (EXTENDED_OPEN if extended else OPEN)
+    last = ny.date() if started else cal.prev_trading_day(ny.date())
     if rng in ("1d", "5d"):
-        first = _sessions_back(last, int(rng[0]))
+        first = _sessions_back(last, int(rng[0]), cal)
     else:
         first = _months_back(last, int(rng[0]))
     return _at(first, EXTENDED_OPEN), now.astimezone(timezone.utc)
 
 
 def extended_window(day: date, market: str) -> Span:
-    """The extended-hours window of trading day `day`: 'pre' 04:00-09:30, 'post' the close-20:00 ET."""
+    """The extended-hours window of trading day `day`: 'pre' 04:00-09:30, 'post' the close-20:00 ET (US listings: the
+    TSX has no extended-hours trading)."""
     if market == "pre":
         return _at(day, EXTENDED_OPEN), _at(day, OPEN)
     if market == "post":
-        return _at(day, close_time(day)), _at(day, EXTENDED_CLOSE)
+        return _at(day, NYSE.close_time(day)), _at(day, EXTENDED_CLOSE)
     raise ValueError(market)
 
 
 def extended_market(ts: datetime) -> str | None:
     """'pre' | 'post' when `ts` is in a trading day's extended-hours window (extended_window), else None."""
     d = ts.astimezone(NY).date()
-    if not is_trading_day(d):
+    if not NYSE.is_trading_day(d):
         return None
     return next((m for m in ("pre", "post") if (w := extended_window(d, m))[0] <= ts < w[1]), None)
 
 
-def is_regular(ts: datetime) -> bool:
+def is_regular(ts: datetime, cal: TradingCalendar = NYSE) -> bool:
     """Whether a bar starting at `ts` is in the regular session (09:30 to the close, ET)."""
     ny = ts.astimezone(NY)
-    return is_trading_day(ny.date()) and OPEN <= ny.time() < close_time(ny.date())
+    return cal.is_trading_day(ny.date()) and OPEN <= ny.time() < cal.close_time(ny.date())
 
 
 def missing(covered: Iterable[Span], want: Span) -> list[Span]:
@@ -107,25 +109,25 @@ def missing(covered: Iterable[Span], want: Span) -> list[Span]:
     return out
 
 
-def session_windows(span: Span) -> list[Span]:
+def session_windows(span: Span, cal: TradingCalendar = NYSE) -> list[Span]:
     """The trading days' 04:00-20:00 ET windows inside `span` (nights, weekends and holidays have no bars)."""
     s, e = span
     out = []
-    for d in trading_days(s.astimezone(NY).date(), e.astimezone(NY).date()):
+    for d in cal.trading_days(s.astimezone(NY).date(), e.astimezone(NY).date()):
         a, b = max(s, _at(d, EXTENDED_OPEN)), min(e, _at(d, EXTENDED_CLOSE))
         if a < b:
             out.append((a, b))
     return out
 
 
-def request_windows(span: Span, interval: str, max_bars: int) -> list[Span]:
+def request_windows(span: Span, interval: str, max_bars: int, cal: TradingCalendar = NYSE) -> list[Span]:
     """Request windows covering the session hours of `span`, each holding at most `max_bars` bars of `interval`
     (consecutive days are grouped; a day longer than the limit is cut)."""
     step = timedelta(seconds=INTERVAL_S[interval])
     out: list[Span] = []
     cur: Span | None = None
     bars = 0
-    for a, b in session_windows(span):
+    for a, b in session_windows(span, cal):
         while a < b:
             n = -(-(b - a) // step)
             if cur is not None and bars + n <= max_bars:
@@ -149,10 +151,10 @@ def settled(end: datetime, now: datetime) -> datetime:
     return min(end, now - RECENT)
 
 
-def in_sessions(ts: datetime) -> bool:
+def in_sessions(ts: datetime, cal: TradingCalendar = NYSE) -> bool:
     """Whether `ts` is inside a trading day's 04:00-20:00 ET window (where sources have bars)."""
     ny = ts.astimezone(NY)
-    return is_trading_day(ny.date()) and EXTENDED_OPEN <= ny.time() < EXTENDED_CLOSE
+    return cal.is_trading_day(ny.date()) and EXTENDED_OPEN <= ny.time() < EXTENDED_CLOSE
 
 
 def bucket(ts: datetime, interval: str, grid: datetime | None = None) -> datetime:

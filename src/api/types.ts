@@ -10,7 +10,16 @@ export type SymbolKind = "stock" | "etf" | "index";
 /** Where a value came from (INTEGRATION.md §5). */
 export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "live" | "ibkr-adjusted" | "computed";
 
-export interface SymbolRef { symbol: string; name: string; kind: SymbolKind }
+/** Markets followed (SPEC §3 "Symbols"): US listings are bare tickers (RY), Canadian ones carry the exchange suffix
+ * (RY.TO on the TSX, XYZ.VN on the TSX Venture). A symbol's market fixes its currency. */
+export type Market = "US" | "CA";
+export type Currency = "USD" | "CAD";
+export interface MarketFields {
+  market: Market;
+  exchange: "TSX" | "TSXV" | null;   // Canadian listing venue; null for US listings (venue not tracked)
+  currency: Currency;
+}
+export interface SymbolRef extends MarketFields { symbol: string; name: string; kind: SymbolKind }
 
 export interface Quote {
   symbol: string; ts: ISODateTime; price: number; change: number; change_pct: number;
@@ -181,7 +190,7 @@ export interface KeyStats {
   asof: ISODate | null;                        // the reference snapshot's date
   sources: Record<string, DataSource>;         // per figure
 }
-export interface SymbolSummary {
+export interface SymbolSummary extends MarketFields {
   symbol: string; name: string; kind: SymbolKind; sector: string | null; industry: string | null;
   market_cap: number | null; in_universe: boolean;
   optionable: boolean | null;   // true: a chain is stored; false: a chain source (IBKR) confirmed no listed options; null: unknown (not fetched yet)

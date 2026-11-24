@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Mapping
 
+from ..analytics.markets import market_of
 from .session import Session
 
 
@@ -52,13 +53,22 @@ def diff(old: Wanted, new: Wanted) -> Diff:
 
 
 def for_session(w: Wanted, session: Session) -> Wanted:
-    """What can be live in `session`: everything in the regular session, underlyings only in extended hours (US
-    options trade 09:30-16:00), nothing while the market is closed."""
+    """What can be live in `session` (one session for every market): everything in the regular session,
+    underlyings only in extended hours (US options trade 09:30-16:00), nothing while the market is closed."""
     if session == "regular":
         return w
     if session == "extended":
         return Wanted(w.symbols)
     return EMPTY
+
+
+def for_sessions(w: Wanted, sessions: Mapping[str, Session]) -> Wanted:
+    """for_session per market: each underlying in its market's session (`sessions`: market code -> session), each
+    contract in its underlying's."""
+    def s(sym: str) -> Session:
+        return sessions.get(market_of(sym).code, "closed")
+    return Wanted(frozenset(x for x in w.symbols if s(x) != "closed"),
+                  {o: u for o, u in w.contracts.items() if s(u) == "regular"})
 
 
 class Registry:
