@@ -284,6 +284,15 @@ def load_bars(symbol: str, start: date | None = None, live: bool = True) -> list
     return out
 
 
+def nasdaq_gap(symbol: str, what: str) -> str | None:
+    """Why `what` (from Nasdaq: earnings dates, dividend history, company data) is not available for `symbol`, or
+    None when it is: Nasdaq covers US listings only and no free source is used for Canadian ones (SPEC §0)."""
+    if ondemand.covered_by_nasdaq(symbol):
+        return None
+    return (f"{what} for Canadian listings are not available: OptionLens's source (Nasdaq) covers US listings only, "
+            "and no free source for Toronto listings is used.")
+
+
 # ============================================================================ quote / metrics
 def quote_session(q: Quote) -> date | None:
     """The trading session a stored quote belongs to (its live daily bar's date): the session of its

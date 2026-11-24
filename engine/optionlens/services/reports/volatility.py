@@ -8,7 +8,7 @@ from ...analytics import chainmetrics
 from .. import context
 from . import columns as C
 from .base import Col, Output, Param, ReportDef, RunParams, group, pick
-from .common import KIND, SCOPE, base_mask, frame, frame_output, ge, p_int
+from .common import KIND, SCOPE, base_mask, chain_scope, frame, frame_output, ge, p_int
 
 MIN_OPT_VOL = p_int("min_option_volume", "Min option volume", 500, 0)
 
@@ -113,7 +113,7 @@ ZDTE_COLS = (*STRADDLE_COLS, Col("call_volume", "Call vol (expiry)", "int"), Col
 
 def run_zero_dte(p: RunParams) -> Output:
     names = _names()
-    chains = {ca.symbol: ca for ca in context.load_universe_chain_arrays(p.scope, None, 0, 0)}
+    chains = {ca.symbol: ca for ca in context.load_universe_chain_arrays(chain_scope(p), None, 0, 0)}
     if not p["include_all"] and p.scope is None:
         chains = {s: c for s, c in chains.items() if s in CORE_0DTE}
     missing = [s for s in (p.scope or CORE_0DTE) if s not in chains]

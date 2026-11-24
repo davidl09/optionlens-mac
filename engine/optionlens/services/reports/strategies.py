@@ -10,7 +10,7 @@ from ...analytics import strategies as st
 from .. import context
 from . import columns as C
 from .base import Col, Output, Param, ReportDef, RunParams, group
-from .common import KIND, SCOPE, base_mask, frame, p_int, p_num, p_select
+from .common import KIND, SCOPE, base_mask, chain_scope, frame, p_int, p_num, p_select
 
 # ---------------------------------------------------------------------------- columns
 G_TRADE, G_RISK, G_PROB, G_GREEKS, G_VOL, G_LIQ = "Trade", "Risk / reward", "Probability", "Greeks", "Volatility", "Liquidity"
@@ -195,8 +195,8 @@ def _runner(spec: Spec):
     def run(p: RunParams) -> Output:
         sp = _screen_params(spec, p)
         dte_max = sp.dte_max + (sp.back_gap_max if spec.id.startswith("calendar") else 0)
-        scope = p.scope
-        if scope is None and p.get("kind") not in (None, "all"):
+        scope = chain_scope(p)
+        if p.scope is None and p.get("kind") not in (None, "all"):
             f = frame()
             scope = list(f["symbol"][base_mask(f, p)])
         chains = context.load_universe_chain_arrays(scope, spec.right, sp.dte_min, dte_max, sp.min_oi, sp.min_volume)

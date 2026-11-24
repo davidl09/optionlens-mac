@@ -163,6 +163,11 @@ def latest_contracts_listed_at(symbol: str) -> datetime | None:
     return aware(scalar("SELECT max(contracts_listed_at) FROM option_latest WHERE symbol = ?", [symbol]))
 
 
+def served_symbols() -> list[str]:
+    """Symbols with a served chain (option_latest)."""
+    return [r["symbol"] for r in query("SELECT DISTINCT symbol FROM option_latest ORDER BY symbol")]
+
+
 def fetched_since(since: datetime, symbols: Sequence[str] | None = None) -> set[str]:
     """Symbols (all, or among `symbols`) whose stored chain was fetched at/after `since`."""
     syms = _syms(symbols)

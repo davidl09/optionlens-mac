@@ -14,6 +14,7 @@ from ..repo import jobs as jobs_repo
 from ..repo import symbols as symbols_repo
 from ..sources import nasdaq
 from ._util import report_progress, run_bounded
+from . import ondemand
 
 EARNINGS_BACK, EARNINGS_FWD = 10, 90
 DIVIDENDS_BACK, DIVIDENDS_FWD = 10, 60
@@ -127,7 +128,8 @@ async def dividends(start: date | None = None, end: date | None = None) -> str:
 async def dividends_history(symbols: list[str] | None = None) -> str:
     """Per-symbol dividend history for universe stocks/ETFs (or given symbols)."""
     rows = await asyncio.to_thread(symbols_repo.list_symbols, in_universe=True)
-    rows = [r for r in rows if r["kind"] != "index" and (not symbols or r["symbol"] in symbols)]
+    rows = [r for r in rows if r["kind"] != "index" and ondemand.covered_by_nasdaq(r["symbol"])
+            and (not symbols or r["symbol"] in symbols)]
     total = 0
 
     async def one(row: dict) -> None:

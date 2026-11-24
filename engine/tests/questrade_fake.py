@@ -97,9 +97,10 @@ class FakeQuestrade:
                                                          if i in self.symbol_details]}, headers=h)
         if path == "/v1/symbols/search":
             prefix = request.url.params["prefix"]
+            toronto = prefix.endswith(".TO")
             hits = [{"symbol": prefix, "symbolId": self.listed[prefix], "securityType": "Stock",
-                     "currency": "USD", "listingExchange": "NYSE", "isQuotable": True, "isTradable": True}] \
-                if prefix in self.listed else []
+                     "currency": "CAD" if toronto else "USD", "listingExchange": "TSX" if toronto else "NYSE",
+                     "isQuotable": True, "isTradable": True}] if prefix in self.listed else []
             return httpx.Response(200, json={"symbols": hits}, headers=h)
         if path == "/v1/symbols/1000":
             return httpx.Response(200, json={"symbols": [{"symbol": "XYZ", "symbolId": 1000, "hasOptions": True,
@@ -138,7 +139,7 @@ class FakeQuestrade:
             return httpx.Response(200, json=self.balances)
         return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
 
-    STEP = {"OneMinute": 60, "FiveMinutes": 300, "FifteenMinutes": 900, "OneHour": 3600}
+    STEP = {"OneMinute": 60, "FiveMinutes": 300, "FifteenMinutes": 900, "OneHour": 3600, "OneDay": 86400}
 
     def candles(self, params) -> list[dict]:
         """Candles every interval from startTime to endTime on weekdays within candle_hours ET (EST, -05:00), at most
@@ -150,9 +151,12 @@ class FakeQuestrade:
         out = []
         if self.candle_until is not None:
             end = min(end, self.candle_until - timedelta(microseconds=1))
+        daily = params["interval"] == "OneDay"      # one candle per weekday, starting at midnight ET
+        if daily:
+            t = datetime.fromisoformat(params["startTime"]).astimezone(NY).replace(hour=0, minute=0, second=0)
         while t <= end and len(out) < self.candle_cap:
             ny = t.astimezone(NY)
-            if ny.weekday() < 5 and self.candle_hours[0] <= ny.hour < self.candle_hours[1]:
+            if ny.weekday() < 5 and (daily or self.candle_hours[0] <= ny.hour < self.candle_hours[1]):
                 p = 100 + (t.timestamp() % 86400) / 8640
                 out.append({"start": ny.isoformat(timespec="microseconds"), "end": (ny + step).isoformat(timespec="microseconds"),
                             "low": round(p - 0.2, 2), "high": round(p + 0.3, 2), "open": round(p, 2),

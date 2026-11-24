@@ -3,6 +3,8 @@ relative performance, sector/industry performance, seasonality, extended-hours m
 upcoming events. All but the extended-hours and seasonality reports derive from the universe frame."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import asyncio
 import logging
 import threading
@@ -460,6 +462,9 @@ EVENT_DRIVEN = ReportDef(
      MIN_MCAP, KIND, UNIVERSE_ONLY, *SCOPE),
     EVENT_COLS, run_event_driven, ("days_to_event", "asc"), (C.NOTE_DIVS,))
 
+# Sector / industry totals never mix markets; pre-market / after-hours quotes (Nasdaq) and the event calendar
+# (Nasdaq earnings and dividends) cover US listings only.
 REPORTS = (STOCK_SCREENER, ETF_SCREENER, MARKET_MOVERS, GAINERS_HV, LOSERS_HV, HIGHS_LOWS, UNUSUAL_STOCK_VOLUME,
-           VOLUME_BURST, GAP_AND_GO, OUTPERFORMERS, PERF_SECTOR, PERF_INDUSTRY, SEASONALITY, PREMARKET, AFTERHOURS,
-           EVENT_DRIVEN)
+           VOLUME_BURST, GAP_AND_GO, OUTPERFORMERS, replace(PERF_SECTOR, markets="one"),
+           replace(PERF_INDUSTRY, markets="one"), SEASONALITY, *(replace(d, markets="us") for d in
+                                                                  (PREMARKET, AFTERHOURS, EVENT_DRIVEN)))

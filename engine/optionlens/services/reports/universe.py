@@ -16,7 +16,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from ...analytics import stats, vol
+from ...analytics import markets, stats, vol
 from ...analytics.calendar import NY, now_ny
 from ...repo import bars as bars_repo
 from ...repo import dividends as div_repo
@@ -35,7 +35,7 @@ SENTIMENT_THRESHOLD = 0.70
 BENCH = "SPY"
 _QUOTE_COLS = ("price", "change", "change_pct", "prev_close", "open", "high", "low", "volume", "bid", "ask", "vwap")
 
-_TEXT = ("symbol", "name", "kind", "sector", "industry", "sentiment", "earnings_timing")
+_TEXT = ("symbol", "market", "currency", "name", "kind", "sector", "industry", "sentiment", "earnings_timing")
 _DATES = ("next_earnings", "last_earnings", "next_ex_div", "last_bar_date", "metrics_date")
 
 
@@ -130,6 +130,8 @@ def build_frame(today: date | None = None) -> Frame:
 
     # ---- description
     C["symbol"] = np.array(syms, dtype=object)
+    C["market"] = np.array([markets.market_of(s).code for s in syms], dtype=object)
+    C["currency"] = np.array([markets.currency_of(s) for s in syms], dtype=object)
     for k in ("name", "kind", "sector", "industry"):
         C[k] = np.array([r.get(k) for r in syms_rows], dtype=object)
     C["market_cap"] = np.array([np.nan if r.get("market_cap") is None else r["market_cap"] for r in syms_rows], float)

@@ -2,6 +2,8 @@
 increases, best yields, capture stats, REITs/MLPs/closed-end funds and a symbol comparison."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from datetime import date, timedelta
 from typing import Sequence
 
@@ -323,4 +325,5 @@ COMPARISON = ReportDef(
     (Param("symbols", "Symbols", "symbols", ["KO", "PEP", "PG", "JNJ", "XOM", "CVX", "T", "VZ"]),),
     CMP_COLS, run_comparison, ("yield", "desc"), NOTES, method=METHOD)
 
-REPORTS = (CALENDAR, FUTURE, ANNOUNCEMENTS, INCREASES, BEST, CAPTURE, REITS, COMPARISON)
+# US listings only: the data comes from the Nasdaq dividend calendars and histories (no free source covers Canadian listings).
+REPORTS = tuple(replace(d, markets="us") for d in (CALENDAR, FUTURE, ANNOUNCEMENTS, INCREASES, BEST, CAPTURE, REITS, COMPARISON))

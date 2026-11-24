@@ -334,6 +334,7 @@ export interface Earnings {
   events: EarningsEventRow[];   // newest first, past only (up to 40)
   stats: EarningsStats;         // over last 12
   stats_all: EarningsStats;
+  unavailable: string | null;   // why earnings dates are not available (Canadian listings: Nasdaq covers US only)
 }
 export interface StrategyBacktestSummary {
   strategy: string; label: string; trades: number; win_rate: number | null; avg_return: number | null; median_return: number | null;
@@ -352,6 +353,7 @@ export interface Dividends {
     discrepancy: boolean }[];    // the sources' amounts for this ex-date differ by more than $0.01
   capture: { ex_date: ISODate; amount: number; pre_close: number | null; ex_close: number | null; price_return: number | null; total_return: number | null; recovery_days: number | null }[];
   capture_stats: { count: number; avg_total_return: number | null; win_rate: number | null; avg_recovery_days: number | null };
+  unavailable: string | null;   // why the dividend history is not available (Canadian listings); yield may then be Questrade's
 }
 export interface Seasonality {
   symbol: string;

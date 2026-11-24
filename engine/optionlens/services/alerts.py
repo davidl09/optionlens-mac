@@ -101,7 +101,7 @@ def _targets(alert: dict) -> list[str]:
 
 
 def _unusual_symbols() -> set[str]:
-    return {r["symbol"] for r in registry.run_sync(UOV_ID)["rows"]}
+    return {r["symbol"] for r in registry.run_sync(UOV_ID, {"market": "all"})["rows"]}   # alerts watch every market
 
 
 def matches(alert: dict, f: Frame, unusual: set[str] | None = None, halts: dict[str, dict] | None = None,

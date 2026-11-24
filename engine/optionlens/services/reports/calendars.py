@@ -2,6 +2,8 @@
 Rows come from the 6 h http_cache (`ondemand.fetch_calendar`); splits are joined to the universe frame."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 import asyncio
 from datetime import date
 
@@ -83,4 +85,5 @@ NEW_LISTINGS = ReportDef(
     IPO_COLS, run_ipos, ("date", "asc"),
     (NOTE_SOURCE, "Filed deals often have no ticker yet; upcoming prices may be a range (e.g. 10.00-12.00)."))
 
-REPORTS = (SPLITS, NEW_LISTINGS)
+# US listings only: the data comes from the Nasdaq splits and IPO calendars (no free source covers Canadian listings).
+REPORTS = tuple(replace(d, markets="us") for d in (SPLITS, NEW_LISTINGS))

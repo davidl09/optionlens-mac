@@ -3,24 +3,36 @@ resolution, execution, server-side sort, truncation, JSON-safe ReportResult)."""
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from typing import Mapping
 
 import anyio.to_thread
 
+from ...analytics import markets
 from ...repo import user as user_repo
 from ..errors import NotFound
 from . import calendars, dividends, earnings, options, stocks, strategies, volatility
 from .columns import NOTE_CHAIN_UNIVERSE
-from .base import MAX_ROWS, Output, ParamError, ReportDef, RunParams, jsonable, sort_rows
+from .common import MARKET, MARKET_ONE
+from .base import MAX_ROWS, Output, ParamError, ReportDef, RunParams, in_market, jsonable, sort_rows
 
 NO_CHAIN_MATCH = "No stored option chain matches these settings."
+
+MARKET_PARAMS = {"any": MARKET, "one": MARKET_ONE, "us": None}
+
+
+def with_market_param(d: ReportDef) -> ReportDef:
+    """The report with its `market` param (ReportDef.markets), after its own params."""
+    prm = MARKET_PARAMS[d.markets]
+    return d if prm is None or any(x.key == "market" for x in d.params) else replace(d, params=(*d.params, prm))
+
 
 REPORTS: dict[str, ReportDef] = {}
 for _d in (*options.REPORTS, *strategies.REPORTS, *earnings.REPORTS, *volatility.REPORTS, *stocks.REPORTS,
            *dividends.REPORTS, *calendars.REPORTS):
     if _d.id in REPORTS:
         raise RuntimeError(f"duplicate report id {_d.id}")
-    REPORTS[_d.id] = _d
+    REPORTS[_d.id] = with_market_param(_d)
 
 
 def definitions() -> list[dict]:
@@ -37,7 +49,9 @@ def get(report_id: str) -> ReportDef:
 
 def parse_params(d: ReportDef, query: Mapping[str, str]) -> RunParams:
     """Typed effective params from query strings (defaults for missing); resolves `symbols` and
-    `watchlist` into RunParams.scope. ParamError for invalid values / unknown watchlist."""
+    `watchlist` into RunParams.scope and the market filter into RunParams.market (US-only reports: US; an explicit
+    `symbols` list is shown whatever its market; a watchlist is narrowed to the market). ParamError for invalid
+    values / unknown watchlist."""
     p = RunParams({prm.key: prm.parse(query.get(prm.key)) for prm in d.params})
     scope = None
     if p.get("symbols"):
@@ -47,6 +61,10 @@ def parse_params(d: ReportDef, query: Mapping[str, str]) -> RunParams:
         if wl is None:
             raise ParamError(f"unknown watchlist {p['watchlist']}")
         scope = [s for s in (scope or wl["symbols"]) if s in set(wl["symbols"])]
+    market = "US" if d.markets == "us" else p.get("market")
+    p.market = None if p.get("symbols") or market not in markets.MARKETS else market
+    if p.market is not None and scope is not None:
+        scope = [s for s in scope if markets.market_of(s).code == p.market]
     p.scope = scope
     return p
 
@@ -77,7 +95,7 @@ def run_sync(report_id: str, query: Mapping[str, str] | None = None) -> dict:
 
 
 def finalize(d: ReportDef, p: RunParams, out: Output) -> dict:
-    rows = out.rows
+    rows = in_market(out.rows, p.market)
     if d.default_sort and not out.presorted:
         rows = sort_rows(rows, d.default_sort[0], d.default_sort[1] == "desc")
     truncated = out.truncated or len(rows) > MAX_ROWS

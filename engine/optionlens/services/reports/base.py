@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 import numpy as np
 
+from ...analytics import markets
 from ...analytics.calendar import now_ny
 from ...models import normalize_symbol
 from ..errors import BadRequest
@@ -162,8 +163,10 @@ def rel_date(days: int) -> Callable[[], date]:
 
 class RunParams(dict):
     """Effective params (JSON-able) plus ``scope``: the symbol restriction from `symbols` and/or
-    `watchlist` (intersection when both are given), None when unrestricted."""
+    `watchlist` (intersection when both are given), None when unrestricted; and ``market``: the market code the rows
+    are restricted to ("US" | "CA"), None when unrestricted (market "all", or an explicit `symbols` list)."""
     scope: list[str] | None = None
+    market: str | None = None
 
 
 # ----------------------------------------------------------------------------- output
@@ -191,6 +194,10 @@ class ReportDef:
     notes: tuple[str, ...] = ()                       # static limitations / proxies, in plain words
     method: tuple[str, ...] = ()                      # the precise method behind the notes (shown on request)
     empty_reason: str | None = None                   # why a run can return no rows (when no run-time note says)
+    # Market filter (registry adds the `market` param, docs/SPEC.md §7): "any" = US / Canada / All (default US),
+    # "one" = US / Canada (an aggregate never mixes markets or currencies), "us" = a US-only source (Nasdaq
+    # calendars and fundamentals): no param, US rows only.
+    markets: str = "any"
 
     def as_dict(self) -> dict:
         d = {"id": self.id, "title": self.title, "category": self.category, "description": self.description,
@@ -228,6 +235,22 @@ def _jsonable(v: Any) -> Any:
 
 
 jsonable = _jsonable
+
+
+def in_market(rows: list[dict], market: str | None) -> list[dict]:
+    """The market filter's safety net for every report: rows of a symbol (`symbol` key) of another market are
+    dropped; each such row gets its `currency` (money columns are shown in it; rows without a symbol are aggregates
+    of one market)."""
+    out = []
+    for r in rows:
+        sym = r.get("symbol")
+        if isinstance(sym, str) and sym:
+            m = markets.market_of(sym)
+            if market is not None and m.code != market:
+                continue
+            r = {**r, "currency": m.currency}
+        out.append(r)
+    return out
 
 
 def sort_rows(rows: list[dict], key: str, descending: bool) -> list[dict]:

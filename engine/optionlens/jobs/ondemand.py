@@ -7,6 +7,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
+from ..analytics import markets
 from ..analytics.calendar import now_ny
 from ..models import normalize_symbol
 from ..net import FetchError
@@ -128,13 +129,22 @@ async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> 
         return payload
 
 
+def covered_by_nasdaq(symbol: str) -> bool:
+    """Nasdaq's quote, company, calendar and dividend endpoints cover US listings only: a Canadian symbol (RY.TO) is
+    never sent to Nasdaq (its ticker can name a different US company: T.TO is TELUS, T is AT&T)."""
+    return not markets.is_canadian(symbol)
+
+
 async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
-    """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL.
+    """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL; None without a
+    request for a symbol Nasdaq does not cover (covered_by_nasdaq).
     A None answer (Nasdaq has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
     params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
     cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
     ttl = CACHE_TTL_S[kind]
     symbol = normalize_symbol(symbol)
+    if not covered_by_nasdaq(symbol):
+        return None
 
     async def fetch() -> Any:
         row = await ensure_symbol(symbol)

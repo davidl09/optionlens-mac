@@ -59,11 +59,15 @@ def seasonality(symbol: str) -> dict:
 
 # ----------------------------------------------------------------------------- dividends / events
 def dividends(symbol: str) -> dict:
+    """Dividends (types.ts). A Canadian listing has no dividend history (`unavailable` says why): what is shown is the
+    current dividend Questrade reports."""
     sym = ctx.ensure_known(symbol)["symbol"]
     bars_ = ctx.load_bars(sym, live=False)
     q = ctx.quote_dict(sym)   # the price every page's dividend yield uses (key stats too)
     price = q["price"] if q else None
-    return divs_a.dividend_summary(sym, div_repo.for_symbol(sym), bars_, price, ctx.today())
+    out = divs_a.dividend_summary(sym, div_repo.for_symbol(sym), bars_, price, ctx.today())
+    gap = ctx.nasdaq_gap(sym, "Dividend histories")
+    return {**out, "unavailable": gap and gap + " Shown: the current dividend Questrade reports, when it reports one."}
 
 
 EVENT_HISTORY = 8      # past earnings / ex-dates shown

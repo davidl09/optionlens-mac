@@ -3,6 +3,8 @@ historic pattern screener, earnings option-strategy backtest screener, today's o
 upcoming summary."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from datetime import date, timedelta
 from typing import Iterable, Sequence
 
@@ -412,4 +414,5 @@ SUMMARY = ReportDef(
     "Per day for the next 30 days: number of reporters, BMO/AMC split, total market cap and notable names.",
     (p_int("days", "Days ahead", 30, 1, 90), MIN_MCAP, UNIVERSE_ONLY), SUM_COLS, run_summary, ("date", "asc"))
 
-REPORTS = (CALENDAR, RESULTS, PATTERN, STRATEGY_SCREENER, OPPORTUNITIES, SUMMARY)
+# US listings only: the data comes from the Nasdaq earnings calendar (no free source covers Canadian listings).
+REPORTS = tuple(replace(d, markets="us") for d in (CALENDAR, RESULTS, PATTERN, STRATEGY_SCREENER, OPPORTUNITIES, SUMMARY))

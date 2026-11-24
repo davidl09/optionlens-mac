@@ -126,7 +126,8 @@ def earnings(symbol: str) -> dict:
     rows = _past_rows(sym, earn_repo.for_symbol(sym), bars)
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
     return {"symbol": sym, "next": next_earnings(sym, ca, bars, rows), "events": rows,
-            "stats": earn_a.earnings_stats(rows[:STATS_LAST]), "stats_all": earn_a.earnings_stats(rows)}
+            "stats": earn_a.earnings_stats(rows[:STATS_LAST]), "stats_all": earn_a.earnings_stats(rows),
+            "unavailable": ctx.nasdaq_gap(sym, "Earnings dates")}
 
 
 # ----------------------------------------------------------------------------- strategy backtests

@@ -11,7 +11,7 @@ from . import context
 from .errors import BadRequest, NotFound
 from .reports import columns as C
 from .reports import universe
-from .reports.base import Col, jsonable, pick
+from .reports.base import Col, in_market, jsonable, pick
 
 # ============================================================================ watchlists
 def _symbols(raw: Iterable[str]) -> list[str]:
@@ -109,7 +109,8 @@ def watchlist_table(wid: int) -> dict:
         i = pos.get(s)
         rows.append(f.rows([i], keys)[0] if i is not None else {"symbol": s, **{k: None for k in keys if k != "symbol"}})
     return {"id": f"watchlist-{wid}", "title": w["name"], "asof": jsonable(f.asof), "params": {"watchlist": wid},
-            "columns": [c.as_dict() for c in WATCHLIST_COLS], "rows": jsonable(rows), "truncated": False,
+            "columns": [c.as_dict() for c in WATCHLIST_COLS], "rows": jsonable(in_market(rows, None)),
+            "truncated": False,
             "notes": [C.NOTE_IV_RANK, C.NOTE_DELAY]}
 
 

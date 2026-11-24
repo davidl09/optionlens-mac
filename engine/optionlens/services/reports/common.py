@@ -8,8 +8,10 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 
 from .base import MAX_ROWS, Col, Output, Param, RunParams
+from ...analytics import markets
 from ...models import Bar
 from ...repo import bars as bars_repo
+from ...repo import options as options_repo
 from ...repo import quotes as quotes_repo
 from .universe import Frame, get_frame, in_watchlist_mask, with_live_bar
 
@@ -23,7 +25,13 @@ UNIVERSE_ONLY = Param("universe_only", "Universe only", "bool", True,
                       help="Only the symbols OptionLens tracks every day. Off: also symbols you opened outside it")
 MIN_PRICE = Param("min_price", "Min price", "number", 5.0, min=0, step=1)
 MIN_STOCK_VOLUME = Param("min_volume", "Min volume", "int", 100_000, min=0, step=10_000)
-MIN_MCAP = Param("min_market_cap", "Min market cap", "number", None, min=0, help="Dollars, e.g. 1e10")
+MIN_MCAP = Param("min_market_cap", "Min market cap", "number", None, min=0,
+                 help="In the listing's currency (US$ or C$), e.g. 1e10")
+_MARKET_HELP = ("US listings (USD) or Canadian ones (TSX / TSX Venture, CAD). Ignored when Symbols are given")
+MARKET = Param("market", "Market", "select", "US", options=(("US", "US"), ("CA", "Canada"), ("all", "All")),
+               help=_MARKET_HELP)
+MARKET_ONE = Param("market", "Market", "select", "US", options=(("US", "US"), ("CA", "Canada")),
+                   help=_MARKET_HELP + "; totals never mix markets or currencies")
 
 
 def p_int(name: str, label: str, default: int | None, lo: float | None = None, hi: float | None = None,
@@ -42,9 +50,11 @@ def p_select(name: str, label: str, default: str, options: Sequence[tuple[str, s
 
 # ----------------------------------------------------------------------------- frame masks
 def base_mask(f: Frame, p: RunParams) -> np.ndarray:
-    """Scope (symbols/watchlist) ∧ kind ∧ universe_only ∧ min price/volume/market cap, for params
+    """Scope (symbols/watchlist) ∧ market ∧ kind ∧ universe_only ∧ min price/volume/market cap, for params
     the report declares."""
     m = f.select(p.scope)
+    if p.market is not None:
+        m &= f["market"] == p.market
     kind = p.get("kind")
     if kind and kind != "all":
         m &= f["kind"] == kind
@@ -55,6 +65,14 @@ def base_mask(f: Frame, p: RunParams) -> np.ndarray:
         if v is not None:
             m &= np.nan_to_num(f[col], nan=-np.inf) >= v
     return m
+
+
+def chain_scope(p: RunParams) -> list[str] | None:
+    """The symbols chain-based reports load: the scope (already within the market), else the market's symbols with
+    a served chain, else None (every stored chain)."""
+    if p.scope is not None or p.market is None:
+        return p.scope
+    return [s for s in options_repo.served_symbols() if markets.market_of(s).code == p.market]
 
 
 def ge(a: np.ndarray, v) -> np.ndarray:

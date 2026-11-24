@@ -3,12 +3,13 @@ changes, large-volume contracts, the per-contract option screener, the broad vie
 protective-put cost."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import numpy as np
 
 from ...analytics import probability as prob
-from ...analytics import stats
+from ...analytics import markets, stats
 from ...analytics.calendar import next_trading_day, trading_days
 from ...repo import metrics as metrics_repo
 from ...repo import options as options_repo
@@ -16,7 +17,7 @@ from ...repo import report_snapshots as snaps_repo
 from .. import context
 from . import columns as C
 from .base import Col, Output, ReportDef, RunParams, group, pick, today
-from .common import (KIND, SCOPE, UNIVERSE_ONLY, bar_lists, base_mask, columnar_rows, frame, frame_output, ge, le, p_int,
+from .common import (KIND, SCOPE, chain_scope, UNIVERSE_ONLY, bar_lists, base_mask, columnar_rows, frame, frame_output, ge, le, p_int,
                      p_num, p_select)
 
 UOV_ID = "unusual-option-volume"
@@ -249,7 +250,7 @@ def run_oi_changes(p: RunParams) -> Output:
         return Output([], ["Needs a stored end-of-day open-interest snapshot before the current chain "
                            "(option_eod starts with the first EOD run); empty until then."])
     t = today()
-    cols = options_repo.latest_vs_eod_oi(prior, p.scope, p["min_change"], t + timedelta(days=p["dte_min"]),
+    cols = options_repo.latest_vs_eod_oi(prior, chain_scope(p), p["min_change"], t + timedelta(days=p["dte_min"]),
                                          t + timedelta(days=p["dte_max"]), limit=20_000)
     chg = cols["oi"].astype(float) - cols["oi_prev"].astype(float)
     side = p["side"]
@@ -292,7 +293,7 @@ def run_large_volume(p: RunParams) -> Output:
     t = today()
     min_prem = p["min_premium"]
     load_vol = 1 if min_prem is not None else p["min_volume"]
-    cols = options_repo.latest_columns(p.scope, _right(p), t + timedelta(days=p["dte_min"]),
+    cols = options_repo.latest_columns(chain_scope(p), _right(p), t + timedelta(days=p["dte_min"]),
                                        t + timedelta(days=p["dte_max"]), None, load_vol)
     mid = _mid(cols["bid"], cols["ask"], cols["last"])
     vol_ = cols["volume"].astype(float)
@@ -338,7 +339,7 @@ OS_COLS = (*CONTRACT, *group("Quote", (Col("bid", "Bid", "money"), Col("ask", "A
 
 
 def run_option_screener(p: RunParams) -> Output:
-    chains = context.load_universe_chain_arrays(p.scope, _right(p), p["dte_min"], p["dte_max"], p["min_oi"],
+    chains = context.load_universe_chain_arrays(chain_scope(p), _right(p), p["dte_min"], p["dte_max"], p["min_oi"],
                                                 p["min_volume"])
     parts = {k: [] for k in ("symbol", "osi", "expiry", "dte", "right", "strike", "bid", "ask", "mid", "last",
                              "volume", "oi", "iv", "delta", "gamma", "theta", "vega", "underlying", "iv_rank",
@@ -431,8 +432,10 @@ def run_broad_view(p: RunParams) -> Output:
     s = metrics_repo.series_between(end - timedelta(days=365), end, ["call_volume", "put_volume"])
     hist = []
     if len(s["date"]):
-        if p.scope is not None:
-            keep = np.isin(s["symbol"], p.scope)
+        if p.scope is not None or p.market is not None:
+            keep = np.isin(s["symbol"], p.scope) if p.scope is not None else np.ones(len(s["symbol"]), bool)
+            if p.market is not None:
+                keep &= np.array([markets.market_of(x).code == p.market for x in s["symbol"]], dtype=bool)
             s = {k: v[keep] for k, v in s.items()}
         d, inv = np.unique(s["date"], return_inverse=True)
         cv = np.bincount(inv, np.nan_to_num(s["call_volume"]), len(d))
@@ -465,7 +468,7 @@ PP_COLS = (*C.DESC_SHORT, Col("price", "Price", "money", C.G_QUOTE), Col("expiry
 def run_put_protection(p: RunParams) -> Output:
     target, otm = p["target_dte"], p["otm_pct"]
     lo, hi = max(0, target - 30), target + 45
-    chains = context.load_universe_chain_arrays(p.scope, "P", lo, hi, p["min_oi"], 0)
+    chains = context.load_universe_chain_arrays(chain_scope(p), "P", lo, hi, p["min_oi"], 0)
     f = frame()
     pos = f.index()
     allowed = None if p.scope is not None else set(f["symbol"][base_mask(f, p)])
@@ -514,5 +517,5 @@ PUT_PROTECTION = ReportDef(
     method=("Listed expiry nearest the target DTE; the highest listed strike at or below spot × (1 − % OTM), so the "
             "put is at least that far out of the money (symbols without one are left out); cost = ask / spot.",))
 
-REPORTS = (UOV, IV_RANKINGS, IV_MOVERS, VOLUME_LEADERS, OI_CHANGES, LARGE_VOLUME, OPTION_SCREENER, BROAD_VIEW,
-           PUT_PROTECTION)
+REPORTS = (UOV, IV_RANKINGS, IV_MOVERS, VOLUME_LEADERS, OI_CHANGES, LARGE_VOLUME, OPTION_SCREENER,
+           replace(BROAD_VIEW, markets="one"), PUT_PROTECTION)
