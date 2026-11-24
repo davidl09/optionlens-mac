@@ -180,6 +180,7 @@ function baseSummary(sym: string): SymbolSummary {
   const name = SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`;
   return {
     symbol: sym, name, kind: ["SPY", "QQQ", "IWM", "DIA"].includes(sym) ? "etf" : ["SPX", "NDX", "RUT", "XSP"].includes(sym) ? "index" : "stock",
+    market: "US", exchange: null, currency: "USD",
     sector: "Technology", industry: "Consumer Electronics", market_cap: 3.48e12, optionable: true, in_universe: true, quote: quote(sym),
     avg_volume_30d: 52_100_000, rel_volume: 0.93, high_52w: 248.1, low_52w: 168.3, high_3y: 248.1, low_3y: 124.2, beta_1y: 1.12, corr_spy_1y: 0.71,
     iv30: 0.274, iv30_asof: TODAY_NY, iv_rank: null, iv_percentile: null, iv_history_days: 12, hv20: 0.221, iv_hv_ratio: 1.24,
@@ -271,7 +272,7 @@ export function earnings(sym: string): Earnings {
   const stats = { count: 12, avg_move: 0.006, avg_abs_move: 0.038, median_abs_move: 0.033, stdev_move: 0.047, up_pct: 0.58, max_up: 0.072, max_down: -0.061, avg_abs_gap: 0.031, avg_pre_drift_5: 0.004, avg_post_drift_5: -0.002, avg_post_drift_20: 0.011 };
   return {
     symbol: sym, next: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: 0.049, avg_abs_move_pct: 0.038, excess_implied_move_pct: 0.041, implied_vs_hist_ratio: 1.29, expiry_used: "2027-01-29" },
-    events, stats, stats_all: { ...stats, count: 16 },
+    events, stats, stats_all: { ...stats, count: 16 }, unavailable: null,
   };
 }
 
@@ -327,7 +328,7 @@ export function dividends(sym: string): Dividends {
     symbol: sym, annual_rate: 1.04, yield: 0.0045, frequency: 4, growth_1y: 0.04, growth_3y: 0.042, growth_5y: 0.051,
     next: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045, source: "nasdaq" }, history,
     capture: history.map((h, i) => ({ ex_date: h.ex_date, amount: h.amount, pre_close: 220, ex_close: round(220 - 0.3 + i * 0.05), price_return: round(-0.0014 + i * 0.0002, 5), total_return: round(-0.0002 + i * 0.0002, 5), recovery_days: i === 3 ? null : i + 1 })),
-    capture_stats: { count: 12, avg_total_return: 0.0009, win_rate: 0.58, avg_recovery_days: 4.2 },
+    capture_stats: { count: 12, avg_total_return: 0.0009, win_rate: 0.58, avg_recovery_days: 4.2 }, unavailable: null,
   };
 }
 
@@ -407,7 +408,7 @@ export function profile(sym: string): Profile {
   return {
     symbol: sym, name: SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`, description: "Designs, manufactures and sells consumer electronics, software and services worldwide.",
     website: "https://example.com", sector: "Technology", industry: "Consumer Electronics", exchange: "NASDAQ",
-    peers: SYMBOLS.slice(1, 7).map(([symbol, name]) => ({ symbol, name, kind: "stock" as const })),
+    peers: SYMBOLS.slice(1, 7).map(([symbol, name]) => ({ symbol, name, kind: "stock" as const, market: "US" as const, exchange: null, currency: "USD" as const })),
   };
 }
 

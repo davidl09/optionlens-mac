@@ -10,6 +10,7 @@ from ..analytics import stats
 from ..jobs import ondemand
 from ..repo import bars as bars_repo
 from ..repo import symbols as symbols_repo
+from ..analytics import markets
 from . import context as ctx
 from . import fundamentals as fundamentals_svc
 from .errors import BadRequest
@@ -168,7 +169,8 @@ def profile(symbol: str) -> dict:
             "description": prof.get("CompanyDescription"), "website": prof.get("CompanyUrl"),
             "sector": row["sector"] or prof.get("Sector"), "industry": row["industry"] or prof.get("Industry"),
             "exchange": exchange,
-            "peers": [{"symbol": r["symbol"], "name": r["name"] or r["symbol"], "kind": r["kind"]} for r in _peer_rows(row)]}
+            "peers": [{"symbol": r["symbol"], "name": r["name"] or r["symbol"], "kind": r["kind"],
+                       **markets.describe(r["symbol"])} for r in _peer_rows(row)]}
 
 
 PEER_COLUMNS = [

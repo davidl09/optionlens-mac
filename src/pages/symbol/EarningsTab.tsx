@@ -145,6 +145,7 @@ function StrategyPanel({ sym }: { sym: string }) {
 function EarningsBody({ e, sym }: { e: Earnings; sym: string }) {
   const [scope, setScope] = useState<"recent" | "all">("recent");
   const n = e.next;
+  if (e.unavailable) return <InfoBox title="Not available:">{e.unavailable}</InfoBox>;
   return (
     <div className="stack">
       <Card title="Next earnings">

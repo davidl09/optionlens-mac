@@ -24,6 +24,8 @@ import { IdeasTab, StraddleTab } from "./StrategyTabs";
 import SummaryTab from "./SummaryTab";
 import { EventsTab, SeasonalityTab } from "./ToolsTabs";
 import { ImpliedMovesTab, SkewTab, VolatilityTab, VolSeasonalityTab } from "./VolTabs";
+import { currencyOf, exchangeOf } from "../../lib/markets";
+import { MoneyScope, MoneyText } from "../../components/Money";
 
 interface TabDef { path: string; label: string; component: ComponentType }
 
@@ -70,6 +72,13 @@ function OptionsBadge({ optionable }: { optionable: boolean | null }) {
   return null;
 }
 
+/** Where the symbol trades: "TSX · CAD" for Canadian listings (US listings: no badge, the default market). */
+function MarketBadge({ sym }: { sym: string }) {
+  const ex = exchangeOf(sym);
+  if (!ex) return null;
+  return <span className="badge neutral" title={`Listed on the ${ex === "TSX" ? "Toronto Stock Exchange" : "TSX Venture Exchange"}; prices in Canadian dollars, options on the Montréal Exchange`}>{ex} · CAD</span>;
+}
+
 function QuoteHeader({ sym }: { sym: string }) {
   const st = useApi(() => api.summary(sym), [sym]);
   useLive({ symbols: [sym] });
@@ -85,11 +94,11 @@ function QuoteHeader({ sym }: { sym: string }) {
     <div className="quote-header">
       <div className="qh-id">
         <h1>{sym}</h1>
-        <div className="qh-name">{s ? s.name : st.loading ? <Spinner label="" /> : ""}{s && <span className="badge neutral">{s.kind}</span>}{s && <OptionsBadge optionable={s.optionable} />}</div>
+        <div className="qh-name">{s ? s.name : st.loading ? <Spinner label="" /> : ""}{s && <span className="badge neutral">{s.kind}</span>}<MarketBadge sym={sym} />{s && <OptionsBadge optionable={s.optionable} />}</div>
       </div>
       {q && (
         <div className="qh-price">
-          <span className="qh-last"><Flash value={q.price} active={flowing && patch !== null}>{fmt(q.price, "money")}</Flash></span>
+          <span className="qh-last"><Flash value={q.price} active={flowing && patch !== null}><MoneyText value={q.price} /></Flash></span>
           <span className={`qh-chg ${signClass(q.change)}`}>{q.change > 0 ? "+" : ""}{fmt(q.change, "num2")} ({fmt(q.change_pct, "pct_signed")})</span>
           <AsOf ts={q.ts} />
           <SourceBadge source={q.source} delayed={q.delayed === true} />
@@ -139,6 +148,7 @@ export default function SymbolLayout() {
   const handed = (useLocation().state as SymbolNavState | null)?.legs;
   return (
     <LegsProvider key={sym} initial={handed}>
+      <MoneyScope currency={currencyOf(sym)}>
       <SymbolRefreshProvider sym={sym}>
         <div className="symbol-page">
           <QuoteHeader sym={sym} />
@@ -155,6 +165,7 @@ export default function SymbolLayout() {
           </div>
         </div>
       </SymbolRefreshProvider>
+      </MoneyScope>
     </LegsProvider>
   );
 }

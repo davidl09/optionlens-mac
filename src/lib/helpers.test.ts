@@ -29,7 +29,7 @@ describe("humanize", () => {
 });
 
 describe("rankSymbols", () => {
-  const s = (symbol: string, name: string): SymbolRef => ({ symbol, name, kind: "stock" });
+  const s = (symbol: string, name: string): SymbolRef => ({ symbol, name, kind: "stock", market: "US", exchange: null, currency: "USD" });
   it("ranks exact symbol, then symbol prefix (shorter first), then name matches", () => {
     const items = [s("KOLD", "ProShares UltraShort Bloomberg Natural Gas"), s("KODK", "Eastman Kodak"), s("COKE", "Coca-Cola Consolidated"),
       s("KO", "Coca-Cola Co"), s("KOS", "Kosmos Energy"), s("XYZ", "Ko Holdings")];

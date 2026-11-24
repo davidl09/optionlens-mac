@@ -13,6 +13,8 @@ import { Flash, isFlowing, useLive, useLiveOption, useLiveQuote, useLiveStatus }
 import { withLiveOption } from "../../live/merge";
 import { describeLeg, useLegs } from "../../state/legs";
 import { ExpiryPills, useQueryValue, useSym } from "./shared";
+import { moneyStyleOf } from "../../lib/markets";
+import { MoneyText } from "../../components/Money";
 
 type Side = "both" | "calls" | "puts";
 type RangeOpt = "10" | "20" | "all";
@@ -121,7 +123,7 @@ function chainCell(chain: Chain, row: OptionRow | undefined, c: Col, live: boole
       const qty = c.key === "bid" ? -1 : 1;
       return (
         <td key={c.key} className={`${base} quote-cell`}>
-          <button className={`quote-btn ${c.key}`} title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money")} → calculator`}
+          <button className={`quote-btn ${c.key}`} title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money", moneyStyleOf(chain.symbol))} → calculator`}
             onClick={() => onLeg(row, qty, v as number)}>{fl(fmt(v, "num2"))}</button>
         </td>
       );
@@ -220,7 +222,7 @@ export default function ChainTab() {
           </Card>
           {lastAdded && (
             <div className="leg-toast" role="status">
-              Added <b>{describeLeg(lastAdded)}</b> @ {fmt(lastAdded.price, "money")} · {legs.length} leg{legs.length === 1 ? "" : "s"} in calculator
+              Added <b>{describeLeg(lastAdded)}</b> @ <MoneyText value={lastAdded.price} /> · {legs.length} leg{legs.length === 1 ? "" : "s"} in calculator
               <Link className="btn btn-sm btn-primary" to={`/s/${sym}/calculator`}>Open calculator →</Link>
               <button className="btn btn-sm btn-ghost" onClick={() => setLastAdded(null)} aria-label="Dismiss">×</button>
             </div>

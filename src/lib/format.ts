@@ -1,6 +1,6 @@
 // One formatter per ColumnFmt. Used by tables, stat grids and chart tooltips.
 // Missing values (null / undefined / NaN / ±Infinity) always render as NULL_TEXT.
-import type { ColumnFmt } from "../api/types";
+import type { ColumnFmt, Currency } from "../api/types";
 
 export const NULL_TEXT = "—";
 
@@ -60,6 +60,23 @@ export function parseOsi(osi: string): { root: string; expiry: string; right: "C
   return { root: m[1], expiry: `20${m[2]}-${m[3]}-${m[4]}`, right: m[5] as "C" | "P", strike: Number(m[6]) / 1000 };
 }
 
+/**
+ * How money values are labelled (SPEC §3 "Symbols"): CAD always "C$"; USD "$", or "US$" where it is ambiguous
+ * (`explicit`: a Canadian page, or a table holding both currencies). Values are never converted.
+ */
+export interface MoneyStyle { currency: Currency; explicit: boolean }
+export const USD_STYLE: MoneyStyle = { currency: "USD", explicit: false };
+
+export function moneyPrefix(m: MoneyStyle = USD_STYLE): string {
+  return m.currency === "CAD" ? "C$" : m.explicit ? "US$" : "$";
+}
+
+function bigMoneyText(n: number, m: MoneyStyle): string {
+  const body = bigText(n);
+  const prefix = m.currency === "CAD" || m.explicit ? moneyPrefix(m) : "";   // US amounts keep the bare "1.2B" form
+  return body.startsWith("-") ? `-${prefix}${body.slice(1)}` : `${prefix}${body}`;
+}
+
 const formatters: Record<ColumnFmt, (v: unknown) => string> = {
   symbol: (v) => String(v),
   text: (v) => String(v),
@@ -83,8 +100,14 @@ const formatters: Record<ColumnFmt, (v: unknown) => string> = {
   },
 };
 
-export function fmt(v: unknown, kind: ColumnFmt): string {
+/** Format a value as `kind`; money and bigmoney carry the currency label of `money` (default: plain US "$"). */
+export function fmt(v: unknown, kind: ColumnFmt, money: MoneyStyle = USD_STYLE): string {
   if (isMissing(v)) return NULL_TEXT;
+  if (kind === "money" || kind === "bigmoney") {
+    const n = toNum(v);
+    if (n === null) return NULL_TEXT;
+    return kind === "money" ? `${n < 0 ? "-" : ""}${moneyPrefix(money)}${NF2.format(Math.abs(n))}` : bigMoneyText(n, money);
+  }
   return formatters[kind](v);
 }
 

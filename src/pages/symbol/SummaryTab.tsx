@@ -12,6 +12,7 @@ import { fmt, plural } from "../../lib/format";
 import { atPrice } from "../../lib/keyStats";
 import { isFlowing, useLiveQuote, useLiveStatus } from "../../live";
 import { IDEA_COLUMNS, ideasAsRows, ivAsOf, useSym } from "./shared";
+import { MoneyText } from "../../components/Money";
 
 export const MIN_IV_HISTORY = 20;
 const OPT_HINT = "Collected by the IBKR bridge during market hours; none stored for the latest session yet.";
@@ -34,7 +35,7 @@ function Levels({ title, values, spot, tone }: { title: string; values: number[]
     <div className="levels">
       <div className="levels-title">{title}</div>
       {values.length ? values.map((v) => (
-        <div key={v} className="level-row"><span className={tone}>{fmt(v, "money")}</span>{spot ? <small className="muted">{fmt(v / spot - 1, "pct_signed")}</small> : null}</div>
+        <div key={v} className="level-row"><span className={tone}><MoneyText value={v} /></span>{spot ? <small className="muted">{fmt(v / spot - 1, "pct_signed")}</small> : null}</div>
       )) : <div className="muted small">None found</div>}
     </div>
   );

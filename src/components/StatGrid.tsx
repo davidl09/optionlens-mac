@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import type { ColumnFmt } from "../api/types";
 import { fmt, isMissing, signClass } from "../lib/format";
+import { useMoney } from "./Money";
 import { NullValue } from "./ui";
 
 export interface StatItem {
@@ -18,9 +19,10 @@ export interface StatItem {
 }
 
 export function StatValue({ value, kind = "num", hint, signed }: { value: unknown; kind?: ColumnFmt; hint?: string; signed?: boolean }) {
+  const money = useMoney();
   if (isMissing(value)) return <NullValue hint={hint} />;
   const cls = signed || kind === "pct_signed" ? signClass(value) : "";
-  return <span className={`${cls} ${kind === "date" ? "nowrap" : ""}`}>{fmt(value, kind)}</span>;
+  return <span className={`${cls} ${kind === "date" ? "nowrap" : ""}`}>{fmt(value, kind, money)}</span>;
 }
 
 export function StatGrid({ items, cols }: { items: StatItem[]; cols?: number }) {

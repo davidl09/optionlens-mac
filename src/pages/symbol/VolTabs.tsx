@@ -8,10 +8,11 @@ import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
 import { AsOf, Async, Card, InfoBox, Segmented } from "../../components/ui";
-import { fmt, MONTHS } from "../../lib/format";
+import { MONTHS } from "../../lib/format";
 import { NoChainNotice } from "./ChainRefresh";
 import { ExpiryPills, ivAsOf, shortDate, useQueryValue, useSym } from "./shared";
 import { ivHistoryHint } from "./SummaryTab";
+import { MoneyText } from "../../components/Money";
 
 const CM_COLUMNS: ColumnDef[] = [
   { key: "tenor", label: "Tenor (days)", fmt: "int" },
@@ -156,7 +157,7 @@ export function ImpliedMovesTab() {
   return (
     <Async state={st}>{(m) => (
       <div className="stack">
-        <Card title="Implied move by expiry" subtitle={<>Spot {fmt(m.spot, "money")} · <AsOf ts={m.asof} /></>}>
+        <Card title="Implied move by expiry" subtitle={<>Spot <MoneyText value={m.spot} /> · <AsOf ts={m.asof} /></>}>
           <BarChart categories={m.rows.map((r) => shortDate(r.expiry))} yFmt="pct" height={240}
             series={[{ name: "Straddle %", data: m.rows.map((r) => r.straddle_pct), color: p.series[0] }, { name: "±1σ IV move %", data: m.rows.map((r) => r.iv_move_pct), color: p.series[2] }]} />
         </Card>

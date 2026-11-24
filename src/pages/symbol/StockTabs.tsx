@@ -18,6 +18,8 @@ import { isFlowing, liveStore, useLive, useLiveInterval, useLiveQuote, useLiveSt
 import { nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "../../live/candles";
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
+import { useMoney } from "../../components/Money";
+import { bridgeServes } from "../../lib/markets";
 
 /** The candles with today's bar following the live price (at most once a second; only while quotes flow). */
 function LiveDailyCandles({ sym, bars, smas, markers }: { sym: string; bars: Bar[]; smas: SmaLength[]; markers: ChartMarker[] }) {
@@ -62,7 +64,8 @@ function useBridgeFill(sym: string, data: IntradayBars | null, reload: () => voi
   const key = data ? `${sym}|${data.interval}|${data.range}` : null;
   useEffect(() => { setState(null); }, [key]);
   useEffect(() => {
-    if (!desktop || !data || !key || !data.missing.length || asked.current.has(key)) return undefined;
+    // The IBKR bridge serves US listings only: Canadian bars come from Questrade alone.
+    if (!desktop || !data || !key || !data.missing.length || asked.current.has(key) || !bridgeServes(sym)) return undefined;
     asked.current.add(key);
     let alive = true;
     setState("fetching");
@@ -283,11 +286,13 @@ const CAPTURE_COLUMNS: ColumnDef[] = [
 
 export function DividendsTab() {
   const sym = useSym();
+  const money = useMoney();
   const st = useApi(() => api.dividends(sym), [sym]);
   return (
     <Async state={st}>{(d) => (
       <div className="stack">
-        {!d.history.length && <InfoBox>No dividends stored for {sym} yet. They come from Nasdaq, from IBKR's dividend-adjusted price history (collected by the IBKR bridge in the desktop app) and from Questrade's daily symbol info; a symbol that pays none stays empty.</InfoBox>}
+        {d.unavailable && <InfoBox title="Not available:">{d.unavailable}</InfoBox>}
+        {!d.history.length && !d.unavailable && <InfoBox>No dividends stored for {sym} yet. They come from Nasdaq, from IBKR's dividend-adjusted price history (collected by the IBKR bridge in the desktop app) and from Questrade's daily symbol info; a symbol that pays none stays empty.</InfoBox>}
         {d.history.some((h) => h.discrepancy) && <InfoBox>Some ex-dates have amounts that differ between sources by more than $0.01 (marked below); the amount shown is Nasdaq's, else IBKR's, else Questrade's.</InfoBox>}
         <Card title="Dividend profile">
           <StatGrid items={[
@@ -297,7 +302,7 @@ export function DividendsTab() {
             { label: "Growth 1y", value: d.growth_1y, fmt: "pct_signed" },
             { label: "CAGR 3y", value: d.growth_3y, fmt: "pct_signed" },
             { label: "CAGR 5y", value: d.growth_5y, fmt: "pct_signed" },
-            { label: "Next ex-date", value: d.next?.ex_date, fmt: "date", sub: d.next ? `${fmt(d.next.amount, "money")} · in ${d.next.days}d` : undefined, hint: "No announced ex-date." },
+            { label: "Next ex-date", value: d.next?.ex_date, fmt: "date", sub: d.next ? `${fmt(d.next.amount, "money", money)} · in ${d.next.days}d` : undefined, hint: "No announced ex-date." },
           ]} />
         </Card>
         <Card title="Dividend capture" subtitle="Buy at close before ex-date, sell at close on ex-date">

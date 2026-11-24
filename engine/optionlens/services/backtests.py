@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..analytics import backtest as stock_bt
+from ..analytics import markets
 from ..analytics import optbacktest, strategies
 from ..repo import earnings as earn_repo
 from . import context as ctx
@@ -20,6 +21,8 @@ def stock(req: dict) -> dict:
     syms = list(dict.fromkeys(req["symbols"]))
     if not 1 <= len(syms) <= MAX_SYMBOLS:
         raise BadRequest(f"1..{MAX_SYMBOLS} symbols required")
+    if len({markets.market_of(s) for s in syms}) > 1:   # one currency per result (P/L is never mixed)
+        raise BadRequest("symbols must be of one market: US listings or Canadian ones (RY.TO), not both")
     if req["entry"].get("type") not in ENTRY_TYPES:
         raise BadRequest(f"entry.type must be one of {sorted(ENTRY_TYPES)}")
     if req["side"] not in ("long", "short"):

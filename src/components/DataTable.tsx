@@ -9,6 +9,7 @@ import { applyTable, emptyColumnKeys, filterActive, humanize } from "../lib/tabl
 import { Flash, isFlowing, useLive, useLiveCell, useLiveStatus } from "../live";
 import { liveKeyOf, rowKeys } from "../live/merge";
 import { useViewTable, type DataRequest } from "../state/view";
+import { MoneyScope, mixedCurrencies, rowMoney, useMoney } from "./Money";
 import { HaltedBadge, isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
 export type { SortState, TableState } from "../lib/table";
@@ -85,6 +86,7 @@ function LiveCell({ col, row, flowing }: { col: ColumnDef; row: ReportRow; flowi
 }
 
 export function Cell({ col, row }: { col: ColumnDef; row: ReportRow }) {
+  const money = rowMoney(useMoney(), row);
   const v = row[col.key];
   if (col.key === "source" && isDataSource(v)) return <SourceBadge source={v} delayed={row.delayed === true} />;
   if (isMissing(v)) return <NullValue hint={col.description ? `${col.label}: not available. ${col.description}` : undefined} />;
@@ -103,7 +105,7 @@ export function Cell({ col, row }: { col: ColumnDef; row: ReportRow }) {
     case "pct_signed":
       return <span className={signClass(v)}>{fmt(v, col.fmt)}</span>;
     default:
-      return <>{fmt(v, col.fmt)}</>;
+      return <>{fmt(v, col.fmt, money)}</>;
   }
 }
 
@@ -244,6 +246,8 @@ export function DataTable(props: DataTableProps) {
   const liveRows = useMemo(() => (props.live ? rowKeys(pageRows) : null), [props.live, pageRows]);
   useLive(liveRows);
   const flowing = isFlowing(useLiveStatus());
+  const money = useMoney();
+  const mixed = useMemo(() => mixedCurrencies(rows), [rows]);
 
   const rowLink = props.rowLink === false ? null : props.rowLink ?? ((r: ReportRow) => (typeof r.symbol === "string" && r.symbol ? `/s/${encodeURIComponent(r.symbol)}` : null));
 
@@ -268,6 +272,7 @@ export function DataTable(props: DataTableProps) {
   const clickable = Boolean(props.onRowClick || rowLink);
 
   return (
+    <MoneyScope currency={money.currency} explicit={money.explicit || mixed}>
     <div className="datatable">
       {!minimal && (
         <div className="dt-toolbar">
@@ -359,6 +364,7 @@ export function DataTable(props: DataTableProps) {
         </div>
       )}
     </div>
+    </MoneyScope>
   );
 }
 

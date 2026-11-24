@@ -7,6 +7,7 @@ import { usePalette } from "./charts/EChart";
 import { DataTable } from "./DataTable";
 import { StatGrid } from "./StatGrid";
 import { Card, EmptyNotice, NotesBox } from "./ui";
+import { useMoney } from "./Money";
 
 export const TRADE_COLUMNS: ColumnDef[] = [
   { key: "symbol", label: "Symbol", fmt: "symbol" },
@@ -27,6 +28,7 @@ export function tradesAsRows(trades: BacktestTrade[]): ReportRow[] {
 
 export function BacktestResultView({ result, csvName = "backtest-trades" }: { result: BacktestResult; csvName?: string }) {
   const p = usePalette();
+  const money = useMoney();
   const s = result.summary;
   const equity = useMemo<LineSeries[]>(() => {
     const out: LineSeries[] = [{ name: "Strategy", data: result.equity.map((e) => [e.date, e.value]), color: p.series[0] }];
@@ -52,7 +54,7 @@ export function BacktestResultView({ result, csvName = "backtest-trades" }: { re
           { label: "Sharpe", value: s.sharpe, fmt: "num2" },
           { label: "Max drawdown", value: s.max_drawdown, fmt: "pct_signed" },
           { label: "Avg hold (days)", value: s.avg_hold_days, fmt: "num" },
-          { label: "Total P/L", value: s.total_pnl, fmt: "money", signed: true, sub: s.starting_capital != null ? `on ${fmt(s.starting_capital, "money")} starting capital` : undefined },
+          { label: "Total P/L", value: s.total_pnl, fmt: "money", signed: true, sub: s.starting_capital != null ? `on ${fmt(s.starting_capital, "money", money)} starting capital` : undefined },
         ]} />
       </Card>
       <div className="grid-2">

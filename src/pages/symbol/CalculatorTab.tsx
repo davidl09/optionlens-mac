@@ -15,6 +15,8 @@ import { nearest } from "../../lib/indicators";
 import { isFlowing, liveStore, useLive, useLiveStatus, useThrottled } from "../../live";
 import { useLegs } from "../../state/legs";
 import { useSym } from "./shared";
+import { moneyStyleOf } from "../../lib/markets";
+import { MoneyText } from "../../components/Money";
 
 /** Default base expiry for templates: first one ≥ 21 DTE, else the last. */
 function defaultBase(expiries: ExpiryInfo[]): string | null {
@@ -180,15 +182,15 @@ const PL_COLUMNS: ColumnDef[] = [
   { key: "pnl_expiry", label: "P/L at expiry", fmt: "money" },
   { key: "pnl_eval", label: "P/L at date", fmt: "money" },
 ];
-const plCell = (c: ColumnDef, r: ReportRow) => (c.key.startsWith("pnl") ? <span className={signClass(r[c.key])}>{fmt(r[c.key], "money")}</span> : undefined);
+const plCell = (c: ColumnDef, r: ReportRow) => (c.key.startsWith("pnl") ? <span className={signClass(r[c.key])}><MoneyText value={r[c.key]} /></span> : undefined);
 
 function Metrics({ r }: { r: CalcResult }) {
   const unlimited = <span className="muted">Unlimited</span>;
   return (
     <StatGrid cols={4} items={[
       { label: r.cost >= 0 ? "Net debit" : "Net credit", value: Math.abs(r.cost), fmt: "money" },
-      { label: "Max profit", node: r.max_profit === null ? unlimited : <span className="pos">{fmt(r.max_profit, "money")}</span> },
-      { label: "Max loss", node: r.max_loss === null ? unlimited : <span className="neg">{fmt(r.max_loss, "money")}</span> },
+      { label: "Max profit", node: r.max_profit === null ? unlimited : <span className="pos"><MoneyText value={r.max_profit} /></span> },
+      { label: "Max loss", node: r.max_loss === null ? unlimited : <span className="neg"><MoneyText value={r.max_loss} /></span> },
       { label: "Breakevens", node: r.breakevens.length ? <span>{r.breakevens.map((b) => fmt(b, "num2")).join(" · ")}</span> : <span className="muted">none</span> },
       { label: "Prob. of profit", value: r.pop, fmt: "pct" },
       { label: "EV (IV)", value: r.ev_iv, fmt: "money", signed: true },
@@ -291,7 +293,7 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
     const t = templates.data?.find((x) => x.id === id);
     if (!t) return;
     const built = instantiateTemplate(t, spot, chain.expiries, base, chain.strikes);
-    setTemplateMsg(built ? null : `${t.label} can't be built here: not enough listed strikes or expiries around ${fmt(spot, "money")}.`);
+    setTemplateMsg(built ? null : `${t.label} can't be built here: not enough listed strikes or expiries around ${fmt(spot, "money", moneyStyleOf(sym))}.`);
     if (built) setLegs(built);
   };
   const addLeg = (kind: "C" | "P" | "stock") => {
@@ -310,7 +312,7 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   return (
     <div className="stack">
       <Card title="Legs" subtitle={<>
-        Spot {fmt(spot, "money")} <span className={`leg-origin ${market.liveSpot !== null ? "live" : "stored"}`}>{market.liveSpot !== null ? "live" : "stored"}</span>
+        Spot <MoneyText value={spot} /> <span className={`leg-origin ${market.liveSpot !== null ? "live" : "stored"}`}>{market.liveSpot !== null ? "live" : "stored"}</span>
         {" · "}{market.liveTs ? <AsOf ts={market.liveTs} label="live as of" /> : <AsOf ts={chain.asof} />}
       </>} actions={
         <div className="toolbar">

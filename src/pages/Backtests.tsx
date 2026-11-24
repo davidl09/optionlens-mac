@@ -10,6 +10,8 @@ import { MONTHS } from "../lib/format";
 import { parseSymbols } from "../lib/params";
 import { templateUsesWidth } from "../lib/strategy";
 import { useViewData, type DataRequest } from "../state/view";
+import { MoneyScope } from "../components/Money";
+import { currencyOf } from "../lib/markets";
 
 function Field({ label, children, help }: { label: string; children: ReactNode; help?: string }) {
   return <div className="param" title={help}><label>{label}</label>{children}</div>;
@@ -44,11 +46,12 @@ function useRunner<Req>(fn: (r: Req) => Promise<BacktestResult>) {
   return { ...state, run };
 }
 
-function ResultArea({ r, name }: { r: { loading: boolean; error: Error | null; data: BacktestResult | null }; name: string }) {
+/** `symbol`: one of the backtest's symbols (one market per backtest): its currency labels the money values. */
+function ResultArea({ r, name, symbol }: { r: { loading: boolean; error: Error | null; data: BacktestResult | null }; name: string; symbol: string }) {
   if (r.loading) return <Spinner label="Running backtest…" />;
   if (r.error) return <ErrorBox error={r.error} />;
   if (!r.data) return <InfoBox>Set the rules and press <b>Run backtest</b>.</InfoBox>;
-  return <BacktestResultView result={r.data} csvName={name} />;
+  return <MoneyScope currency={currencyOf(symbol)}><BacktestResultView result={r.data} csvName={name} /></MoneyScope>;
 }
 
 type EntryType = StockBacktestRequest["entry"]["type"];
@@ -127,7 +130,7 @@ export function StockBacktest() {
           <div className="param param-submit"><button className="btn btn-primary" type="submit" disabled={r.loading}>Run backtest</button></div>
         </form>
       </Card>
-      <ResultArea r={r} name="stock-backtest" />
+      <ResultArea r={r} name="stock-backtest" symbol={parseSymbols(symbols)[0] ?? ""} />
     </div>
   );
 }
@@ -206,7 +209,7 @@ export function OptionsBacktest({ preset }: { preset?: OptionsPreset }) {
           <div className="param param-submit"><button className="btn btn-primary" type="submit" disabled={r.loading || !req.strategy}>Run backtest</button></div>
         </form>
       </Card>
-      <ResultArea r={r} name={`${req.symbol}-${req.strategy}-backtest`} />
+      <ResultArea r={r} name={`${req.symbol}-${req.strategy}-backtest`} symbol={req.symbol} />
     </div>
   );
 }

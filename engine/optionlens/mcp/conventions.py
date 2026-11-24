@@ -7,8 +7,10 @@ CONVENTIONS = """\
 ## Units
 - Fractions, never percent: change_pct, returns, yields, IV, HV, IV rank / percentile, probabilities (pop),
   win rates, skews. 0.25 means 25 %. Alert and filter values use the same units.
-- Prices are USD per share: stock prices and option bid / ask / mid / last / straddle / strike. One option contract
-  is 100 shares: multiply option prices by 100 for dollars per contract.
+- Prices are per share in the symbol's currency: USD for US listings (AAPL, RY), CAD for Canadian ones (RY.TO on the
+  TSX, XYZ.VN on the TSX Venture; Montréal Exchange options). Symbol answers carry `market` (US | CA), `exchange` and
+  `currency`; report rows of a symbol carry `currency`. Values are never converted: do not add USD and CAD amounts.
+  One option contract is 100 shares: multiply option prices by 100 for dollars per contract.
 - Position values are dollars for the whole position: calc_strategy cost (+ debit / − credit), P&L curves, max profit /
   loss (null = unlimited), trade-idea cost / max profit / max loss, backtest P&L; option quantities are contracts
   (×100 shares), stock quantities shares.
@@ -16,7 +18,11 @@ CONVENTIONS = """\
   point (0.01 of IV). Position greeks (calc_strategy) are totals for the position in $.
 - Volume and open interest are contracts (options) or shares (stocks); premium is dollars.
 - Dates YYYY-MM-DD (New York trading days); times ISO-8601 with offset. dte = calendar days to expiry.
-- Report columns carry `fmt`: pct / pct_signed / vol = fraction, money = $ per share, bigmoney = $, int / num /
+- Universe reports take `market`: US (default), CA or all (aggregates: US or CA only); earnings, dividend and Nasdaq
+  calendar reports cover US listings only. Earnings dates and dividend histories of Canadian listings are not
+  available (`unavailable` says why); their risk-free rate is the Bank of Canada 3-month T-bill.
+- Report columns carry `fmt`: pct / pct_signed / vol = fraction, money = per share in the row's currency, bigmoney =
+  amount in the row's currency, int / num /
   num2 = plain numbers, ratio = x times, date / datetime, osi = option code, badge / text / bool.
 
 ## Missing values
@@ -41,7 +47,8 @@ CONVENTIONS = """\
   value is not from the last session.
 
 ## Live vs stored
-- While US markets are open, values on the user's screen update live (live_status, live_quotes). Other tools read the
+- While a symbol's market is open (US: 04:00-20:00 ET for stocks, 09:30-close for options; Canada: 09:30-close),
+  values on the user's screen update live (live_status, live_quotes). Other tools read the
   stored data (latest chain / quote, end-of-day archives). History-based metrics (IV rank, HV, returns, backtests)
   are never live.
 

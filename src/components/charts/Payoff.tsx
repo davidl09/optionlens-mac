@@ -6,6 +6,7 @@ import { extent, type Range, stableRange } from "../../lib/calcPricing";
 import { fmt } from "../../lib/format";
 import { EChart, usePalette } from "./EChart";
 import { axisStyle, GRID, legendStyle, tooltipStyle } from "./common";
+import { useMoney } from "../Money";
 
 /** Vertical gradient: profit colour above zero, loss colour below (relative to the line's own y-extent). */
 function signGradient(ys: number[], up: string, down: string) {
@@ -20,6 +21,7 @@ function signGradient(ys: number[], up: string, down: string) {
  * separate eval-date curve (it is today's). */
 export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { result: Pick<CalcResult, "prices" | "pnl_expiry" | "pnl_eval" | "pnl_today" | "spot" | "breakevens">; evalLabel: string | null; scaleKey?: string; height?: number }) {
   const p = usePalette();
+  const money = useMoney();
   const yRange = useRef<{ key: string; range: Range } | null>(null);
   const option = useMemo(() => {
     const data = extent(result.pnl_expiry, ...(evalLabel ? [result.pnl_eval] : []), result.pnl_today) ?? [0, 0];
@@ -39,8 +41,8 @@ export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { res
         trigger: "axis", ...tooltipStyle(p), axisPointer: { type: "line", lineStyle: { color: p.muted, type: "dashed" } },
         formatter: (items: { value: [number, number]; seriesName: string; marker: string }[]) => {
           const x = items[0]?.value[0];
-          const rows = items.map((it) => `${it.marker}${it.seriesName}<b style="float:right;margin-left:16px">${fmt(it.value[1], "money")}</b>`);
-          return `<div style="min-width:170px"><div style="opacity:.7">Price ${fmt(x, "money")} (${fmt(x / result.spot - 1, "pct_signed")})</div>${rows.join("<br/>")}</div>`;
+          const rows = items.map((it) => `${it.marker}${it.seriesName}<b style="float:right;margin-left:16px">${fmt(it.value[1], "money", money)}</b>`);
+          return `<div style="min-width:170px"><div style="opacity:.7">Price ${fmt(x, "money", money)} (${fmt(x / result.spot - 1, "pct_signed")})</div>${rows.join("<br/>")}</div>`;
         },
       },
       // fixed bounds (stable on live ticks); their own labels would be odd numbers, so only the inner ticks are labelled
@@ -64,6 +66,6 @@ export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { res
         { name: "Today", type: "line", data: pts(result.pnl_today), showSymbol: false, lineStyle: { width: 1.5, type: "dotted", color: p.series[3] }, itemStyle: { color: p.series[3] } },
       ],
     };
-  }, [p, result, evalLabel, scaleKey]);
+  }, [p, money, result, evalLabel, scaleKey]);
   return <EChart option={option} height={height} ariaLabel="Strategy profit and loss chart" />;
 }

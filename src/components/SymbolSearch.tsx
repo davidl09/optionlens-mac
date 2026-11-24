@@ -59,7 +59,7 @@ export function SymbolSearch({ onNavigate }: { onNavigate?: () => void }) {
           {items.map((it, i) => (
             <li key={it.symbol} id={`symbol-opt-${it.symbol}`} role="option" aria-selected={i === active} className={i === active ? "active" : undefined}
               onMouseEnter={() => setActive(i)} onMouseDown={(e) => { e.preventDefault(); go(it.symbol); }}>
-              <b>{it.symbol}</b><span className="search-name">{it.name}</span><span className="search-kind">{it.kind}</span>
+              <b>{it.symbol}</b><span className="search-name">{it.name}</span><span className="search-kind">{it.kind} · {it.exchange ?? "US"} · {it.currency}</span>
             </li>
           ))}
         </ul>
