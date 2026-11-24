@@ -5,12 +5,14 @@ Two modes (the user's setting, live/mode.py; switchable at runtime with set_mode
   v1/markets/quotes/options {"optionIds"} (contracts), at most MAX_IDS ids per call, every `cadence()` seconds. All
   calls go through the source's RateGate (≤ 70% of the documented market-data limits, shared with the sweeps); the
   cadence keeps live polling within the hourly budget left after SWEEP_RESERVE_PER_HOUR for the sweeps.
-- "stream": Level 1 WebSocket streams (live/stream.py), one for the underlyings and one for the contracts (no per-stream
-  limit is documented or observed, so the sets are not split). A stream is renewed (new port request, fresh token)
+- "stream": ONE Level 1 WebSocket stream (live/stream.py) for the union of underlyings and contracts: Questrade allows
+  one streaming connection per session (a second closes the first) and it carries both kinds' messages (no per-stream
+  limit is documented or observed, so the set is not split). The stream is renewed (new stream requests, fresh token)
   before the access token expires or when it was refreshed, reopened after a drop with backoff, and reopened for a
-  changed set (only the stream whose ids changed). Streaming falls back to polling (`fallback` says why) when a
-  handshake fails, when a stream sends nothing within STREAM_SILENT_S in the regular session, or after DROP_LIMIT drops
-  within DROP_WINDOW_S; streaming is tried again after STREAM_RETRY_S. Questrade documents that L1 streaming through
+  changed set (the old connection fully closed first, then the stream requests of both kinds, then one connect).
+  Streaming falls back to polling (`fallback` says why) when a handshake fails, when the stream sends nothing within
+  STREAM_SILENT_S in the regular session, or after DROP_LIMIT drops within DROP_WINDOW_S; streaming is tried again
+  after STREAM_RETRY_S. Questrade documents that L1 streaming through
   the API freezes the market data of any other IQ platform the user has open at the same time: hence opt-in.
 
 Ids: underlying symbolIds from the source's cache (symbols/search once per symbol), option symbolIds from the chain
@@ -26,7 +28,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Iterable, Mapping, TypeVar
+from typing import Awaitable, Callable, Iterable, Mapping, Sequence, TypeVar
 
 from ..sources.chain_source import NotListed
 from ..sources.questrade.auth import TokenError
@@ -47,7 +49,7 @@ STREAM_SILENT_S = 15.0              # regular session: a stream silent this long
 DROP_LIMIT = 3                      # this many drops ...
 DROP_WINDOW_S = 5 * 60.0            # ... within this window -> poll
 STREAM_RETRY_S = 5 * 60.0           # after a fallback, try streaming again this much later
-STREAM_DEBOUNCE_S = 1.0             # wait for the set to settle before reopening streams
+STREAM_DEBOUNCE_S = 1.0             # wait for the set to settle before reopening the stream
 BACKOFF_MAX_S = 30.0
 RATE_WINDOW_S = 10.0                # messages/s over this window
 
@@ -80,9 +82,8 @@ def _regular_now() -> bool:
 
 @dataclass
 class Conn:
-    """One stream (diagnostics)."""
-    kind: Kind
-    ids: int
+    """The stream connection (diagnostics): `ids` per kind it carries."""
+    ids: dict[Kind, int]
     open: bool = False
     port: int | None = None
     opened_at: float | None = None
@@ -118,7 +119,7 @@ class QuestradeLive:
         self._fallback: str | None = None       # why streaming gave way to polling (until _retry_at)
         self._retry_at = 0.0
         self._drops: deque[float] = deque()
-        self._conns: dict[Kind, Conn] = {}
+        self._conn: Conn | None = None
         self._msg_at: deque[float] = deque()
         self._raw: dict[int, dict] = {}
 
@@ -132,7 +133,7 @@ class QuestradeLive:
             self._changed.set()
 
     def set_mode(self, mode: Mode) -> None:
-        """Switch between streaming and polling now (the running loop tears down / opens the streams)."""
+        """Switch between streaming and polling now (the running loop closes / opens the stream)."""
         if mode not in MODES:
             raise ValueError(f"live mode must be one of {MODES}, not {mode!r}")
         if mode != self.mode:
@@ -151,25 +152,27 @@ class QuestradeLive:
 
     def health(self) -> dict:
         streaming = self.streaming()
-        if streaming and self._conns and all(c.open for c in self._conns.values()):
+        if streaming and self._conn and self._conn.open:
             self.ok_at = self.clock()       # an open, authenticated stream is live even while nothing trades
         return {"ok_at": self.ok_at, "error": self.error, "mode": "stream" if streaming else "poll",
                 "interval_s": None if streaming else self.interval_s, "fallback": self.fallback()}
 
     def diagnostics(self) -> dict:
-        """The streams for Settings and the first live verification: per stream ids, open, port, messages and the
-        last message time; messages/s over RATE_WINDOW_S; drops within DROP_WINDOW_S; the fallback and its retry."""
+        """The stream for Settings and live verification: `streams` holds the one connection (none when not
+        streaming) with its ids per kind, open, port, messages and the last message time; messages/s over
+        RATE_WINDOW_S; drops within DROP_WINDOW_S; the fallback and its retry."""
         now = self.clock()
         recent = sum(1 for t in self._msg_at if t >= now - RATE_WINDOW_S)
-        last = max((c.last_message_at for c in self._conns.values() if c.last_message_at), default=None)
+        conns = [self._conn] if self._conn else []
+        last = max((c.last_message_at for c in conns if c.last_message_at), default=None)
         fb = self.fallback()
         return {"setting": self.mode, "streaming": self.streaming(), "fallback": fb,
                 "fallback_detail": self.error if fb else None, "retry_at": _iso(self._retry_at) if fb else None,
                 "messages_per_s": round(recent / RATE_WINDOW_S, 1), "last_message_at": _iso(last),
                 "drops_recent": sum(1 for t in self._drops if t >= now - DROP_WINDOW_S),
-                "streams": [{"kind": c.kind, "ids": c.ids, "open": c.open, "port": c.port,
+                "streams": [{"ids": dict(c.ids), "open": c.open, "port": c.port,
                              "opened_at": _iso(c.opened_at), "last_message_at": _iso(c.last_message_at),
-                             "messages": c.messages, "connects": c.connects} for c in self._conns.values()]}
+                             "messages": c.messages, "connects": c.connects} for c in conns]}
 
     async def run(self) -> None:
         while True:
@@ -332,12 +335,12 @@ class QuestradeLive:
         while self._msg_at and self._msg_at[0] < now - RATE_WINDOW_S:
             self._msg_at.popleft()
 
-    async def _stream_forever(self, kind: Kind, ids: list[int], on_quotes: Callable[[list[dict]], None]) -> None:
-        """Keep one stream of `ids` open: renewed (new port request, fresh token) when it returns, reopened after a
-        drop with backoff. Raises _FallBack when streaming should give way to polling (a failed handshake, a silent
-        stream in the regular session, DROP_LIMIT drops within DROP_WINDOW_S); QuestradeError for auth failures."""
-        conn = self._conns[kind]
-
+    async def _stream_forever(self, conn: Conn, subs: Mapping[Kind, Sequence[int]],
+                              on_quotes: Callable[[Kind, list[dict]], None]) -> None:
+        """Keep the one stream of `subs` open: renewed (new stream requests, fresh token) when it returns, reopened
+        after a drop with backoff. Raises _FallBack when streaming should give way to polling (a failed handshake, a
+        silent stream in the regular session, DROP_LIMIT drops within DROP_WINDOW_S); QuestradeError for auth
+        failures."""
         def opened(port: int) -> None:
             conn.open, conn.port, conn.opened_at = True, port, self.clock()
             conn.connects += 1
@@ -345,13 +348,13 @@ class QuestradeLive:
         while True:
             silent_s = STREAM_SILENT_S if self._regular() else None
             try:
-                await self._streamer().run(kind, ids, on_quotes, opened, lambda: self._message(conn), silent_s)
+                await self._streamer().run(subs, on_quotes, opened, lambda: self._message(conn), silent_s)
             except QuestradeError as e:
                 if e.kind == "auth":
                     raise
-                raise _FallBack("handshake failed", f"{kind} stream request: {e.reason}") from e
+                raise _FallBack("handshake failed", f"stream request: {e.reason}") from e
             except TokenError as e:
-                raise _FallBack("handshake failed", f"{kind} stream: {e}") from e
+                raise _FallBack("handshake failed", f"stream: {e}") from e
             except HandshakeError as e:
                 raise _FallBack("handshake failed", str(e)) from e
             except StreamSilent as e:
@@ -365,77 +368,80 @@ class QuestradeLive:
             finally:
                 conn.open = False
 
-    async def _stream_plan(self, w: Wanted) -> dict[Kind, tuple[tuple[int, ...], Callable[[list[dict]], None]]]:
-        """{kind: (ids, quote handler)} of the streams `w` needs (one for the underlyings, one for the contracts)."""
+    async def _stream_plan(self, w: Wanted) -> tuple[dict[Kind, tuple[int, ...]], Callable[[Kind, list[dict]], None]]:
+        """({kind: ids} of the kinds `w` needs, the dispatcher of a message's quotes per kind)."""
         sids = await self._symbol_ids(w.symbols)
         prev = await self._prev_closes(sids)
         opt = await self._option_ids(w.contracts)
         sym_of = {sid: s for s, sid in sids.items()}
-        plan: dict[Kind, tuple[tuple[int, ...], Callable[[list[dict]], None]]] = {}
+        subs: dict[Kind, tuple[int, ...]] = {}
         if sym_of:
-            plan["equity"] = (tuple(sorted(sym_of)), lambda qs: self._equity(qs, sym_of, prev))
+            subs["equity"] = tuple(sorted(sym_of))
         if opt:
-            plan["option"] = (tuple(sorted(opt)), lambda qs: self._options(qs, opt))
-        return plan
+            subs["option"] = tuple(sorted(opt))
+
+        def on_quotes(kind: Kind, quotes: list[dict]) -> None:
+            if kind == "equity":
+                self._equity(quotes, sym_of, prev)
+            else:
+                self._options(quotes, opt)
+        return subs, on_quotes
 
     async def _stream_session(self) -> None:
-        """Streams of the wanted set while streaming is on. A changed set (after STREAM_DEBOUNCE_S) reopens only the
-        stream whose ids changed (a stream carries the ids of its port request). Returns when the mode changes or
-        streaming falls back to polling."""
+        """The one stream of the wanted set while streaming is on. A changed set (after STREAM_DEBOUNCE_S) reopens it:
+        the old connection is fully closed before the new stream requests and connect (Questrade allows one
+        connection per session; a stream carries the ids registered by its stream requests). Returns when the mode
+        changes or streaming falls back to polling."""
         self._fallback = None
-        running: dict[Kind, tuple[tuple[int, ...], asyncio.Task]] = {}
+        running: tuple[dict[Kind, tuple[int, ...]], asyncio.Task] | None = None
 
-        async def end(kind: Kind) -> None:
-            task = running.pop(kind)[1]
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            self._conns.pop(kind, None)
+        async def end() -> None:
+            nonlocal running
+            if running is not None:
+                task = running[1]
+                running = None
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)     # the socket is closed when this returns
+            self._conn = None
         try:
             while self.streaming():
                 w = self._wanted
                 self._changed.clear()
                 if w.empty:
-                    for kind in list(running):
-                        await end(kind)
+                    await end()
                     await self._wait_change(5.0)
                     continue
                 try:
-                    plan = await self._stream_plan(w)
+                    subs, on_quotes = await self._stream_plan(w)
                 except (QuestradeError, TokenError) as e:
                     if isinstance(e, QuestradeError) and e.kind == "auth":
                         raise
                     self._fail(getattr(e, "reason", str(e)))
                     await self.sleep(5.0)
                     continue
-                for kind in list(running):
-                    if kind not in plan or plan[kind][0] != running[kind][0]:
-                        await end(kind)
-                for kind, (ids, handler) in plan.items():
-                    if kind not in running:
-                        self._conns[kind] = Conn(kind, len(ids))
-                        running[kind] = (ids, asyncio.create_task(self._stream_forever(kind, list(ids), handler),
-                                                                  name=f"live:stream:{kind}"))
-                if not running:
+                if running is not None and running[0] != subs:
+                    await end()
+                if not subs:
                     await self._wait_change(30.0)
                     continue
+                if running is None:
+                    self._conn = Conn({k: len(ids) for k, ids in subs.items()})
+                    running = (subs, asyncio.create_task(self._stream_forever(self._conn, subs, on_quotes),
+                                                         name="live:stream"))
                 changed = asyncio.create_task(self._changed.wait())
-                done, _ = await asyncio.wait([*(t for _, t in running.values()), changed],
-                                             return_when=asyncio.FIRST_COMPLETED)
-                if changed not in done:
-                    changed.cancel()
-                    await asyncio.gather(changed, return_exceptions=True)
-                else:
+                done, _ = await asyncio.wait([running[1], changed], return_when=asyncio.FIRST_COMPLETED)
+                if changed in done:
                     await self.sleep(STREAM_DEBOUNCE_S)
                     continue
-                for kind in [k for k, (_, t) in running.items() if t.done()]:
-                    e = running.pop(kind)[1].exception()
-                    self._conns.pop(kind, None)
-                    if isinstance(e, _FallBack):
-                        self._fall_back(e)
-                        return
-                    if e is not None:
-                        raise e
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
+                e = running[1].exception()
+                running = None
+                self._conn = None
+                if isinstance(e, _FallBack):
+                    self._fall_back(e)
+                    return
+                if e is not None:
+                    raise e
         finally:
-            for kind in list(running):
-                await end(kind)
-            self._conns.clear()
+            await end()

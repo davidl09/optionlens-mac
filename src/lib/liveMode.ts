@@ -23,7 +23,7 @@ export function liveModeStatusText(mode: LiveMode, r: LiveStatusReport | null): 
   if (mode === "stream" && q.streaming) {
     const open = q.streams.filter((s) => s.open);
     if (!q.streams.length || open.length < q.streams.length) return "Streaming: connecting…";
-    const n = (kind: "equity" | "option") => q.streams.filter((s) => s.kind === kind).reduce((a, s) => a + s.ids, 0);
+    const n = (kind: "equity" | "option") => q.streams.reduce((a, s) => a + (s.ids[kind] ?? 0), 0);
     const last = time(q.last_message_at);
     return `Streaming connected: ${n("equity")} symbols, ${n("option")} options · ${q.messages_per_s.toFixed(1)} msg/s · ${last ? `last message ${last}` : "no message yet"}.`;
   }

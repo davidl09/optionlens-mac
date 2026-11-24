@@ -7,8 +7,7 @@ const Q: QuestradeLiveDiagnostics = {
   setting: "stream", streaming: true, fallback: null, fallback_detail: null, retry_at: null, messages_per_s: 12.34,
   last_message_at: "2026-11-24T15:00:00Z", drops_recent: 0,
   streams: [
-    { kind: "equity", ids: 3, open: true, port: 4444, opened_at: null, last_message_at: null, messages: 10, connects: 1 },
-    { kind: "option", ids: 42, open: true, port: 4445, opened_at: null, last_message_at: null, messages: 90, connects: 1 },
+    { ids: { equity: 3, option: 42 }, open: true, port: 18101, opened_at: null, last_message_at: null, messages: 100, connects: 1 },
   ],
 };
 const R = (over: Partial<LiveStatusReport> = {}, q: Partial<QuestradeLiveDiagnostics> | null = {}): LiveStatusReport => ({

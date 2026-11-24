@@ -44,7 +44,8 @@ class FakeQuestrade:
         self.unquoted = {option_id("2026-11-20", 100, "P")}   # listed, no quote
         self.no_vol = {option_id("2026-11-20", 90, "C")}      # quoted, volatility 0
         self.scope_denied = False   # the personal app lacks the market-data permission: 403 code 1016 on every call
-        self.stream_port = 0        # what a `stream=true` quote request answers (live/stream.py)
+        self.stream_port = 0        # what a `stream=true` quote request answers (live/stream.py): one per session,
+        self.option_stream_port: int | None = None   # for equities and options alike, unless this is set
         self.price = 100.2          # XYZ's last trade
 
     def http(self) -> httpx.AsyncClient:
@@ -85,7 +86,8 @@ class FakeQuestrade:
         if path == "/v1/markets/quotes/options" and request.method == "POST":
             body = json.loads(request.content)
             if body.get("stream"):
-                return httpx.Response(200, json={"streamPort": self.stream_port}, headers=h)
+                port = self.stream_port if self.option_stream_port is None else self.option_stream_port
+                return httpx.Response(200, json={"streamPort": port}, headers=h)
             return httpx.Response(200, json={"optionQuotes": self._option_quotes(body)}, headers=h)
         return httpx.Response(404, json={"code": 1001, "message": "Invalid endpoint."})
 

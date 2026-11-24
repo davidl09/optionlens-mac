@@ -517,10 +517,18 @@ when it is connected (§7).
 - Snap quotes: without a real-time data package "call to get quote is considered snap quote and limit per market can be
   quickly reached … the response will return delayed data (check "delay")". The user's account answers `delay` 0
   (real-time), verified live during development.
+- **Verified live** (v0.1.12 on a real-time account, 2026-11-24, during market hours): Questrade allows **one streaming
+  connection per session**. The equity stream request (`GET markets/quotes?…&stream=true&mode=WebSocket`) and the option
+  stream request (`POST markets/quotes/options {"optionIds", "stream": true, "mode": "WebSocket"}`) both handshake and
+  answer the **same `streamPort`** (18101); **one connection carries both message kinds**, `{"quotes": [...]}`
+  (equities: `symbol`, `symbolId`, `tier`, `bidPrice`, `bidSize`, `askPrice`, `askSize`, `lastTradePriceTrHrs`, …) and
+  `{"optionQuotes": [...]}` (options: `underlying`, `underlyingId`, `symbol` e.g. `DELL27Nov26C285.00`, `symbolId`,
+  `bidPrice`, `bidSize`, …); **opening a second connection closes the first** (`1005`, no status). So the stream requests
+  only register ids on the session's port; v0.1.12's two connections kicked each other off (3 drops in 5 min → polling).
 - **Not documented** (so not relied on, or marked unverified in code): the maximum symbols per stream or per quote
-  call, the number of concurrent streams, keep-alive / ping behaviour, the socket URL path, and the format of stream
-  messages (the engine assumes the REST shape `{"quotes"|"optionQuotes": [...]}` with possibly partial fields, merged per
-  symbolId, as client libraries do). Quote calls carry at most 100 ids (our choice).
+  call, keep-alive / ping behaviour, the socket URL path (the engine connects to the first stream request's path:
+  equities' when any are wanted), and whether stream messages carry only changed fields (they are merged per symbolId,
+  as client libraries do). Quote calls carry at most 100 ids (our choice).
 
 **Architecture** (engine `optionlens/live/`, renderer `src/live/`): one subsystem behind a narrow contract.
 - `POST /api/live/subscribe {client_id, symbols[], option_contracts[] (OSI), chains[{symbol, expiry, strike_min,
@@ -557,19 +565,22 @@ when it is connected (§7).
   restart). `OPTIONLENS_QUESTRADE_LIVE` is only the default until the user chooses (default `poll`). Settings → Data
   sources → Questrade: switch "Stream live quotes (tick-by-tick)" (on = stream, off = poll), Questrade's freeze warning
   under it, and the live status line (from `GET /api/live/status`).
-- Streaming mode: one equity and one option stream for the union (no per-stream limit is documented or observed, so
-  sets are not split). A stream carries the ids of its port request, so a changed set (1 s debounce) reopens only the
-  stream whose ids changed (new port request). Renewed (new port request with a fresh token) 60 s before the access
+- Streaming mode: ONE stream connection for the union of underlyings and contracts (Questrade allows one per session,
+  see above; no per-stream limit is documented or observed, so the set is not split). Opening it: the stream request of
+  each wanted kind (registering its ids; all answered ports must be equal, else "handshake failed"), then one socket;
+  messages are dispatched per key (`quotes` → underlyings, `optionQuotes` → contracts; a message may hold both). A
+  changed set (1 s debounce) reopens it: the old socket is fully closed first, then both stream requests are re-issued
+  and one socket connects (never two at once). Renewed (new stream requests with a fresh token) 60 s before the access
   token expires and within 2 s after it was refreshed elsewhere (e.g. by a sweep); reopened after a drop with backoff
   (1, 2 s). **Falls back to polling** — status `mode: "poll"`, `fallback: <reason>`, header "LIVE · Questrade (polling
   fallback: <reason>)" — when a handshake fails (port request, socket or token not answered `{"success": true}`), when a
-  stream sends no message within 15 s of its handshake in the regular session, or after ≥ 3 drops in 5 min; streaming
-  is retried every 5 min. Diagnostics: the handshake result and the first 3 raw messages of every connection are logged
+  the stream sends no message within 15 s of its handshake in the regular session, or after ≥ 3 drops in 5 min; streaming
+  is retried every 5 min. Diagnostics: the handshake result and the first 3 raw messages of every connection are logged (label `live stream`)
   (INFO, ≤ 300 chars, fields named like token / session / account / key masked; the access token never logged);
   `GET /api/live/status` adds `questrade: {setting, streaming, fallback, fallback_detail, retry_at, messages_per_s (10 s
-  window), last_message_at, drops_recent, streams: [{kind, ids, open, port, opened_at, last_message_at, messages,
-  connects}]}`. Unverified against the live API: whether Questrade sends an initial snapshot after subscribing (if not,
-  a quiet option stream in the regular session falls back to polling after 15 s).
+  window), last_message_at, drops_recent, streams: [{ids: {equity, option}, open, port, opened_at, last_message_at,
+  messages, connects}]}` (`streams`: the one connection, empty while not streaming). Unverified against the live API: whether Questrade sends an initial snapshot after subscribing (if not,
+  a quiet stream in the regular session falls back to polling after 15 s).
 - Renderer: `useLive(subscription)` registers what a view shows (refcounted; the window's union is posted, debounced
   250 ms); `useLiveQuote(symbol)` / `useLiveOption(osi)` / `useLiveCell` read values; `merge.ts` patches Quotes,
   OptionRows, report cells and the last daily bar. A changed value gets a 600 ms static tint (no animation, no layout

@@ -1,8 +1,10 @@
 """Questrade Level 1 streaming (live/stream.py, live/questrade.py stream mode) against a local WebSocket server that
-plays Questrade's documented handshake: the port request, the access token as the first message, {"success": true},
-then quote messages. Covered: the handshake, drops and reconnects, renewal before the access token expires and after
-it was refreshed elsewhere, the fallbacks to polling (failed handshake, silent stream, drop storm) and the retry,
-reopening only the stream whose set changed, switching the mode at runtime both ways, and the scrubbed diagnostics."""
+plays Questrade's handshake as documented and as verified live: stream requests of both kinds answer the same port,
+one connection per session (a second closes the first), the access token as the first message, {"success": true},
+then {"quotes"} and {"optionQuotes"} messages on that one connection. Covered: the handshake, dispatch per kind, ports
+that differ, drops and reconnects, renewal before the access token expires and after it was refreshed elsewhere, the
+fallbacks to polling (failed handshake, silent stream, drop storm) and the retry, a changed set reopening the one
+connection (never two at once), switching the mode at runtime both ways, and the scrubbed diagnostics."""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +19,7 @@ from websockets.asyncio.server import serve
 from optionlens.analytics.calendar import NY
 from optionlens.live import questrade as qlive
 from optionlens.live import stream as stream_mod
-from optionlens.live.stream import HandshakeError, QuoteStream, StreamDropped, scrub
+from optionlens.live.stream import HandshakeError, QuoteStream, StreamDropped, dispatch, scrub
 from optionlens.live.subscriptions import Wanted
 from optionlens.sources.questrade import source as source_mod
 from optionlens.sources.questrade.source import QuestradeSource
@@ -26,10 +28,14 @@ from .questrade_fake import FakeQuestrade, option_id
 
 C1 = "XYZ261120C00100000"
 C2 = "XYZ261120P00110000"
+OID = option_id("2026-11-20", 100, "C")
+EQ_PATH = "/v1/markets/quotes?ids=1000&stream=true&mode=WebSocket"
 
 
 class FakeStreamServer:
-    """Accepts sockets on 127.0.0.1 and plays one connection per the current settings."""
+    """Accepts sockets on 127.0.0.1 (the one port of the session) and plays each connection per the current settings.
+    Like Questrade, a new connection closes any open one (`kicked` counts those; `max_active` the most open at once,
+    counted as a connection arrives)."""
 
     def __init__(self, fake: FakeQuestrade):
         self.fake = fake
@@ -37,12 +43,20 @@ class FakeStreamServer:
         self.paths: list[str] = []
         self.user_agents: list[str | None] = []
         self.closed = 0
+        self.kicked = 0
+        self.max_active = 0
+        self.active: set = set()
         self.refuse = False
         self.drop_after: int | None = None       # close the socket after this many quote messages
         self.messages: list[dict] = [{"quotes": [{"symbolId": 1000, "lastTradePrice": 100.5}]}]
         self.tick_s: float | None = None         # then keep sending the last message every tick_s
 
     async def handler(self, ws):
+        self.max_active = max(self.max_active, len(self.active) + 1)
+        for old in list(self.active):            # Questrade: one streaming connection per session
+            self.kicked += 1
+            await old.close()
+        self.active.add(ws)
         self.paths.append(ws.request.path)
         self.user_agents.append(ws.request.headers.get("User-Agent"))
         try:
@@ -63,6 +77,7 @@ class FakeStreamServer:
                 await ws.send(json.dumps(self.messages[-1]))
             await ws.wait_closed()
         finally:
+            self.active.discard(ws)
             self.closed += 1
 
     async def __aenter__(self):
@@ -135,34 +150,85 @@ async def test_handshake_token_first_then_quotes(qt, caplog):
     caplog.set_level(logging.INFO, "optionlens.live.stream")
     async with FakeStreamServer(fake) as srv:
         got, opened, counted = [], [], []
-        task = asyncio.create_task(stream_for(src).run("equity", [1000], got.extend, opened.append,
-                                                       lambda: counted.append(1)))
+        task = asyncio.create_task(stream_for(src).run({"equity": [1000]}, lambda k, q: got.append((k, q)),
+                                                       opened.append, lambda: counted.append(1)))
         await until(lambda: got)
         await stop(task)
     assert srv.tokens == [fake.access]                                   # the bare token, no "Bearer"
-    assert opened == [fake.stream_port] and got == [{"symbolId": 1000, "lastTradePrice": 100.5}] and counted == [1]
-    assert srv.paths == ["/v1/markets/quotes?ids=1000&stream=true&mode=WebSocket"]
+    assert opened == [fake.stream_port] and counted == [1]
+    assert got == [("equity", [{"symbolId": 1000, "lastTradePrice": 100.5}])]
+    assert srv.paths == [EQ_PATH]
     assert srv.user_agents == ["OptionLens"]
     port_req = next(r for r in fake.requests if r.url.params.get("stream") == "true")
     assert port_req.url.params["mode"] == "WebSocket" and port_req.url.params["ids"] == "1000"
     logs = caplog.text
-    assert f"handshake ok on port {fake.stream_port} (1 ids)" in logs
-    assert 'message 1: {"quotes":[{"symbolId":1000,"lastTradePrice":100.5}]}' in logs
+    assert f"live stream: handshake ok on port {fake.stream_port} (1 equity ids)" in logs
+    assert 'live stream message 1: {"quotes":[{"symbolId":1000,"lastTradePrice":100.5}]}' in logs
     assert fake.access not in logs                                       # never the access token
 
 
-async def test_option_stream_port_request_is_a_post_with_option_ids(qt):
+async def test_option_stream_request_is_a_post_with_option_ids(qt):
     fake, src = qt
     await src.tokens.connect("pasted-token")
     async with FakeStreamServer(fake) as srv:
-        srv.messages = [{"optionQuotes": [{"symbolId": option_id("2026-11-20", 100, "C"), "bidPrice": 1.5}]}]
+        srv.messages = [{"optionQuotes": [{"symbolId": OID, "bidPrice": 1.5}]}]
         got = []
-        task = asyncio.create_task(stream_for(src).run("option", [option_id("2026-11-20", 100, "C")], got.extend))
+        task = asyncio.create_task(stream_for(src).run({"option": [OID]}, lambda k, q: got.append((k, q))))
         await until(lambda: got)
         await stop(task)
     body = json.loads(next(r for r in fake.requests if r.url.path == "/v1/markets/quotes/options").content)
-    assert body == {"optionIds": [option_id("2026-11-20", 100, "C")], "stream": True, "mode": "WebSocket"}
-    assert got[0]["bidPrice"] == 1.5
+    assert body == {"optionIds": [OID], "stream": True, "mode": "WebSocket"}
+    assert got == [("option", [{"symbolId": OID, "bidPrice": 1.5}])] and srv.paths == ["/v1/markets/quotes/options"]
+
+
+async def test_both_kinds_share_one_connection_and_are_dispatched_per_kind(qt, caplog):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    caplog.set_level(logging.INFO, "optionlens.live.stream")
+    eq, op = {"symbolId": 1000, "lastTradePrice": 100.5}, {"symbolId": OID, "bidPrice": 1.5}
+    async with FakeStreamServer(fake) as srv:
+        srv.messages = [{"quotes": [eq]}, {"optionQuotes": [op]}, {"quotes": [eq], "optionQuotes": [op]}]
+        got = []
+        task = asyncio.create_task(stream_for(src).run({"equity": [1000], "option": [OID]},
+                                                       lambda k, q: got.append((k, q))))
+        await until(lambda: len(got) == 4)
+        await stop(task)
+    assert got == [("equity", [eq]), ("option", [op]), ("equity", [eq]), ("option", [op])]
+    assert srv.paths == [EQ_PATH] and srv.kicked == 0 and srv.max_active == 1      # ONE socket for both kinds
+    assert port_requests(fake) == 2                                      # both kinds' ids registered first
+    assert "(1 equity, 1 option ids)" in caplog.text
+
+
+def test_dispatch_maps_message_keys_to_kinds():
+    assert dispatch({"quotes": [{"symbolId": 1}, {"symbol": "no id"}], "optionQuotes": []}) == [
+        ("equity", [{"symbolId": 1}])]
+    assert dispatch({"success": True}) == [] and dispatch(None) == [] and dispatch([1]) == []
+
+
+async def test_different_ports_are_a_handshake_error_and_nothing_connects(qt):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    async with FakeStreamServer(fake) as srv:
+        fake.option_stream_port = fake.stream_port + 1
+        with pytest.raises(HandshakeError, match="different stream ports"):
+            await stream_for(src).run({"equity": [1000], "option": [OID]}, lambda k, q: None)
+    assert srv.paths == []
+    with pytest.raises(ValueError):
+        await stream_for(src).run({"equity": [], "option": []}, lambda k, q: None)
+
+
+async def test_the_fake_like_questrade_closes_the_first_connection_when_a_second_opens(qt):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    async with FakeStreamServer(fake) as srv:
+        srv.messages = []
+        first = asyncio.create_task(stream_for(src).run({"equity": [1000]}, lambda k, q: None))
+        await until(lambda: len(srv.tokens) == 1)
+        second = asyncio.create_task(stream_for(src).run({"option": [OID]}, lambda k, q: None))
+        with pytest.raises(StreamDropped):
+            await asyncio.wait_for(first, 5)
+        await stop(second)
+    assert srv.kicked == 1
 
 
 async def test_refused_token_is_a_handshake_error(qt, caplog):
@@ -172,7 +238,7 @@ async def test_refused_token_is_a_handshake_error(qt, caplog):
     async with FakeStreamServer(fake) as srv:
         srv.refuse = True
         with pytest.raises(HandshakeError, match="did not accept"):
-            await stream_for(src).run("equity", [1000], lambda q: None)
+            await stream_for(src).run({"equity": [1000]}, lambda k, q: None)
     assert src.tokens.state == "connected"          # a refused stream token is not a REST auth failure
     assert "handshake refused" in caplog.text and fake.access not in caplog.text
 
@@ -183,11 +249,11 @@ async def test_a_drop_raises_and_renewal_returns_before_the_token_expires(qt):
     async with FakeStreamServer(fake) as srv:
         srv.drop_after = 1
         with pytest.raises(StreamDropped):
-            await asyncio.wait_for(stream_for(src).run("equity", [1000], lambda q: None), 5)
+            await asyncio.wait_for(stream_for(src).run({"equity": [1000]}, lambda k, q: None), 5)
         srv.drop_after = None
         fake.expires_in = 61                                             # renew margin is 60 s: return within ~1 s
         src.tokens._access = None
-        await asyncio.wait_for(stream_for(src).run("equity", [1000], lambda q: None), 5)
+        await asyncio.wait_for(stream_for(src).run({"equity": [1000]}, lambda k, q: None), 5)
 
 
 async def test_an_expired_access_token_is_refreshed_by_the_port_request(qt):
@@ -197,7 +263,7 @@ async def test_an_expired_access_token_is_refreshed_by_the_port_request(qt):
         fake.access = "expired-server-side"           # Questrade no longer knows the engine's access token
         fake.valid.add("rotated-1")
         got = []
-        task = asyncio.create_task(stream_for(src).run("equity", [1000], got.extend))
+        task = asyncio.create_task(stream_for(src).run({"equity": [1000]}, lambda k, q: got.append(q)))
         await until(lambda: got)
         await stop(task)
     assert got and srv.tokens == ["access-2"]         # 401 -> refreshed -> the new token opened the stream
@@ -271,9 +337,8 @@ async def test_handshake_failure_falls_back_to_polling_and_retries_streaming_lat
             srv.refuse = False
             clock.offset = qlive.STREAM_RETRY_S + 1                       # 5 min later: streaming again
             await until(lambda: len(srv.tokens) > tried and d.streaming() and d.health()["mode"] == "stream")
-            await until(lambda: len(d.diagnostics()["streams"]) == 2
-                        and all(s["open"] for s in d.diagnostics()["streams"]))
-            assert d.fallback() is None
+            await until(lambda: d.diagnostics()["streams"] and d.diagnostics()["streams"][0]["open"])
+            assert d.diagnostics()["streams"][0]["ids"] == {"equity": 1, "option": 1} and d.fallback() is None
         finally:
             await stop(task)
 
@@ -316,25 +381,51 @@ async def test_a_drop_storm_falls_back_to_polling(qt):
     assert d.fallback() == "3 drops in 5 min" and d.health()["mode"] == "poll"
 
 
-async def test_a_changed_set_reopens_only_the_stream_whose_ids_changed(qt):
+async def test_one_connection_carries_both_kinds_and_a_changed_set_reopens_it_never_two_at_once(qt):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    published = []
+    async with FakeStreamServer(fake) as srv:
+        srv.messages = [{"quotes": [fake.equity_quote()], "optionQuotes": [{"symbolId": OID, "bidPrice": 1.5,
+                                                                           "askPrice": 1.7}]}]
+        srv.tick_s = 0.05
+        d = driver(src, published)
+        d.set_wanted(Wanted(frozenset({"XYZ"}), {C1: "XYZ"}))
+        task = asyncio.create_task(d.run())
+        streams = lambda: d.diagnostics()["streams"]                     # noqa: E731
+        try:
+            await until(lambda: len(streams()) == 1 and streams()[0]["open"])
+            assert streams()[0]["ids"] == {"equity": 1, "option": 1} and streams()[0]["port"] == fake.stream_port
+            await until(lambda: any(q for q, _ in published) and any(o for _, o in published))
+            assert srv.paths == [EQ_PATH] and port_requests(fake) == 2   # both kinds registered, one socket
+            d.set_wanted(Wanted(frozenset({"XYZ"}), {C1: "XYZ", C2: "XYZ"}))
+            await until(lambda: len(srv.tokens) == 2 and len(streams()) == 1 and streams()[0]["open"])
+            assert streams()[0]["ids"] == {"equity": 1, "option": 2} and streams()[0]["connects"] == 1
+            assert port_requests(fake) == 4                              # both stream requests re-issued
+            assert d.diagnostics()["messages_per_s"] > 0 and d.diagnostics()["last_message_at"]
+            assert d.fallback() is None and d.diagnostics()["drops_recent"] == 0
+        finally:
+            await stop(task)
+    assert srv.paths == [EQ_PATH, EQ_PATH]
+    assert srv.kicked == 0 and srv.max_active == 1                       # the old socket was closed before the new one
+    assert published[0] == ({"XYZ": published[0][0]["XYZ"]}, {}) and published[0][0]["XYZ"]["bid"] == 99.9
+    assert published[1][0] == {} and published[1][1][C1]["bid"] == 1.5     # one message, dispatched per kind
+
+
+async def test_only_options_wanted_streams_on_the_option_request_path(qt):
     fake, src = qt
     await src.tokens.connect("pasted-token")
     async with FakeStreamServer(fake) as srv:
         srv.tick_s = 0.05
         d = driver(src)
-        d.set_wanted(Wanted(frozenset({"XYZ"}), {C1: "XYZ"}))
+        d.set_wanted(Wanted(frozenset(), {C1: "XYZ"}))
         task = asyncio.create_task(d.run())
-        streams = lambda: {s["kind"]: s for s in d.diagnostics()["streams"]}       # noqa: E731
         try:
-            await until(lambda: len(streams()) == 2 and all(s["open"] for s in streams().values()))
-            d.set_wanted(Wanted(frozenset({"XYZ"}), {C1: "XYZ", C2: "XYZ"}))
-            await until(lambda: len(srv.tokens) == 3 and len(streams()) == 2
-                        and all(s["open"] for s in streams().values()))
-            assert streams()["equity"]["connects"] == 1 and streams()["option"]["ids"] == 2
-            assert d.diagnostics()["messages_per_s"] > 0 and d.diagnostics()["last_message_at"]
+            await until(lambda: d.diagnostics()["streams"] and d.diagnostics()["streams"][0]["open"])
+            assert d.diagnostics()["streams"][0]["ids"] == {"option": 1}
         finally:
             await stop(task)
-    assert sum(1 for p in srv.paths if p.startswith("/v1/markets/quotes?")) == 1     # the equity stream stayed open
+    assert srv.paths == ["/v1/markets/quotes/options"] and port_requests(fake) == 1
 
 
 async def test_switching_the_mode_at_runtime_both_ways(qt):

@@ -79,9 +79,9 @@ export interface QuestradeStatus {
 /** GET / PUT /api/live/mode (INTEGRATION.md §9): how Questrade keeps the screen live. `default` applies until the user chooses (`saved`). */
 export type LiveMode = "stream" | "poll";
 export interface LiveModeSetting { mode: LiveMode; default: LiveMode; saved: boolean }
-/** One Questrade Level 1 stream (`ids`: symbols or option contracts it carries). */
+/** The Questrade Level 1 stream connection (one per session; `ids`: the symbols / option contracts it carries per kind). */
 export interface LiveStreamInfo {
-  kind: "equity" | "option"; ids: number; open: boolean; port: number | null;
+  ids: { equity?: number; option?: number }; open: boolean; port: number | null;
   opened_at: ISODateTime | null; last_message_at: ISODateTime | null; messages: number; connects: number;
 }
 /** GET /api/live/status → `questrade`: the Questrade driver's details. `fallback`: why it polls although streaming is chosen. */
