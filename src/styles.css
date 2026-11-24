@@ -608,3 +608,11 @@ code.wrap { word-break: break-all; font-size: 11.5px; }
 .mcp-snippet-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .mcp-snippet-head .btn { margin-left: auto; }
 .mcp-code { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--mono, ui-monospace, monospace); font-size: 12px; background: var(--panel-3); border-radius: var(--radius); padding: 8px 10px; }
+
+/* calculator: pinned / live legs */
+.legs-table .leg-value { display: flex; align-items: center; gap: 6px; }
+.legs-table input.pinned { border-color: var(--accent); }
+.leg-origin { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; line-height: 1; color: var(--muted); white-space: nowrap; }
+.leg-origin.user { color: var(--accent); font-weight: 600; }
+.leg-origin.live { color: var(--up); }
+.lock-icon { flex: none; }

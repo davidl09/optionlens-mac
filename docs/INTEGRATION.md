@@ -81,8 +81,15 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   `ReportResult.after_hours` / `MarketOverview.after_hours`: some rows' session values are an after-hours fill
   (§6 "After-hours fills"). The UI shows a neutral "Last session's close (collected after hours)" badge for them.
 - `CalcRequest.spot` (optional, > 0): the renderer's live underlying price, used instead of the stored chain's;
-  `CalcResult.legs[].osi`: the contract each option leg priced (null for stock legs), so the calculator can follow
-  its live quote (§9).
+  `CalcResult.legs[].osi`: the contract each option leg priced (null for stock legs). **Calculator pricing rule**
+  (renderer, `src/lib/calcPricing.ts`): right before every request each leg's `price` is the user's pinned price ??
+  the live mid ?? the stored mid (stock legs: ?? the live price ?? the stored spot) and its `iv` the pinned IV ?? the
+  live IV ?? the stored IV, and `spot` is the live price ?? the stored one; the request carries them explicitly and
+  the engine uses provided values as given (it falls back to the stored mid / IV only for fields left null). Edited
+  legs are pinned (lock, "Reset to live"); the others follow live quotes. Recalculations run at most 2/s with one
+  request in flight (the newest inputs are sent when it ends, so a slow engine never freezes the result);
+  `price_range` is pinned per position (legs, evaluation date, IV shift) while the spot stays inside it, and the P/L
+  axis keeps its range until a curve leaves it, so live ticks move the curves without rescaling the chart.
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
   of that same value, and only when it is from the last session (else null: stale, never shown as today's).

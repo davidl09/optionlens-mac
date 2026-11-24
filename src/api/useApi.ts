@@ -1,6 +1,7 @@
 import { DependencyList, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useViewData, type DataRequest } from "../state/view";
 import { captureRequests, connection, invalidate } from "./client";
+import { LatestRunner, type LatestState } from "./latest";
 
 /** Re-renders when the client's reload epoch changes (recovery, new engine connection, IBKR refresh). */
 export function useReloadEpoch(): number {
@@ -73,4 +74,38 @@ export function useDebounced<T>(value: T, ms: number): T {
     return () => window.clearTimeout(t);
   }, [value, ms]);
   return v;
+}
+
+/**
+ * Runs `run(key)` for the newest `key` (null: nothing to send, the last answer stays): one request in flight, starts
+ * at least `minIntervalMs` apart, every completed answer shown in order (latest.ts). For inputs that change faster
+ * than the engine answers, e.g. the calculator while live quotes tick. Re-sends on a new engine connection. Its last
+ * request is part of the current view for agents (like useApi's).
+ */
+export function useLatest<T>(key: string | null, run: (key: string) => Promise<T>, minIntervalMs: number): LatestState<T> {
+  const [state, setState] = useState<LatestState<T>>({ data: null, error: null, dataKey: null, busy: false });
+  const [requests, setRequests] = useState<DataRequest[]>([]);
+  const runRef = useRef(run);
+  runRef.current = run;
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const runner = useRef<LatestRunner<T> | null>(null);
+  useEffect(() => {
+    const r = new LatestRunner<T>((k) => {
+      const { value, requests: made } = captureRequests(() => runRef.current(k));
+      setRequests((x) => (JSON.stringify(x) === JSON.stringify(made) ? x : made));
+      return value;
+    }, minIntervalMs, setState);
+    runner.current = r;
+    r.request(keyRef.current);
+    return () => { r.dispose(); runner.current = null; };
+  }, [minIntervalMs]);
+  const epoch = useReloadEpoch();
+  const seenEpoch = useRef(epoch);
+  useEffect(() => {
+    runner.current?.request(key);
+    if (seenEpoch.current !== epoch) { seenEpoch.current = epoch; runner.current?.invalidate(); }
+  }, [key, epoch]);
+  useViewData(requests);   // the current view for agents, as useApi reports it
+  return state;
 }

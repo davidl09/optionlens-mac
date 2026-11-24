@@ -1,16 +1,18 @@
-// Strategy payout calculator: legs editor, templates, eval-date & IV-shift sliders, payoff chart, metrics.
+// Strategy payout calculator: legs editor, templates, eval-date & IV-shift sliders, payoff chart, metrics. Prices follow
+// the pricing rule of lib/calcPricing.ts (your pinned price ?? live mid ?? stored mid) and re-price live, ≤ 2/s.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { CalcRequest, CalcResult, Chain, ColumnDef, ExpiryInfo, Leg, ReportRow, StrategyTemplate } from "../../api/types";
-import { useApi, useDebounced } from "../../api/useApi";
+import { useApi, useLatest } from "../../api/useApi";
 import { Payoff } from "../../components/charts/Payoff";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid } from "../../components/StatGrid";
 import { AsOf, Async, Card, Empty, ErrorBox, Spinner } from "../../components/ui";
 import { addDays, daysBetween, todayNY } from "../../lib/dates";
 import { fmt, signClass } from "../../lib/format";
+import { calcRequest, isPinned, keepPriceRange, type Origin, type PricedLeg, priceLegs, type Range, type StoredQuote, structureKey, unpinned } from "../../lib/calcPricing";
 import { nearest } from "../../lib/indicators";
-import { isFlowing, liveStore, useLive, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
+import { isFlowing, liveStore, useLive, useLiveStatus, useThrottled } from "../../live";
 import { useLegs } from "../../state/legs";
 import { useSym } from "./shared";
 
@@ -54,29 +56,60 @@ export function instantiateTemplate(t: StrategyTemplate, spot: number, expiries:
   });
 }
 
-function LegEditor({ sym, leg, index, expiries, spot, result, onChange, onRemove }: {
-  sym: string; leg: Leg; index: number; expiries: ExpiryInfo[]; spot: number; result: CalcResult | null; onChange: (l: Leg) => void; onRemove: () => void;
+const ORIGIN_TEXT = {
+  price: { user: "your price", live: "live", stored: "stored" },
+  iv: { user: "your IV", live: "live", stored: "stored" },
+} as const;
+
+function originTitle(what: "price" | "iv", from: Origin, stock: boolean): string {
+  if (from === "user") return `Your ${what === "iv" ? "IV" : "price"}: pinned, live updates leave it alone (Reset to live to follow the market again)`;
+  if (what === "iv") return from === "live" ? "The contract's live IV" : "The contract's IV in the stored chain";
+  if (stock) return from === "live" ? "The live underlying price" : "The stored underlying price";
+  return from === "live" ? "The contract's live mid (bid/ask midpoint)" : "The contract's mid in the stored chain";
+}
+
+function LockIcon() {
+  return (
+    <svg className="lock-icon" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true">
+      <rect x="1" y="5" width="8" height="6" rx="1" fill="currentColor" />
+      <path d="M3 5V3.5a2 2 0 0 1 4 0V5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+/** Where a leg's price / IV comes from: your pinned value (lock), live, or the stored chain. */
+function OriginTag({ what, from, stock = false }: { what: "price" | "iv"; from: Origin | null; stock?: boolean }) {
+  if (!from) return null;
+  return (
+    <span className={`leg-origin ${from}`} data-origin={from} title={originTitle(what, from, stock)}>
+      {from === "user" && <LockIcon />}{ORIGIN_TEXT[what][from]}
+    </span>
+  );
+}
+
+function LegEditor({ leg, priced, listed, expiries, spot, flowing, onChange, onRemove }: {
+  leg: Leg; priced: PricedLeg; listed: number[] | null; expiries: ExpiryInfo[]; spot: number; flowing: boolean;
+  onChange: (l: Leg) => void; onRemove: () => void;
 }) {
-  const chain = useApi(leg.kind === "option" ? () => api.chain(sym, leg.expiry) : null, [sym, leg.kind, leg.expiry]);
-  const strikes = chain.data?.strikes ?? (leg.strike !== undefined ? [leg.strike] : []);
-  const used = result?.legs[index];
+  const strikes = listed ?? (leg.strike !== undefined ? [leg.strike] : []);
   // the strike to keep when the expiry/type changes (the select then snaps to the nearest strike listed there)
   const wantStrike = useRef(leg.strike);
   if (leg.strike !== undefined) wantStrike.current = leg.strike;
-  const listed = chain.data && chain.data.expiry === leg.expiry ? chain.data.strikes : null;
   useEffect(() => {
     if (leg.kind !== "option" || !listed?.length || (leg.strike !== undefined && listed.includes(leg.strike))) return;
-    onChange({ ...leg, strike: nearest(listed, wantStrike.current ?? spot) ?? undefined, price: null, iv: null });
+    onChange({ ...unpinned(leg), strike: nearest(listed, wantStrike.current ?? spot) ?? undefined });
   });
   const step = (d: number) => {
     let q = leg.qty + d * (leg.kind === "stock" ? 100 : 1);
     if (q === 0) q += d * (leg.kind === "stock" ? 100 : 1);
     onChange({ ...leg, qty: q });
   };
-  // changing what the leg is resets price/iv to the server defaults (mid / contract IV)
-  const reset = (patch: Partial<Leg>) => onChange({ ...leg, ...patch, price: null, iv: null });
+  // changing what the leg is drops its pins (a price typed for another contract means nothing here)
+  const reset = (patch: Partial<Leg>) => onChange({ ...unpinned(leg), ...patch });
+  const p = priced.leg;
+  const stock = leg.kind === "stock";
   return (
-    <tr>
+    <tr className={isPinned(leg) ? "leg-pinned" : undefined}>
       <td>
         <select value={leg.kind} aria-label="Leg type" onChange={(e) => reset(e.target.value === "stock" ? { kind: "stock", qty: 100, right: undefined, strike: undefined, expiry: undefined } : { kind: "option", qty: 1, right: "C", expiry: expiries[0]?.expiry, strike: undefined })}>
           <option value="option">Option</option><option value="stock">Stock</option>
@@ -111,13 +144,29 @@ function LegEditor({ sym, leg, index, expiries, spot, result, onChange, onRemove
         </div>
       </td>
       <td>
-        <input type="number" step="0.01" className="w-num" aria-label="Entry price" placeholder={used ? fmt(used.mid ?? used.price, "num2") : "mid"}
-          value={leg.price ?? ""} onChange={(e) => onChange({ ...leg, price: e.target.value === "" ? null : Number(e.target.value) })} />
+        <div className="leg-value">
+          <input type="number" step="0.01" className={`w-num ${priced.priceFrom === "user" ? "pinned" : ""}`} aria-label="Entry price"
+            placeholder={p.price != null ? fmt(p.price, "num2") : "mid"}
+            value={leg.price ?? ""} onChange={(e) => onChange({ ...leg, price: e.target.value === "" ? null : Number(e.target.value) })} />
+          <OriginTag what="price" from={priced.priceFrom} stock={stock} />
+        </div>
       </td>
       <td>
         {leg.kind === "option" && (
-          <input type="number" step="0.1" className="w-num" aria-label="IV in vol points" placeholder={used?.iv != null ? fmt(used.iv, "vol") : "IV"}
-            value={leg.iv != null ? +(leg.iv * 100).toFixed(2) : ""} onChange={(e) => onChange({ ...leg, iv: e.target.value === "" ? null : Number(e.target.value) / 100 })} />
+          <div className="leg-value">
+            <input type="number" step="0.1" className={`w-num ${priced.ivFrom === "user" ? "pinned" : ""}`} aria-label="IV in vol points"
+              placeholder={p.iv != null ? fmt(p.iv, "vol") : "IV"}
+              value={leg.iv != null ? +(leg.iv * 100).toFixed(2) : ""} onChange={(e) => onChange({ ...leg, iv: e.target.value === "" ? null : Number(e.target.value) / 100 })} />
+            <OriginTag what="iv" from={priced.ivFrom} />
+          </div>
+        )}
+      </td>
+      <td>
+        {isPinned(leg) && (
+          <button className="btn btn-sm btn-ghost" onClick={() => onChange(unpinned(leg))}
+            title={flowing ? "Drop your price / IV: follow the live mid and IV again" : "Drop your price / IV: use the stored mid and IV (live quotes are not flowing)"}>
+            {flowing ? "Reset to live" : "Reset to mid"}
+          </button>
         )}
       </td>
       <td><button className="btn btn-sm btn-ghost" onClick={onRemove} aria-label="Remove leg">✕</button></td>
@@ -153,6 +202,43 @@ function Metrics({ r }: { r: CalcResult }) {
   );
 }
 
+const RECALC_MS = 500;   // ≤ 2 calc requests per second
+const chainKey = (expiry: string, right: string, strike: number) => `${expiry}|${right}|${strike}`;
+
+/** The stored chain of every leg expiry (one cached GET each): strikes per expiry and each contract's OSI / mid / IV. */
+function useLegChains(sym: string, legs: Leg[]) {
+  const expiries = [...new Set(legs.filter((l) => l.kind === "option" && l.expiry).map((l) => l.expiry as string))].sort();
+  const key = expiries.join(",");
+  const st = useApi(expiries.length ? () => Promise.all(expiries.map((e) => api.chain(sym, e))) : null, [sym, key]);
+  return useMemo(() => {
+    const quotes = new Map<string, StoredQuote>();
+    const strikes = new Map<string, number[]>();
+    for (const c of st.data ?? []) {
+      strikes.set(c.expiry, c.strikes);
+      for (const r of [...c.calls, ...c.puts]) quotes.set(chainKey(r.expiry, r.right, r.strike), { osi: r.osi, mid: r.mid, iv: r.iv });
+    }
+    const stored = (l: Leg) => (l.kind === "option" && l.expiry && l.right && l.strike !== undefined ? quotes.get(chainKey(l.expiry, l.right, l.strike)) ?? null : null);
+    return { stored, strikes, loading: st.loading };
+  }, [st.data, st.loading]);
+}
+
+/** Re-renders (at most every `ms`) when the live values of the underlying or of these contracts change while flowing. */
+function useLiveTicks(sym: string, osis: string[], flowing: boolean, ms: number): number {
+  useLive({ symbols: [sym], contracts: osis });
+  const [tick, setTick] = useState(0);
+  const osisKey = osis.join(",");
+  useEffect(() => {
+    if (!flowing) return undefined;
+    const bump = () => setTick((n) => n + 1);
+    const offs = [liveStore.onKey("q", sym.toUpperCase(), bump), ...osis.map((o) => liveStore.onKey("o", o, bump))];
+    return () => offs.forEach((off) => off());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flowing, sym, osisKey]);
+  return useThrottled(tick, ms);
+}
+
+const latest = (a: string | null, b: string | null | undefined) => (b && (!a || b > a) ? b : a);
+
 function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Chain; base: string; setBase: (e: string) => void }) {
   const { legs, setLegs } = useLegs();
   const templates = useApi(api.strategyTemplates, []);
@@ -167,42 +253,37 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   const days = Math.min(evalDays, maxDays);
   const evalDate = addDays(today, days);
 
-  // Live: the underlying and the legs' contracts (OSIs from the last result). While quotes flow, the request carries
-  // the live spot and, for legs without a typed price / IV, the live mid / IV: recomputed at most once a second.
-  const [priced, setPriced] = useState<{ osi: string; right?: string; strike?: number; expiry?: string }[]>([]);
-  const legOsis = useMemo(() => priced.map((l) => l.osi).filter(Boolean), [priced]);
-  useLive({ symbols: [sym], contracts: legOsis });
+  // The pricing rule (calcPricing.ts), applied to the current legs before every request: your pinned price / IV, else
+  // the live mid / IV (while quotes flow), else the stored chain's; the spot likewise. Live ticks re-price ≤ 2/s.
+  const legChains = useLegChains(sym, legs);
+  const osis = useMemo(() => [...new Set(legs.map((l) => legChains.stored(l)?.osi).filter((o): o is string => !!o))], [legs, legChains]);
   const flowing = isFlowing(useLiveStatus());
-  const livePrice = useLiveQuote(sym)?.price;
-  const spot = livePrice ?? storedSpot;
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (!flowing) return undefined;
-    const offs = legOsis.map((o) => liveStore.onKey("o", o, () => setTick((n) => n + 1)));
-    return () => offs.forEach((off) => off());
-  }, [flowing, legOsis]);
-  const livePart = useThrottled(flowing ? JSON.stringify({ spot: livePrice ?? null, tick }) : "", 1000);
-  const liveLegs = useMemo(() => {
-    if (!livePart) return legs;
-    return legs.map((l, i) => {
-      const was = priced[i];   // the contract the last result priced for this leg, if it is still the same one
-      const same = was && l.kind === "option" && was.right === l.right && was.strike === l.strike && was.expiry === l.expiry;
-      const f = same && was.osi ? liveStore.get("o", was.osi) : null;
-      if (l.kind !== "option" || !f) return l;
-      return { ...l, price: l.price ?? f.mid ?? null, iv: l.iv ?? f.iv ?? null };
-    });
+  const tick = useLiveTicks(sym, osis, flowing, RECALC_MS);
+  const market = useMemo(() => {
+    const q = flowing ? liveStore.get("q", sym.toUpperCase()) : null;
+    const liveSpot = q?.price ?? q?.last ?? null;
+    const priced = priceLegs(legs, { stored: legChains.stored, live: (o) => (flowing ? liveStore.get("o", o) : null), liveSpot, storedSpot });
+    const liveTs = priced.reduce<string | null>((a, p) => latest(a, p.liveTs), liveSpot !== null ? q?.ts ?? null : null);
+    return { priced, liveSpot, liveTs };
+    // `tick` is the trigger for re-reading the live store
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [legs, livePart, priced]);
-  const liveSpot = livePart ? (JSON.parse(livePart) as { spot: number | null }).spot : null;
+  }, [legs, legChains, flowing, sym, storedSpot, tick]);
+  const spot = market.liveSpot ?? storedSpot;
 
-  const liveKey = JSON.stringify({ symbol: sym, legs: liveLegs, iv_shift: ivShift / 100, eval_date: evalDate, ...(liveSpot ? { spot: liveSpot } : {}) });
-  const reqKey = useDebounced(liveKey, 300);
-  const req = useMemo(() => JSON.parse(reqKey) as CalcRequest, [reqKey]);   // the debounced request decides (not the live legs)
-  // price only a settled, complete position (debounced == live, every option leg has a strike)
-  const ready = reqKey === liveKey && legs.length > 0 && legs.every((l) => l.kind === "stock" || l.strike !== undefined);
-  const calc = useApi(ready ? () => api.calcStrategy(req) : null, [req, ready]);
-  const pricedKey = JSON.stringify(calc.data?.legs.map((l) => ({ osi: l.osi ?? "", right: l.right, strike: l.strike, expiry: l.expiry })) ?? []);
-  useEffect(() => setPriced(JSON.parse(pricedKey) as typeof priced), [pricedKey]);
+  // Stable chart: the x range (and table rows) is pinned per position / eval date / IV shift while the spot stays in it.
+  const scaleKey = JSON.stringify([structureKey(legs), evalDate, ivShift]);
+  const [pin, setPin] = useState<{ key: string; range: Range } | null>(null);
+  const priceRange = keepPriceRange(pin?.key === scaleKey ? pin.range : null, spot);
+  // price only a complete position (every option leg has a strike) once its chains are known
+  const ready = legs.length > 0 && !legChains.loading && legs.every((l) => l.kind === "stock" || l.strike !== undefined);
+  const reqKey = ready ? JSON.stringify({ scaleKey, req: calcRequest(sym, market.priced, { spot, ivShift: ivShift / 100, evalDate, priceRange }) }) : null;
+  const calc = useLatest(reqKey, (k) => api.calcStrategy((JSON.parse(k) as { req: CalcRequest }).req), RECALC_MS);
+  const answered = useMemo(() => (calc.dataKey ? JSON.parse(calc.dataKey) as { scaleKey: string; req: CalcRequest } : null), [calc.dataKey]);
+  useEffect(() => {
+    const r = calc.data;
+    if (!answered || !r || answered.req.price_range || !r.prices.length) return;
+    setPin({ key: answered.scaleKey, range: [r.prices[0], r.prices[r.prices.length - 1]] });   // the engine's default range
+  }, [answered, calc.data]);
   const [templateMsg, setTemplateMsg] = useState<string | null>(null);
 
   const applyTemplate = (id: string) => {
@@ -218,6 +299,8 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
     setLegs([...legs, kind === "stock" ? { kind: "stock", qty: 100 } : { kind: "option", right: kind, qty: 1, expiry: base, strike: atm }]);
   };
   const result = calc.data && legs.length ? calc.data : null;
+  const stale = answered?.scaleKey !== scaleKey;   // the shown answer is of another position / date / IV shift
+  const anyPinned = legs.some(isPinned);
   const families = useMemo(() => {
     const m = new Map<string, StrategyTemplate[]>();
     for (const t of templates.data ?? []) m.set(t.family, [...(m.get(t.family) ?? []), t]);
@@ -226,7 +309,10 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
 
   return (
     <div className="stack">
-      <Card title="Legs" subtitle={<>Spot {fmt(spot, "money")} · <AsOf ts={chain.asof} /></>} actions={
+      <Card title="Legs" subtitle={<>
+        Spot {fmt(spot, "money")} <span className={`leg-origin ${market.liveSpot !== null ? "live" : "stored"}`}>{market.liveSpot !== null ? "live" : "stored"}</span>
+        {" · "}{market.liveTs ? <AsOf ts={market.liveTs} label="live as of" /> : <AsOf ts={chain.asof} />}
+      </>} actions={
         <div className="toolbar">
           <label className="field-inline">Base expiry
             <select value={base} onChange={(e) => setBase(e.target.value)}>
@@ -245,10 +331,11 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
         {legs.length > 0 ? (
           <div className="dt-scroll">
             <table className="dt legs-table">
-              <thead><tr><th>Type</th><th>Right</th><th>Expiry</th><th>Strike</th><th>Qty</th><th>Price</th><th>IV</th><th /></tr></thead>
+              <thead><tr><th>Type</th><th>Right</th><th>Expiry</th><th>Strike</th><th>Qty</th><th>Price</th><th>IV</th><th /><th /></tr></thead>
               <tbody>
                 {legs.map((l, i) => (
-                  <LegEditor key={i} sym={sym} leg={l} index={i} expiries={chain.expiries} spot={spot} result={result}
+                  <LegEditor key={i} leg={l} priced={market.priced[i]} listed={l.expiry ? legChains.strikes.get(l.expiry) ?? null : null}
+                    expiries={chain.expiries} spot={spot} flowing={flowing}
                     onChange={(nl) => setLegs(legs.map((x, j) => (j === i ? nl : x)))} onRemove={() => setLegs(legs.filter((_, j) => j !== i))} />
                 ))}
               </tbody>
@@ -259,8 +346,9 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
           <button className="btn btn-sm" onClick={() => addLeg("C")}>+ Call</button>
           <button className="btn btn-sm" onClick={() => addLeg("P")}>+ Put</button>
           <button className="btn btn-sm" onClick={() => addLeg("stock")}>+ Stock</button>
+          {anyPinned && <button className="btn btn-sm btn-ghost" onClick={() => setLegs(legs.map(unpinned))}>Reset all</button>}
           {legs.length > 0 && <button className="btn btn-sm btn-ghost" onClick={() => { setLegs([]); setTemplateId(""); }}>Clear all</button>}
-          <span className="muted small">Empty price = mid; empty IV = contract IV. Options are per contract (×100), stock per share.</span>
+          <span className="muted small">An empty price / IV follows the live mid / IV (the stored chain's while live quotes are off); a typed one is yours (pinned) until reset. Options are per contract (×100), stock per share.</span>
         </div>
       </Card>
       {legs.length > 0 && (
@@ -280,9 +368,9 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
           {calc.error && <ErrorBox error={calc.error} />}
           {!result && !calc.error && <Spinner label="Pricing…" />}
           {result && (
-            <div className={calc.loading ? "refetching" : undefined}>
+            <div className={stale && calc.busy ? "refetching" : undefined}>
               <div className="grid-main-side">
-                <Card title="Profit / loss"><Payoff result={result} evalLabel={`At ${evalDate}`} /></Card>
+                <Card title="Profit / loss"><Payoff result={result} evalLabel={`At ${evalDate}`} scaleKey={answered?.scaleKey} /></Card>
                 <Card title="Position metrics"><Metrics r={result} /></Card>
               </div>
               <Card title="P/L by underlying price" className="top-gap">

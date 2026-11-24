@@ -185,7 +185,8 @@ export default function ChainTab() {
   useViewDetails({ expiry: st.data?.expiry ?? expiry ?? null, side, strikes_around_atm: range, greeks });
 
   const onLeg = (row: OptionRow, qty: number, price: number) => {
-    const leg: Leg = { kind: "option", right: row.right, strike: row.strike, expiry: row.expiry, qty, price, iv: row.iv };
+    // the clicked bid / ask is the user's price (pinned in the calculator); the IV is not chosen: it follows live data
+    const leg: Leg = { kind: "option", right: row.right, strike: row.strike, expiry: row.expiry, qty, price, iv: null };
     addLeg(leg);
     setLastAdded(leg);
   };

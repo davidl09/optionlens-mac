@@ -1,6 +1,8 @@
-// Strategy P/L curves (expiry / chosen date / today) with breakeven and spot markers.
-import { useMemo } from "react";
+// Strategy P/L curves (expiry / chosen date / today) with breakeven and spot markers. The axes stay put while live
+// ticks move the curves (calcPricing.stableRange): rescaled only when a curve leaves them or `scaleKey` changes.
+import { useMemo, useRef } from "react";
 import type { CalcResult } from "../../api/types";
+import { extent, type Range, stableRange } from "../../lib/calcPricing";
 import { fmt } from "../../lib/format";
 import { EChart, usePalette } from "./EChart";
 import { axisStyle, GRID, legendStyle, tooltipStyle } from "./common";
@@ -14,9 +16,15 @@ function signGradient(ys: number[], up: string, down: string) {
   return { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: up }, { offset: z, color: up }, { offset: z, color: down }, { offset: 1, color: down }] };
 }
 
-export function Payoff({ result, evalLabel, height = 340 }: { result: CalcResult; evalLabel: string; height?: number }) {
+/** `scaleKey`: what the chart shows (position, eval date, IV shift); a new one rescales the axes. */
+export function Payoff({ result, evalLabel, scaleKey = "", height = 340 }: { result: CalcResult; evalLabel: string; scaleKey?: string; height?: number }) {
   const p = usePalette();
+  const yRange = useRef<{ key: string; range: Range } | null>(null);
   const option = useMemo(() => {
+    const data = extent(result.pnl_expiry, result.pnl_eval, result.pnl_today) ?? [0, 0];
+    const range = stableRange(yRange.current?.key === scaleKey ? yRange.current.range : null, data);
+    yRange.current = { key: scaleKey, range };
+    const xStyle = axisStyle(p, "money");
     const xs = result.prices;
     const pts = (ys: number[]) => xs.map((x, i) => [x, ys[i]]);
     const vline = (x: number, label: string, color: string, position = "insideEndTop") => ({
@@ -34,8 +42,9 @@ export function Payoff({ result, evalLabel, height = 340 }: { result: CalcResult
           return `<div style="min-width:170px"><div style="opacity:.7">Price ${fmt(x, "money")} (${fmt(x / result.spot - 1, "pct_signed")})</div>${rows.join("<br/>")}</div>`;
         },
       },
-      xAxis: { type: "value", scale: true, ...axisStyle(p, "money"), splitLine: { show: false } },
-      yAxis: { type: "value", ...axisStyle(p, "money") },
+      // fixed bounds (stable on live ticks); their own labels would be odd numbers, so only the inner ticks are labelled
+      xAxis: { type: "value", min: xs[0], max: xs[xs.length - 1], ...xStyle, axisLabel: { ...xStyle.axisLabel, showMinLabel: false, showMaxLabel: false }, splitLine: { show: false } },
+      yAxis: { type: "value", min: range[0], max: range[1], ...axisStyle(p, "money") },
       series: [
         {
           name: "At expiry", type: "line", data: pts(result.pnl_expiry), showSymbol: false,
@@ -54,6 +63,6 @@ export function Payoff({ result, evalLabel, height = 340 }: { result: CalcResult
         { name: "Today", type: "line", data: pts(result.pnl_today), showSymbol: false, lineStyle: { width: 1.5, type: "dotted", color: p.series[3] }, itemStyle: { color: p.series[3] } },
       ],
     };
-  }, [p, result, evalLabel]);
+  }, [p, result, evalLabel, scaleKey]);
   return <EChart option={option} height={height} ariaLabel="Strategy profit and loss chart" />;
 }

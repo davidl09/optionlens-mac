@@ -99,25 +99,33 @@ export const TEMPLATES: StrategyTemplate[] = [
   { id: "covered-call", label: "Covered call", family: "Stock", description: "Long 100 shares, short 5% OTM call", legs: [{ kind: "stock", qty: 100 }, { kind: "option", right: "C", qty: -1, strike_offset_pct: 0.05 }] },
 ];
 
+/** Like the engine: the legs' given prices / IVs (else mid 5.20, IV 27%), the given spot (else SPOT) and price range;
+ * PoP / EV weigh the expiry P/L by a normal around the spot, so prices and spot move them. */
 export function calc(req: CalcRequest): CalcResult {
   const n = 61;
-  const prices = Array.from({ length: n }, (_, i) => round(SPOT * (0.8 + (0.4 * i) / (n - 1))));
-  const legs = req.legs.map((l) => ({ ...l, price: l.price ?? (l.kind === "stock" ? SPOT : 5.2), iv: l.iv ?? (l.kind === "stock" ? null : 0.27), mid: l.kind === "stock" ? SPOT : 5.2 }));
+  const spot = req.spot ?? SPOT;
+  const [lo, hi] = req.price_range ?? [spot * 0.8, spot * 1.2];
+  const prices = Array.from({ length: n }, (_, i) => round(lo + ((hi - lo) * i) / (n - 1)));
+  const legs = req.legs.map((l) => ({ ...l, price: l.price ?? (l.kind === "stock" ? spot : 5.2), iv: l.iv ?? (l.kind === "stock" ? null : 0.27), mid: l.kind === "stock" ? spot : 5.2 }));
   const payoff = (s: number) => legs.reduce((acc, l) => {
     const intr = l.kind === "stock" ? s : Math.max(0, l.right === "C" ? s - (l.strike ?? SPOT) : (l.strike ?? SPOT) - s);
     return acc + l.qty * (intr - l.price) * (l.kind === "stock" ? 1 : 100);
   }, 0);
   const shift = (req.iv_shift ?? 0) * 500;
   const pnl_expiry = prices.map((s) => round(payoff(s)));
-  const pnl_eval = prices.map((s, i) => round(pnl_expiry[i] * 0.7 + shift + (s - SPOT) * 2));
-  const pnl_today = prices.map((s, i) => round(pnl_expiry[i] * 0.4 + shift + (s - SPOT) * 3));
+  const pnl_eval = prices.map((s, i) => round(pnl_expiry[i] * 0.7 + shift + (s - spot) * 2));
+  const pnl_today = prices.map((s, i) => round(pnl_expiry[i] * 0.4 + shift + (s - spot) * 3));
   const be: number[] = [];
   for (let i = 1; i < n; i++) if (Math.sign(pnl_expiry[i]) !== Math.sign(pnl_expiry[i - 1])) be.push(prices[i]);
+  const w = prices.map((s) => Math.exp(-(((s - spot) / (0.08 * spot)) ** 2) / 2));
+  const wsum = w.reduce((a, b) => a + b, 0);
+  const ev = w.reduce((a, x, i) => a + x * payoff(prices[i]), 0) / wsum;
+  const pop = w.reduce((a, x, i) => a + (payoff(prices[i]) > 0 ? x : 0), 0) / wsum;
   return {
-    spot: SPOT, asof: NOW, legs, cost: round(legs.reduce((a, l) => a + l.qty * l.price * (l.kind === "stock" ? 1 : 100), 0)), prices, pnl_expiry, pnl_eval, pnl_today, breakevens: be,
+    spot, asof: NOW, legs, cost: round(legs.reduce((a, l) => a + l.qty * l.price * (l.kind === "stock" ? 1 : 100), 0)), prices, pnl_expiry, pnl_eval, pnl_today, breakevens: be,
     max_profit: legs.some((l) => l.kind === "option" && l.right === "C" && l.qty > 0 && !legs.some((m) => m.right === "C" && m.qty < 0)) ? null : Math.max(...pnl_expiry),
-    max_loss: Math.min(...pnl_expiry), pop: 0.43, ev_iv: -12.4, ev_hv: 18.9, greeks: { delta: 41.2, gamma: 2.1, theta: -9.8, vega: 22.5 },
-    table: prices.filter((_, i) => i % 4 === 0).map((p, i) => ({ price: p, change_pct: round(p / SPOT - 1, 4), pnl_expiry: pnl_expiry[i * 4], pnl_eval: pnl_eval[i * 4] })),
+    max_loss: Math.min(...pnl_expiry), pop: round(pop, 4), ev_iv: round(ev), ev_hv: round(ev + 31.3), greeks: { delta: 41.2, gamma: 2.1, theta: -9.8, vega: 22.5 },
+    table: prices.filter((_, i) => i % 4 === 0).map((p, i) => ({ price: p, change_pct: round(p / spot - 1, 4), pnl_expiry: pnl_expiry[i * 4], pnl_eval: pnl_eval[i * 4] })),
     expiry_used: req.legs.find((l) => l.expiry)?.expiry ?? null,
   };
 }
