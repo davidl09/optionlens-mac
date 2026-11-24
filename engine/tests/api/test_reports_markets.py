@@ -23,7 +23,7 @@ def ca_seeded(seeded):
     """The seeded US data plus one Canadian listing (RY.TO, CAD) with a chain, bars and IV history."""
     now = datetime.now(timezone.utc)
     symbols.upsert_symbols([{"symbol": CA, "name": "Royal Bank of Canada", "kind": "stock", "sector": "Financial",
-                             "market_cap": 2.6e11, "dividend_yield": 0.033}])
+                             "market_cap": 2.6e11}])
     symbols.set_universe(["AAPL", "XYZ", "SPY"])                       # the US universe is set again ...
     from optionlens.analytics import markets
     symbols.set_universe([CA], markets.CA)                             # ... and Canada's does not touch it
@@ -114,6 +114,6 @@ def test_canadian_symbol_pages(ca_seeded, api):
     assert e["events"] == [] and "not available" in e["unavailable"]
     assert api.get("/api/symbol/AAPL/earnings").json()["unavailable"] is None
     d = api.get(f"/api/symbol/{CA}/dividends").json()
-    assert d["yield"] == pytest.approx(0.033) and "Questrade's indicated yield" in d["unavailable"]
+    assert d["history"] == [] and "current dividend Questrade reports" in d["unavailable"]
     ch = api.get(f"/api/symbol/{CA}/chain").json()
     assert ch["symbol"] == CA and ch["calls"] and all(r["osi"].startswith("RY.TO") for r in ch["calls"] + ch["puts"])

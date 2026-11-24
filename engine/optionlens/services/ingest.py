@@ -300,8 +300,8 @@ def dividend_history_want(now: datetime) -> list[dict]:
     DIVIDEND_HISTORY_YEARS back) or last fetched DIVIDEND_REFRESH_DAYS ago (from DIVIDEND_OVERLAP_DAYS before the
     last close covered); watchlist symbols first."""
     rows = {r["symbol"]: r for r in symbols_repo.list_symbols()}
-    syms = [s for s in dict.fromkeys([*user_repo.watchlist_symbols(),
-                                      *symbols_repo.universe_symbols(include_unoptionable=True)])
+    syms = [s for s in bridge_plan.bridge_symbols(dict.fromkeys([*user_repo.watchlist_symbols(),
+                                                                 *symbols_repo.universe_symbols(include_unoptionable=True)]))
             if s in rows and rows[s]["kind"] in ("stock", "etf")]
     done = div_repo.history_fetches(syms)
     start = date(now.year - DIVIDEND_HISTORY_YEARS, now.month, 1)

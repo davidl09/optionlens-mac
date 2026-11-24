@@ -188,9 +188,8 @@ def _index_q(symbol: str, kind: str | None) -> float | None:
 def dividend_yield(symbol: str, spot: float | None, chain_arrays: ChainArrays | None = None,
                    day: date | None = None) -> float:
     """Continuous q: indices by default table; symbols whose stored dividend history covers the
-    trailing year: trailing-12m / spot; Canadian listings (no Nasdaq dividend history): Questrade's indicated
-    yield when known; otherwise (Nasdaq has no history for NYSE/ARCA listings; a calendar-only row is not a
-    history) implied by put-call parity on the chain (0 when not estimable)."""
+    trailing year: trailing-12m / spot; otherwise (Nasdaq has no history for NYSE/ARCA or Toronto listings; a
+    calendar-only row is not a history) implied by put-call parity on the chain (0 when not estimable)."""
     sym = normalize_symbol(symbol)
     row = symbols_repo.get_symbol(sym)
     q = _index_q(sym, row and row["kind"])
@@ -199,8 +198,6 @@ def dividend_yield(symbol: str, spot: float | None, chain_arrays: ChainArrays | 
     divs = div_repo.for_symbol(sym)
     if covers_trailing_year(divs, day or today()):
         return trailing_yield(divs, spot, day or today())
-    if row and row.get("dividend_yield") is not None:
-        return float(row["dividend_yield"])
     ca = chain_arrays if chain_arrays is not None else load_chain_arrays(sym, ensure_fresh=False)
     if ca is None:
         return 0.0
@@ -225,20 +222,16 @@ def _implied_yields_all() -> dict[str, float]:
 def dividend_yield_map(spots: Mapping[str, float]) -> dict[str, float]:
     """Bulk dividend_yield for {symbol: spot} (no per-symbol queries)."""
     def build():
-        rows = symbols_repo.list_symbols()
-        kinds = {r["symbol"]: r["kind"] for r in rows}
-        indicated = {r["symbol"]: float(r["dividend_yield"]) for r in rows if r.get("dividend_yield") is not None}
-        return (kinds, indicated, div_repo.symbols_with_history(covering=today() - timedelta(days=TRAILING_COVERAGE_DAYS)),
+        kinds = {r["symbol"]: r["kind"] for r in symbols_repo.list_symbols()}
+        return (kinds, div_repo.symbols_with_history(covering=today() - timedelta(days=TRAILING_COVERAGE_DAYS)),
                 div_repo.trailing_sum(today()))
-    kinds, indicated, with_hist, ttm = _memoized("div_inputs", build)
+    kinds, with_hist, ttm = _memoized("div_inputs", build)
     implied = None
     out = {}
     for sym, spot in spots.items():
         q = _index_q(sym, kinds.get(sym))
         if q is None and sym in with_hist:
             q = ttm.get(sym, 0.0) / spot if spot and spot > 0 else 0.0
-        if q is None:
-            q = indicated.get(sym)
         if q is None:
             implied = implied if implied is not None else _memoized("implied_q", _implied_yields_all)
             q = implied.get(sym, 0.0)

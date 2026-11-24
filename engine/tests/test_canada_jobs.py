@@ -71,13 +71,16 @@ class Directory:
     """Questrade as the selection sees it: TSX listings by ticker, one TSX Venture listing, no options for one."""
 
     def __init__(self):
+        def info(price, name, exchange, mcap, has_options=True, sector=None):
+            return SymbolInfo(has_options, price, name=name, security_type="Stock", listing_exchange=exchange,
+                              currency="CAD", market_cap=mcap, sector=sector)
         self.info = {
-            "RY.TO": SymbolInfo(True, 150.0, "ROYAL BANK", "Stock", "TSX", "CAD", 2.9e11, 0.033, "FinancialServices"),
-            "TD.TO": SymbolInfo(True, 90.0, "TORONTO-DOMINION", "Stock", "TSX", "CAD", 1.6e11, 0.04, None),
-            "SMALL.TO": SymbolInfo(True, 5.0, "SMALL CO", "Stock", "TSX", "CAD", 1e8, None, None),
-            "NOOPT.TO": SymbolInfo(False, 50.0, "NO OPTIONS", "Stock", "TSX", "CAD", 9e11, None, None),
-            "VEN.VN": SymbolInfo(True, 1.0, "VENTURE CO", "Stock", "TSXV", "CAD", 5e9, None, None),
-            "XIU.TO": SymbolInfo(True, 40.0, "ISHARES S&P/TSX 60", "Stock", "TSX", "CAD", None, 0.028, None),
+            "RY.TO": info(150.0, "ROYAL BANK", "TSX", 2.9e11, sector="FinancialServices"),
+            "TD.TO": info(90.0, "TORONTO-DOMINION", "TSX", 1.6e11),
+            "SMALL.TO": info(5.0, "SMALL CO", "TSX", 1e8),
+            "NOOPT.TO": info(50.0, "NO OPTIONS", "TSX", 9e11, has_options=False),
+            "VEN.VN": info(1.0, "VENTURE CO", "TSXV", 5e9),
+            "XIU.TO": info(40.0, "ISHARES S&P/TSX 60", "TSX", None),
         }
         self.asked: list[str] = []
 
@@ -115,7 +118,7 @@ async def test_canadian_universe_is_the_largest_optionable_stocks_plus_etfs(dire
     assert "VEN.TO" in directory.asked and "VEN.VN" in directory.asked      # TSX first, then TSX Venture
     assert "1 not listed" in detail and "3 stocks, 1 ETFs" not in detail and "2 stocks, 1 ETFs" in detail
     row = symbols_repo.get_symbol("RY.TO")
-    assert (row["kind"], row["sector"], row["dividend_yield"]) == ("stock", "Financial Services", 0.033)
+    assert (row["kind"], row["sector"], row["name"]) == ("stock", "Financial Services", "ROYAL BANK")
     assert symbols_repo.get_symbol("XIU.TO")["kind"] == "etf"
     # the US universe job does not drop the Canadian members, and vice versa
     symbols_repo.set_universe(["AAPL", "MSFT"])
@@ -265,6 +268,13 @@ def test_bridge_is_never_asked_for_canadian_listings(tmpdb):
     from optionlens.repo import user as user_repo
     user_repo.create_watchlist("w", ["RY.TO", "AAPL"])
     assert "RY.TO" not in bridge_plan.chain_universe(ny(2026, 11, 24, 10, 0))
+    symbols_repo.upsert_symbols([{"symbol": s, "kind": "stock"} for s in ("AAPL", "RY.TO")])
+    symbols_repo.set_universe(["AAPL"])
+    symbols_repo.set_universe(["RY.TO"], markets.CA)
+    from optionlens.services import ingest
+    for now in (ny(2026, 11, 24, 10, 0), ny(2026, 11, 24, 17, 0), ny(2026, 11, 28, 12, 0)):
+        w = json.dumps(ingest.wants(now), default=str)
+        assert "AAPL" in w and "RY.TO" not in w                  # every IBKR work list is US-only
 
 
 async def test_nasdaq_is_never_asked_for_canadian_listings(tmpdb):

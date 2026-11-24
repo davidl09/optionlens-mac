@@ -94,7 +94,7 @@ async def resolve(d: SymbolDirectory, ticker: str) -> tuple[str, SymbolInfo] | N
 def symbol_row(symbol: str, info: SymbolInfo, kind: str, fallback_name: str | None = None) -> dict:
     """symbols-table row of a resolved Canadian listing."""
     return {"symbol": symbol, "name": info.name or fallback_name, "kind": kind, "sector": _sector(info.sector),
-            "market_cap": info.market_cap, "dividend_yield": info.dividend_yield}
+            "market_cap": info.market_cap}
 
 
 def select(resolved: list[tuple[Candidate, str, SymbolInfo]], n_stocks: int) -> list[str]:
