@@ -45,14 +45,20 @@ jobs:
         shell: bash
         run: |
           uv sync --frozen
-          uv run pytest -q
+          uv run pytest -q --ignore=tests/mcp/test_e2e_stdio.py
+      # An agent's MCP client (the SDK's, over stdio) against a real engine process: tools, a report with params,
+      # the current view, a write read back, agent access turned off.
+      - name: MCP end-to-end (stdio client against a running engine)
+        working-directory: engine
+        shell: bash
+        run: uv run pytest -q tests/mcp/test_e2e_stdio.py
 
   shell:
     name: Installer and build scripts — shellcheck, PSScriptAnalyzer (Linux)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --version && shellcheck install.sh scripts/*.sh
+      - run: shellcheck --version && shellcheck install.sh scripts/*.sh resources/mcp/optionlens-mcp
       - name: PowerShell — parse and PSScriptAnalyzer
         shell: pwsh
         run: |
@@ -96,6 +102,11 @@ jobs:
         run: ./scripts/check-linux-glibc.sh release/linux-unpacked 2.28
       - name: Bundled engine starts and stops cleanly (LISTENING + health, stdin closed)
         run: ./scripts/smoke-bundled-engine.sh release/linux-unpacked/resources/python/bin/python3
+      - name: MCP launcher (unpacked app) and the AppImage's --mcp mode (no display) build the agent tools
+        run: |
+          test -x release/linux-unpacked/resources/mcp/optionlens-mcp
+          release/linux-unpacked/resources/mcp/optionlens-mcp --check
+          "$APPIMAGE" --no-sandbox --ozone-platform=headless --mcp --check   # as the Settings snippet runs it: no display
       - name: Bundled engine on Ubuntu 22.04 (container)
         run: >-
           docker run --rm -v "$PWD/release/linux-unpacked:/app:ro" -v "$PWD/scripts:/scripts:ro" ubuntu:22.04
@@ -149,6 +160,11 @@ jobs:
           ls -l release
       - name: Bundled engine starts and stops cleanly (LISTENING + health, stdin closed)
         run: ./scripts/smoke-bundled-engine.sh release/win-unpacked/resources/python/python.exe
+      - name: MCP launcher (.cmd) builds the agent tools
+        shell: pwsh
+        run: |
+          & "release\win-unpacked\resources\mcp\optionlens-mcp.cmd" --check
+          if ($LASTEXITCODE -ne 0) { throw "optionlens-mcp.cmd --check exited with $LASTEXITCODE" }
       - name: The updater accepts the built installer (version resource)
         run: OPTIONLENS_SETUP_EXE="$SETUP" npx vitest run electron/main/updater/pe-version.test.ts
       - name: The zip is the portable app (OptionLens.exe + bundled Python)

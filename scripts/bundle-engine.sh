@@ -69,9 +69,9 @@ rm -rf "${STRIP[@]}" "$LIB"/site-packages/pip "$LIB"/site-packages/pip-*.dist-in
 uv pip install --python "$PY" --no-deps --no-cache ./engine
 "$PY" -m compileall -q "$LIB" >/dev/null
 
-# 4. Smoke: the bundled interpreter imports the engine and its CLI (and, on macOS, nothing needs a newer
+# 4. Smoke: the bundled interpreter imports the engine, its CLI and MCP server (and, on macOS, nothing needs a newer
 #    macOS than the app's minimum; on Linux, nothing needs a newer glibc than the baseline).
-PYTHONNOUSERSITE=1 "$PY" -c "import importlib.metadata as m, optionlens.cli, duckdb, fastapi, numpy, scipy.stats, pyarrow; print('engine bundle ok', m.version('optionlens'))"
+PYTHONNOUSERSITE=1 "$PY" -c "import importlib.metadata as m, optionlens.cli, optionlens.mcp.server, duckdb, fastapi, numpy, scipy.stats, pyarrow; print('engine bundle ok', m.version('optionlens'))"
 if [ "$OS" = mac ]; then "$PY" -I scripts/check-macos-minos.py build/python; fi
 if [ "$OS" = linux ]; then scripts/check-linux-glibc.sh build/python; fi
 du -sh build/python

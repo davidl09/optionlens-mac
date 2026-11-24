@@ -1,0 +1,7 @@
+#!/bin/sh
+# OptionLens MCP server (stdio) for AI agents, macOS and Linux: runs the app's bundled Python with the engine's MCP
+# server (docs/INTEGRATION.md section 10). OptionLens must be running with Settings, AI agents (MCP) turned on.
+# Usage: claude mcp add optionlens -- "<path to this file>"   (the Linux AppImage: "<AppImage>" --mcp instead)
+# -I: no PYTHON* variables or user site-packages; -B: never write bytecode into the (signed, read-only) app.
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+exec "$here/../python/bin/python3" -I -B -m optionlens.mcp "$@"

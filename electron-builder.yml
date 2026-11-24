@@ -15,6 +15,7 @@ files:
   - dist/**
   - dist-electron/**
   - resources/**
+  - "!resources/mcp/**"
   - package.json
   - "!**/*.map"
 asar: true
@@ -23,6 +24,10 @@ afterPack: scripts/after-pack.cjs
 extraResources:
   - from: build/python
     to: python
+  # The MCP launchers for AI agents (docs/INTEGRATION.md §10): <resources>/mcp/optionlens-mcp (macOS, Linux; macOS:
+  # OptionLens.app/Contents/Resources/mcp/optionlens-mcp) and optionlens-mcp.cmd (Windows). They run the Python above.
+  - from: resources/mcp
+    to: mcp
 mac:
   category: public.app-category.finance
   target: dir

@@ -115,6 +115,18 @@ export type RefreshResult =
 
 export type Result = { ok: true } | { ok: false; error: string };
 
+/** A command an MCP client runs to start a stdio server. */
+export interface McpLaunch { command: string; args: string[]; launcher: string }
+/** How an MCP client starts OptionLens's MCP server on this computer (Settings → AI agents, INTEGRATION.md §10). */
+export interface McpSetup {
+  command: string;
+  args: string[];
+  /** The launcher in the app (the AppImage itself on Linux); null in development (the engine's virtualenv Python). */
+  launcher: string | null;
+  launcherFound: boolean;
+  platform: "darwin" | "win32" | "linux";
+}
+
 export interface DesktopApi {
   engine(): Promise<EngineStatus>;
   restartEngine(): Promise<void>;
@@ -140,6 +152,8 @@ export interface DesktopApi {
   installUpdate(): Promise<Result>;
   dismissUpdateNotice(): Promise<void>;
   onUpdateStatus(cb: (s: UpdateStatus) => void): () => void;
+  /** The command that starts OptionLens's MCP server, for the setup snippets in Settings → AI agents. */
+  mcpSetup(): Promise<McpSetup>;
 }
 
 export const IPC = {
@@ -157,6 +171,7 @@ export const IPC = {
   checkForUpdates: "update:check",
   installUpdate: "update:install",
   dismissUpdateNotice: "update:dismiss-notice",
+  mcpSetup: "mcp:setup",
   updateEvent: "event:update",
   engineEvent: "event:engine",
   bridgeEvent: "event:bridge",

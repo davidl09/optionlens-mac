@@ -3,7 +3,7 @@
 // differs per OS comes from platform/ (desktop integration) and updater/installers (updates).
 import { app, BrowserWindow, dialog, Menu, Notification, powerMonitor, protocol, session } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { Bridge } from "../bridge/bridge";
@@ -24,6 +24,7 @@ import { withoutAppImageEnv } from "./appimage-env";
 import { allowPermission } from "./permissions";
 import { APP_SCHEME, serveAsset } from "./protocol";
 import { launchAtLoginFromOs } from "./login-item";
+import { mcpArgs, mcpPythonArgs, mcpSetup } from "./mcp-setup";
 import { desktopPlatform, type PlatformDeps } from "./platform";
 import { parseStoredSettings, validateSettings } from "./settings";
 import { AppTray } from "./tray";
@@ -32,9 +33,6 @@ import { platformInstaller } from "./updater/installers";
 import { createMainWindow } from "./window";
 
 protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
-
-if (!app.requestSingleInstanceLock()) app.quit();
-else void app.whenReady().then(main);
 
 const textFiles: PlatformDeps["files"] = {
   read: (path) => { try { return readFileSync(path, "utf8"); } catch { return null; } },
@@ -45,15 +43,39 @@ const execFileAsync = promisify(execFile);
 const run: PlatformDeps["run"] = async (file, args, timeout) =>
   (await execFileAsync(file, args, { timeout, maxBuffer: 1024 * 1024, env: withoutAppImageEnv(process.env) })).stdout;
 
+// `OptionLens --mcp`: an MCP server, not the app (no single-instance lock: the app may be running).
+const mcp = mcpArgs(process.argv);
+if (mcp) runMcpServer(mcp);
+else if (!app.requestSingleInstanceLock()) app.quit();
+else void app.whenReady().then(main);
+
+function platformDeps(): PlatformDeps {
+  return { app, argv: process.argv, env: process.env, execPath: process.execPath, packaged: app.isPackaged, home: app.getPath("home"), files: textFiles, run };
+}
+
+function engineCommand(platform: ReturnType<typeof desktopPlatform>) {
+  return resolveEngineCommand({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), env: process.env, layout: platform });
+}
+
+/**
+ * `OptionLens --mcp [args]`: the MCP server over this process's stdio (no window, no engine), exits with its code.
+ * The AppImage's snippet adds --no-sandbox --ozone-platform=headless before it (platform/linux.ts): no display needed.
+ */
+function runMcpServer(args: string[]): void {
+  const cmd = engineCommand(desktopPlatform(process.platform, platformDeps()));
+  const { PYTHONHOME: _home, PYTHONPATH: _path, ...inherited } = process.env;
+  const child = spawn(cmd.python, mcpPythonArgs(args), { stdio: "inherit", cwd: cmd.cwd, env: { ...inherited, ...cmd.env }, windowsHide: true });
+  child.once("error", (e) => { process.stderr.write(`optionlens --mcp: ${e.message}\n`); app.exit(1); });
+  child.once("exit", (code) => app.exit(code ?? 1));
+}
+
 async function main(): Promise<void> {
   const userData = app.getPath("userData");
   const log = createLogger(join(app.getPath("logs"), "main.log"));
   process.on("uncaughtException", (e) => log.error(`uncaught: ${e.stack ?? e.message}`));
   process.on("unhandledRejection", (e) => log.error(`unhandled rejection: ${e instanceof Error ? e.stack : String(e)}`));
 
-  const platform = desktopPlatform(process.platform, {
-    app, argv: process.argv, env: process.env, execPath: process.execPath, packaged: app.isPackaged, home: app.getPath("home"), files: textFiles, run,
-  });
+  const platform = desktopPlatform(process.platform, platformDeps());
   platform.initNotifications();
   // Linux asks the session bus whether a tray can show; the answer is needed before the window decision.
   const trayIcons = platform.trayIcons().catch(() => null);
@@ -112,8 +134,9 @@ async function main(): Promise<void> {
   const probation = launch === "rolling-back" ? null : launch;
 
   // ---- engine ----
+  const engineCmd = engineCommand(platform);
   const engine = new EngineSupervisor({
-    command: resolveEngineCommand({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: appRoot, env: process.env, layout: platform }),
+    command: engineCmd,
     dataDir,
     // stdin is the engine's stop pipe (engine.ts); windowsHide: no console window for python.exe.
     spawn: (cmd, args, opts) => spawn(cmd, args, { ...opts, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }),
@@ -221,6 +244,8 @@ async function main(): Promise<void> {
     checkForUpdates: () => updater.check(),
     installUpdate: () => updater.installNow(),
     dismissUpdateNotice: () => updater.dismissNotice(),
+    mcpSetup: () => mcpSetup({ packaged: app.isPackaged, platform: process.platform, resourcesPath: process.resourcesPath, launch: platform.mcpLaunch,
+      devPython: engineCmd.python, dataDir, defaultDataDir: join(app.getPath("appData"), "OptionLens", "data"), exists: existsSync }),
   });
 
   // ---- menus, tray, window ----

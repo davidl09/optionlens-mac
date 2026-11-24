@@ -7,7 +7,7 @@ import type { LoginItemStatus } from "../../shared/api";
 import { desktopEntryKeys } from "../desktop-entry";
 import { standardMenu } from "./menu";
 import { posixPython } from "./python-layout";
-import { OPENED_AT_LOGIN_ARG, type DesktopPlatform, type PlatformDeps, type RunFn } from "./types";
+import { MCP_ARG, OPENED_AT_LOGIN_ARG, type DesktopPlatform, type PlatformDeps, type RunFn } from "./types";
 
 export const AUTOSTART_FILE = "optionlens.desktop";
 
@@ -74,8 +74,14 @@ export function linuxPlatform(d: PlatformDeps): DesktopPlatform {
     const content = d.files.read(file);
     return content !== null && autostartEnabled(content) ? "enabled" : "disabled";
   };
+  // The AppImage mounts at a new path on every run: MCP clients start the AppImage itself with --mcp (mcp-setup.ts),
+  // with Chromium needing no display (headless) and no sandbox (this process shows no web content at all).
+  const appImage = d.packaged && d.env.APPIMAGE && isAbsolute(d.env.APPIMAGE) ? d.env.APPIMAGE : null;
   return {
     ...posixPython,
+    mcpLaunch: (resources) => (appImage
+      ? { command: appImage, args: ["--no-sandbox", "--ozone-platform=headless", MCP_ARG], launcher: appImage }
+      : posixPython.mcpLaunch(resources)),
     loginItem: {
       status,
       set: (on) => {

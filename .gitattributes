@@ -1,0 +1,3 @@
+# The MCP launchers (resources/mcp): the .cmd with CRLF for cmd.exe, the shell script with LF.
+resources/mcp/*.cmd text eol=crlf
+resources/mcp/optionlens-mcp text eol=lf

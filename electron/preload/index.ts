@@ -29,6 +29,7 @@ const api: DesktopApi = {
   installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
   dismissUpdateNotice: () => ipcRenderer.invoke(IPC.dismissUpdateNotice),
   onUpdateStatus: (cb) => subscribe(IPC.updateEvent, cb),
+  mcpSetup: () => ipcRenderer.invoke(IPC.mcpSetup),
 };
 
 contextBridge.exposeInMainWorld("optionlens", api);

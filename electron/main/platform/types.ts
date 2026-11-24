@@ -2,7 +2,7 @@
 // one module (mac.ts, windows.ts, linux.ts); index.ts picks it. Nothing else in the main process asks which
 // OS it runs on. The modules take Electron's `app` and the file system as dependencies, so they are unit-tested.
 import type { MenuItemConstructorOptions } from "electron";
-import type { LoginItemStatus } from "../../shared/api";
+import type { LoginItemStatus, McpLaunch } from "../../shared/api";
 
 export interface LoginItem {
   /** What the OS has (the user may have changed it outside OptionLens). */
@@ -22,6 +22,8 @@ export interface DesktopPlatform {
   bundledPython(resourcesPath: string): string;
   /** The Python of a development virtualenv (`engine/.venv`). */
   venvPython(venvDir: string): string;
+  /** How an MCP client starts the packaged app's MCP server (stdio): Settings → AI agents shows it. */
+  mcpLaunch(resourcesPath: string): McpLaunch;
   loginItem: LoginItem;
   /** The tray icons, or null when this desktop shows no tray: closing the window then quits the app. */
   trayIcons(): Promise<TrayIcons | null>;
@@ -59,3 +61,6 @@ export interface PlatformDeps {
 
 /** Added to the login item's command line, so a launch at login is recognised (Windows, Linux). */
 export const OPENED_AT_LOGIN_ARG = "--opened-at-login";
+
+/** `OptionLens --mcp [args]`: run the bundled MCP server over this process's stdio instead of the app (mcp-setup.ts). */
+export const MCP_ARG = "--mcp";

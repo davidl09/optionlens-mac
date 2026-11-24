@@ -2,9 +2,9 @@
 // to run code with a broken or missing signature; after packing, Electron's original signature no longer
 // matches. `codesign --deep` only signs code in the standard nested locations (Frameworks, Helpers, …),
 // not the Mach-O files of the bundled Python in Contents/Resources/python, so those are signed one by one
-// first, then the app itself, and the result is verified.
+// first, then the app itself, and the result is verified. On macOS and Linux the MCP launcher is made executable.
 const { execFileSync } = require("node:child_process");
-const { closeSync, lstatSync, openSync, readdirSync, readSync } = require("node:fs");
+const { chmodSync, closeSync, existsSync, lstatSync, openSync, readdirSync, readSync } = require("node:fs");
 const { join } = require("node:path");
 
 const MACHO = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]);
@@ -30,9 +30,18 @@ function machOFiles(dir, out = []) {
 
 exports.machOFiles = machOFiles;
 
+/** The MCP launcher (resources/mcp/optionlens-mcp) must stay executable, whatever the copy kept. */
+function makeLauncherExecutable(resources) {
+  const launcher = join(resources, "mcp", "optionlens-mcp");
+  if (!existsSync(launcher)) throw new Error(`no MCP launcher at ${launcher}`);
+  chmodSync(launcher, 0o755);
+}
+
 exports.default = async function afterPack(context) {
+  if (context.electronPlatformName === "linux") makeLauncherExecutable(join(context.appOutDir, "resources"));
   if (context.electronPlatformName !== "darwin") return;
   const app = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  makeLauncherExecutable(join(app, "Contents", "Resources"));
   const nested = machOFiles(join(app, "Contents", "Resources", "python"));
   for (let i = 0; i < nested.length; i += 200) {
     execFileSync("codesign", ["--force", "--sign", "-", ...nested.slice(i, i + 200)], { stdio: "inherit" });
