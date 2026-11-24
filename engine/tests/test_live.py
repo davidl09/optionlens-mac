@@ -420,3 +420,16 @@ def test_mode_setting_defaults_saves_and_survives_a_restart(tmp_path):
     assert ModeSetting(path, "stream").get() == "stream"
     with pytest.raises(ValueError):
         ModeSetting(path, "turbo")
+
+
+def test_snapshot_returns_the_latest_live_values():
+    """GET /api/live/quotes (the MCP tool live_quotes): the values in memory, of the keys asked for or all."""
+    h, clock = make_hub(driver=FakeDriver())
+    h.publish("questrade", {"XYZ": {"price": 100.0, "bid": 99.9}}, {C1: {"bid": 1.0}})
+    clock.t += 1
+    h.publish("questrade", {"XYZ": {"price": 100.5}}, {})
+    s = h.snapshot()
+    assert s["quotes"]["XYZ"]["price"] == 100.5 and s["quotes"]["XYZ"]["bid"] == 99.9
+    assert s["quotes"]["XYZ"]["source"] == "questrade" and s["quotes"]["XYZ"]["ts"] and "_at" not in s["quotes"]["XYZ"]
+    assert set(s["options"]) == {C1} and "status" in s
+    assert h.snapshot(["SPY"], []) == {"status": s["status"], "quotes": {}, "options": {}}

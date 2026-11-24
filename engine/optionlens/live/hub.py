@@ -204,6 +204,15 @@ class LiveHub:
     def status(self) -> dict:
         return self._status
 
+    def snapshot(self, symbols: list[str] | None = None, contracts: list[str] | None = None) -> dict:
+        """The latest live values in memory ({status, quotes: {SYM: fields}, options: {OSI: fields}}, each with its
+        `ts`): of the given keys, or of every key that has one. Only what some window kept live has values."""
+        def pick(latest: dict[str, Fields], keys: list[str] | None) -> dict[str, Fields]:
+            ks = latest.keys() if keys is None else [k for k in keys if k in latest]
+            return {k: self._public(latest[k]) for k in ks}
+        return {"status": self._status, "quotes": pick(self._latest_q, symbols),
+                "options": pick(self._latest_o, contracts)}
+
     def set_mode(self, mode: str) -> None:
         """The user switched the Questrade live mode: passed to the driver at once (when there is one)."""
         if (d := self._driver()) is not None:

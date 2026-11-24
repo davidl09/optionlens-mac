@@ -17,9 +17,10 @@ from ..config import Settings, get_settings
 from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
-from ..services import alerts, ingest
+from ..services import alerts, ingest, mcp_access
 from ..services.errors import BadRequest, NotFound
 from . import (
+    routes_agents,
     routes_backtest,
     routes_calc,
     routes_ingest,
@@ -124,11 +125,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = s
     _install_errors(app)
     for module in (routes_system, routes_symbol, routes_calc, routes_backtest,
-                   routes_reports, routes_market, routes_user, routes_ingest, routes_sources, routes_live):
+                   routes_reports, routes_market, routes_user, routes_ingest, routes_sources, routes_live,
+                   routes_agents):
         app.include_router(module.router)
     app.add_middleware(BodyLimit)
     if s.auth_enabled:
-        app.add_middleware(BearerAuth, token=s.api_token)
+        app.add_middleware(BearerAuth, token=s.api_token, mcp=mcp_access.instance)
     app.add_middleware(CORSMiddleware, allow_origins=list(s.cors_origins), allow_methods=list(CORS_METHODS),
                        allow_headers=list(CORS_HEADERS), allow_credentials=False)   # outermost: preflights skip auth
     return app

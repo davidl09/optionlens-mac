@@ -59,6 +59,18 @@ async def status():
     return ApiJSON(live.status())
 
 
+@router.get("/quotes")
+async def quotes(symbols: str | None = Query(None, description="Comma-separated tickers (default: every live one)"),
+                 contracts: str | None = Query(None, description="Comma-separated OSI codes (default: every live one)")):
+    """The latest live values in memory: {status, quotes: {SYM: Quote fields}, options: {OSI: option fields}}. Only
+    symbols / contracts some window keeps live (on screen) have values; others are absent (use the stored data)."""
+    def split(raw: str | None) -> list[str] | None:
+        return None if raw is None else [x.strip().upper() for x in raw.split(",") if x.strip()]
+    syms = split(symbols)
+    return ApiJSON(live.instance().snapshot(None if syms is None else [symbol_param(s) for s in syms],
+                                            split(contracts)))
+
+
 class ModeIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Mode

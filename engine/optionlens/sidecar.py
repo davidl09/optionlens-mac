@@ -110,16 +110,23 @@ def bound_port(servers: list[asyncio.base_events.Server]) -> int:
 class SidecarServer(uvicorn.Server):
     """uvicorn.Server that announces its port and watches the parent process."""
 
-    def __init__(self, config: uvicorn.Config, parent: ParentWatch | None = None, out=None):
+    def __init__(self, config: uvicorn.Config, parent: ParentWatch | None = None, out=None,
+                 on_listening: Callable[[int], None] | None = None):
         super().__init__(config)
-        self.parent, self.out = parent, out
+        self.parent, self.out, self.on_listening = parent, out, on_listening
         self._watchdog: asyncio.Task | None = None
 
     async def startup(self, sockets: list[socket.socket] | None = None) -> None:
         await super().startup(sockets)
         if self.should_exit:
             return
-        print(f"LISTENING {bound_port(self.servers)}", file=self.out, flush=True)
+        port = bound_port(self.servers)
+        if self.on_listening is not None:
+            try:
+                self.on_listening(port)
+            except OSError as e:          # e.g. the MCP connection file could not be written: the API still serves
+                log.warning("after binding port %d: %s", port, e)
+        print(f"LISTENING {port}", file=self.out, flush=True)
         if self.parent is not None:
             self._watchdog = asyncio.create_task(self.watch_parent())
 
@@ -150,10 +157,12 @@ def server_config(app: ASGIApp, settings: Settings) -> uvicorn.Config:
                           timeout_graceful_shutdown=GRACEFUL_S)
 
 
-def serve(app: ASGIApp, settings: Settings, exit_on_stdin_eof: bool = False) -> int:
-    """Run until stdin EOF (if asked), parent death or SIGTERM/SIGINT. Returns the process exit code."""
+def serve(app: ASGIApp, settings: Settings, exit_on_stdin_eof: bool = False,
+          on_listening: Callable[[int], None] | None = None) -> int:
+    """Run until stdin EOF (if asked), parent death or SIGTERM/SIGINT; `on_listening(port)` once the socket is bound
+    (before `LISTENING` is printed). Returns the process exit code."""
     parent = parent_watch(settings.parent_pid) if settings.parent_pid is not None else None
-    server = SidecarServer(server_config(app, settings), parent)
+    server = SidecarServer(server_config(app, settings), parent, on_listening=on_listening)
     if exit_on_stdin_eof:
         threading.Thread(target=watch_stdin, args=(sys.stdin.buffer, lambda: server.request_exit("stdin closed")),
                          name="stdin-eof", daemon=True).start()

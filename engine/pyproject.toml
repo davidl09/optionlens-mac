@@ -12,6 +12,7 @@ dependencies = [
   "pyarrow>=26.0.1",
   "tzdata>=2026.6",
   "websockets>=13",
+  "mcp>=2.3,<3",
 ]
 
 [dependency-groups]

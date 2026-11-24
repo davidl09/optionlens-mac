@@ -63,9 +63,12 @@ def _serve(port: int | None, exit_on_stdin_eof: bool) -> int:
     from . import sidecar
     from .api.app import create_app
     from .config import get_settings
+    from .services import mcp_access
 
     s = get_settings() if port is None else replace(get_settings(), port=port)
-    return sidecar.serve(create_app(s), s, exit_on_stdin_eof=exit_on_stdin_eof)
+    # The AI-agent connection file (when agent access is on) gets the port bound now (docs/INTEGRATION.md §10).
+    return sidecar.serve(create_app(s), s, exit_on_stdin_eof=exit_on_stdin_eof,
+                         on_listening=lambda p: mcp_access.instance().listening(p))
 
 
 def main(argv: list[str] | None = None) -> int:

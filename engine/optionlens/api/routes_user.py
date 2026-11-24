@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..services import user
 from .deps import respond, symbol_param
@@ -24,7 +24,7 @@ class PresetIn(BaseModel):
 
 
 class AlertIn(BaseModel):
-    kind: str | None = None
+    kind: str | None = Field(default=None, json_schema_extra={"enum": [*user.ALERT_KINDS, None]})
     symbol: str | None = None
     params: dict[str, Any] | None = None
     enabled: bool | None = None
