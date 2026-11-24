@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api/symbol/{sym}", tags=["symbol"])
 Sym = Depends(symbol_param)
 Range = Literal["1m", "3m", "6m", "1y", "3y", "5y", "10y", "max"]
 IntradayRange = Literal["1d", "5d", "1m", "3m"]
+BarsRange = Literal["1d", "5d", "1m", "3m", "6m", "1y", "3y", "5y", "10y", "max"]   # daily: 1m..max; intraday: 1d..3m
 Interval = Literal["1m", "5m", "15m", "1h"]
 
 
@@ -34,8 +35,9 @@ async def summary(sym: str = Sym):
 
 
 @router.get("/bars")
-async def bars(sym: str = Sym, range: str = "1y", interval: Interval | None = None, extended: bool = False):
-    """Daily bars (Bar[]) of `range`; with `interval`, intraday bars (IntradayBars) of an intraday `range`."""
+async def bars(sym: str = Sym, range: BarsRange = "1y", interval: Interval | None = None, extended: bool = False):
+    """Daily bars (Bar[]) of `range` (1m..max); with `interval`, intraday bars (IntradayBars) of `range` 1d|5d|1m|3m
+    (1d: 1m/5m/15m, 5d: 5m/15m/1h, 1m: 15m/1h, 3m: 1h), regular hours unless `extended`."""
     if interval is not None:
         return ApiJSON(await intraday.bars(sym, interval, _literal(range, IntradayRange), extended))
     return await respond(symbol.bars, sym, _literal(range, Range))

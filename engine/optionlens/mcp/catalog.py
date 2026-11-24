@@ -98,8 +98,10 @@ CURATED: dict[str, Curated] = {
                                              "52w/3y range, beta, IV30 with IV rank/percentile, HV20, option volume, "
                                              f"next earnings / dividend, optionable (true/false/null=unknown). {U_PRICE} "
                                              f"{U_FRAC} {U_PROV}"),
-    "GET /api/symbol/{sym}/bars": Curated("symbol_bars", f"Daily OHLCV bars (oldest first) with SMA20/50/200. {U_PRICE} "
-                                          f"{PAGING}"),
+    "GET /api/symbol/{sym}/bars": Curated("symbol_bars", "Daily OHLCV bars (oldest first) with SMA20/50/200; with "
+                                          "interval=1m|5m|15m|1h and range=1d|5d|1m|3m, intraday bars instead (ts = bar "
+                                          "start, regular hours unless extended=true; `missing` = spans not stored). "
+                                          f"{U_PRICE} {PAGING}"),
     "GET /api/symbol/{sym}/price-action": Curated("symbol_price_action", f"Daily moves (newest first), gap and "
                                                   f"intraday vs overnight statistics. {U_PRICE} {U_FRAC}"),
     "GET /api/symbol/{sym}/chain": Curated("symbol_chain", "Option chain of one expiry (default: nearest): underlying "
