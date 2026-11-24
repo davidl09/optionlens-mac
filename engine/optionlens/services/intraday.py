@@ -4,14 +4,21 @@ Bars are stored per (symbol, interval) with the spans already fetched (repo.intr
 missing spans, from the server-side candle source (Questrade) when it is available. Spans no source here could fill
 are answered as `missing`: the desktop app then asks the IBKR bridge, which pushes them to
 POST /api/ingest/intraday-bars (`store_pushed`). Concurrent requests for the same series share one fetch.
+
+Live bars: the source's candles end minutes before now (Questrade's ~15 min, even on a real-time account), so the 1m
+bars the live subsystem builds from the quotes of a symbol while it is live (live/bars.py, stored as source "live",
+not yet stored ones from memory) follow the source's newest bar, aggregated to the interval shown. A source's candle
+replaces them; a fetched span is only stored up to where live bars alone cover it (asked for again until the source
+has those minutes). `lag_s`: how far the source's newest bar ends before now.
 """
 from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
+from .. import live
 from ..analytics import intraday
 from ..models import IntradayBar, normalize_symbol
 from ..net import FetchError
@@ -42,10 +49,27 @@ def _candle_sources() -> list[CandleSource]:
     return [s for s in chain_source.server_sources() if hasattr(s, "fetch_candles")]
 
 
+def _live_rows(symbol: str, want: Span, pending: list[IntradayBar]) -> list[dict]:
+    """The live 1m bars of `symbol` in `want`: stored ones and the not yet stored `pending` ones (ascending)."""
+    rows = {r["ts"]: r for r in repo.live_bars(symbol, *want)}
+    for b in pending:
+        if want[0] <= b.ts <= want[1]:
+            rows[b.ts] = {"ts": b.ts, "open": b.open, "high": b.high, "low": b.low, "close": b.close,
+                          "volume": b.volume, "source": repo.LIVE, "delayed": False}
+    return [rows[t] for t in sorted(rows)]
+
+
 def _store(symbol: str, interval: str, bars: list[IntradayBar], spans: list[Span], source: str,
-           delayed: bool | None, now: datetime) -> int:
-    """Stores bars and the parts of `spans` that are settled (older than intraday.RECENT)."""
-    settled = [(s, intraday.settled(e, now)) for s, e in spans]
+           delayed: bool | None, now: datetime, pending: list[IntradayBar]) -> int:
+    """Stores bars and the parts of `spans` that are settled: older than intraday.RECENT, and not where only live
+    bars cover them (`pending`: the live bars not stored yet)."""
+    settled = []
+    for s, e in spans:
+        end = intraday.settled(e, now)
+        live_ts = [r["ts"] for r in _live_rows(symbol, (s, e), pending)]
+        if (cut := intraday.live_only_from((s, e), (b.ts for b in bars), live_ts, interval)) is not None:
+            end = min(end, cut)
+        settled.append((s, end))
     return repo.store(symbol, interval, bars, [(s, e) for s, e in settled if e > s], source, delayed, now,
                       now - intraday.RETENTION[interval])
 
@@ -73,7 +97,7 @@ async def _fill(symbol: str, interval: str, gaps: list[Span], now: datetime) -> 
         except FetchError as e:
             return gaps[i:], f"{src.name}: {getattr(e, 'reason', None) or e}"
         await asyncio.to_thread(_store, symbol, interval, bars, [(a, b)], src.name,
-                                getattr(src, "last_delayed", None), now)
+                                getattr(src, "last_delayed", None), now, live.pending_bars(symbol))
     return [], None
 
 
@@ -97,7 +121,10 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
     async with lock:
         gaps = await asyncio.to_thread(_gaps, sym, interval, want)
         missing, problem = await _fill(sym, interval, gaps, now) if gaps else ([], None)
-    rows = await asyncio.to_thread(repo.bars, sym, interval, *want)
+    stored = await asyncio.to_thread(repo.bars, sym, interval, *want)
+    source = [r for r in stored if r["source"] != repo.LIVE]
+    live_rows = await asyncio.to_thread(_live_rows, sym, want, live.pending_bars(sym))
+    rows = intraday.with_live(source, live_rows, interval)
     has_extended = any(not intraday.is_regular(r["ts"]) for r in rows)
     shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"])]
     sources, delayed = _summary(shown)
@@ -107,7 +134,16 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
         "bars": [{k: r[k] for k in ("ts", "open", "high", "low", "close", "volume")} for r in shown],
         "sources": sources, "delayed": delayed,
         "missing": [{"start": a, "end": b} for a, b in missing], "problem": problem,
+        "lag_s": _lag_s(source, interval, now),
     }
+
+
+def _lag_s(source: list[dict], interval: str, now: datetime) -> int | None:
+    """Seconds from the end of the source's newest bar to `now` (null without source bars)."""
+    if not source:
+        return None
+    end = source[-1]["ts"] + timedelta(seconds=intraday.INTERVAL_S[interval])
+    return max(0, round((now - end).total_seconds()))
 
 
 def store_pushed(body: dict, now: datetime | None = None) -> dict:
@@ -121,5 +157,6 @@ def store_pushed(body: dict, now: datetime | None = None) -> dict:
         raise BadRequest("every span needs start < end")
     bars = [IntradayBar(b["ts"], b["open"], b["high"], b["low"], b["close"],
                         int(b["volume"]) if b.get("volume") is not None else None) for b in body["bars"]]
-    n = _store(sym, interval, bars, spans, body["source"], body.get("delayed"), now or datetime.now(timezone.utc))
+    n = _store(sym, interval, bars, spans, body["source"], body.get("delayed"), now or datetime.now(timezone.utc),
+               live.pending_bars(sym))
     return {"stored": n, "symbol": sym}

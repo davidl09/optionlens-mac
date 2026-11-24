@@ -8,7 +8,7 @@ export type Right = "C" | "P";
 export type Pricing = "real" | "model";
 export type SymbolKind = "stock" | "etf" | "index";
 /** Where a value came from (INTEGRATION.md §5). */
-export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed";
+export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "live";
 
 export interface SymbolRef { symbol: string; name: string; kind: SymbolKind }
 
@@ -41,6 +41,9 @@ export interface IntradayBars {
   delayed: boolean | null;          // null: unknown or mixed
   missing: TimeSpan[];              // spans no engine-side source could fill (the desktop app asks the IBKR bridge)
   problem: string | null;           // why, when a configured source could not be used (e.g. "questrade: not connected")
+  /** Seconds from the end of the source's newest bar to now (null: no source bars); the bars after it are built from
+   * live quotes (source "live") while the symbol is live. Absent from older engines. */
+  lag_s?: number | null;
 }
 
 // ---------------- status ----------------

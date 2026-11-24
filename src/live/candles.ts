@@ -1,6 +1,7 @@
 // The live candle of an intraday chart (pure): live prices aggregated into the current interval's bar, which rolls to
 // a new bar at the interval boundary. Volume: the quote's day volume minus its value when the bar began (deltas);
-// without day volumes the bar keeps the source's volume (null for a bar the source does not have yet).
+// without day volumes the bar keeps the source's volume (null for a bar the source does not have yet). The candles are
+// kept per series in the live store (LiveStore.candle), so a reload or remount of the chart continues them.
 import type { IntradayBar } from "../api/types";
 import { nyParts } from "../lib/chartRange";
 
@@ -48,19 +49,29 @@ export function nextCandle(state: LiveCandle | null, tick: LiveTick, intervalMs:
   const volume = tick.volume !== null && anchor !== null ? (base ?? 0) + Math.max(0, tick.volume - anchor) : base;
   return {
     start, open: stored ? stored.open : p, high: Math.max(stored?.high ?? p, p), low: Math.min(stored?.low ?? p, p), close: p,
-    baseVolume: base, volumeAnchor: anchor, lastVolume: tick.volume, volume, closed: state ? [...state.closed, asBar(state)] : [],
+    baseVolume: base, volumeAnchor: anchor, lastVolume: tick.volume, volume,
+    closed: state ? [...state.closed, asBar(state)].slice(-MAX_CLOSED) : [],
   };
 }
 
-/** The stored bars with the live ones (rolled-over bars, then the current one): each replaces the stored bar of
- * its start or follows the last one. */
+/** Closed live candles kept per series (a day of 1m bars is ~1,000). */
+export const MAX_CLOSED = 2000;
+
+/**
+ * The loaded bars with the live ones, merged by start: the forming candle replaces the loaded bar of its start; a
+ * closed live candle replaces the loaded last bar or follows it, and inside the loaded bars only fills a start they
+ * lack (a reloaded bar there is the engine's own: the source's, or one it built from the same live quotes). Closed
+ * candles before the first loaded bar are left out (an older range).
+ */
 export function withLiveCandle(bars: IntradayBar[], c: LiveCandle | null): IntradayBar[] {
   if (!c) return bars;
-  const out = [...bars];
-  for (const bar of [...c.closed, asBar(c)]) {
-    const t = Date.parse(bar.ts), last = out[out.length - 1];
-    if (last && Date.parse(last.ts) === t) out[out.length - 1] = bar;
-    else if (!last || Date.parse(last.ts) < t) out.push(bar);
+  const first = bars.length ? Date.parse(bars[0].ts) : -Infinity;
+  const last = bars.length ? Date.parse(bars[bars.length - 1].ts) : -Infinity;
+  const byStart = new Map(bars.map((b) => [Date.parse(b.ts), b] as const));
+  for (const b of c.closed) {
+    const t = Date.parse(b.ts);
+    if (t >= last || (t >= first && !byStart.has(t))) byStart.set(t, b);
   }
-  return out;
+  byStart.set(c.start, asBar(c));
+  return [...byStart.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
 }

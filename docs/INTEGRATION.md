@@ -112,9 +112,22 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   `POST /api/ingest/intraday-bars {source, symbol, interval, delayed: bool|null, spans: [{start, end}], bars: [{ts,
   open, high, low, close, volume}]}` → `{stored, symbol}` (spans: what the window covered; bars outside regular hours
   are kept for the extended view). `sources` / `delayed` describe the bars shown (Questrade's `delayed` is the
-  account's last seen quote delay; IBKR historical bars: null, unknown). Live: while quotes flow the chart's last bar
-  follows the live price (≤ 1 update/s), rolling to a new bar at the interval boundary; its volume grows by the
-  quote's day-volume deltas, or stays the source's bar volume without them. Intraday SMAs are over the loaded bars
+  account's last seen quote delay; IBKR historical bars: null, unknown). Live-built bars (source `live`): the
+  candle source answers the latest minutes late (Questrade's candles end ~15 minutes before now, even on a real-time
+  account; each fetch is logged with its window end, count, newest candle and lag), so while a symbol is live (§9,
+  streamed or polled, any window) the engine aggregates its real-time quotes into 1m bars (a minute holds a bar only
+  when the day volume rose, or without day volumes the price changed; volume = day-volume deltas; delayed quotes
+  build none), stores them in `intraday_bars` as source `live` (1m only, no span, kept 3 days) and serves them,
+  aggregated to the interval shown, after the source's newest bar. A source's bar always replaces them (same start:
+  stored over it; earlier: live bars are not shown inside the source's bars); a fetched span is recorded only up to
+  where live bars alone cover it, so those minutes are asked for again until the source has them. `lag_s`: seconds
+  from the end of the source's newest bar to now (null without source bars); the chart notes "latest minutes built
+  from live quotes" when it exceeds 2 minutes while live-built bars are shown, and reloads the bars every 60 s while
+  visible. Live: while quotes flow the chart's last bar follows the live price (≤ 1 update/s), rolling to a new bar
+  at the interval boundary; its volume grows by the quote's day-volume deltas, or stays the source's bar volume
+  without them. The live candles (closed ones too) are kept per symbol and interval for the window's lifetime, so a
+  reload or remount of the chart keeps them: merged with the loaded bars by start (a loaded bar replaces a closed live
+  one; the forming one replaces the loaded bar of its start). Intraday SMAs are over the loaded bars
   ("SMA 20 (bars)"); earnings / dividend markers are drawn on daily ranges only; the time axis has one slot per bar
   (nights and weekends collapsed).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):

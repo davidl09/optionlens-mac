@@ -14,7 +14,7 @@ import type { IntradayResult } from "../../../electron/shared/api";
 import { barLabel, barTitle, CHART_RANGES, chartView, inRegularHours, INTERVAL_LABEL, INTERVAL_MS, RANGE_INTERVALS, smaOf, type ChartView } from "../../lib/chartRange";
 import { todayNY } from "../../lib/dates";
 import { fmt } from "../../lib/format";
-import { isFlowing, useLive, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
+import { isFlowing, liveStore, useLive, useLiveInterval, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
 import { nextCandle, withLiveCandle, type LiveCandle } from "../../live/candles";
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
@@ -76,21 +76,31 @@ function useBridgeFill(sym: string, data: IntradayBars | null, reload: () => voi
   return state;
 }
 
-/** The last bar following the live price while quotes flow (at most once a second; regular hours unless extended). */
+/**
+ * The last bar following the live price while quotes flow (at most once a second; regular hours unless extended).
+ * The live candles are kept in the live store per series, so a reload of the bars or a remount continues them (merged
+ * with the loaded bars by start, live/candles.ts).
+ */
 function useLiveCandle(sym: string, bars: IntradayBar[], intervalMs: number, extended: boolean): IntradayBar[] {
   useLive({ symbols: [sym] });
   const flowing = isFlowing(useLiveStatus());
   const patch = useThrottled(useLiveQuote(sym), 1000);
-  const [candle, setCandle] = useState<LiveCandle | null>(null);
-  useEffect(() => setCandle(null), [bars, intervalMs]);   // new stored bars: start again from them
+  const series = `${sym}|${intervalMs}|${extended ? "ext" : "rth"}`;
+  const [candle, setCandle] = useState<LiveCandle | null>(() => liveStore.candle(series));
+  useEffect(() => setCandle(liveStore.candle(series)), [series]);
   useEffect(() => {
     if (!flowing || patch?.price == null) return;
     const at = patch.ts ? Date.parse(patch.ts) : Date.now();
     if (!extended && !inRegularHours(at)) return;
-    setCandle((c) => nextCandle(c, { price: patch.price as number, volume: patch.volume ?? null, at }, intervalMs, bars[bars.length - 1]));
-  }, [patch, flowing, extended, intervalMs, bars]);
+    const next = nextCandle(liveStore.candle(series), { price: patch.price, volume: patch.volume ?? null, at }, intervalMs, bars[bars.length - 1]);
+    liveStore.keepCandle(series, next);
+    setCandle(next);
+  }, [patch, flowing, extended, intervalMs, bars, series]);
   return useMemo(() => withLiveCandle(bars, flowing ? candle : null), [bars, candle, flowing]);
 }
+
+/** The source's newest bar lags this much (s) and live-built bars follow it: say so. */
+const LAG_NOTE_S = 120;
 
 function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[]): CandleSeries {
   return {
@@ -102,6 +112,7 @@ function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas:
 
 function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; smas: SmaLength[]; fill: IntradayResult | "fetching" | null }) {
   const shown = useLiveCandle(sym, d.bars, INTERVAL_MS[d.interval], d.extended);
+  const liveBuilt = (d.lag_s ?? 0) > LAG_NOTE_S && (d.sources.includes("live") || shown.length > d.bars.length);
   const series = useMemo(() => intradaySeries(shown, d.range, smas), [shown, d.range, smas]);
   const short = smas.filter((n) => shown.length < n);
   const bridge = fill === "fetching" ? "Fetching the missing bars from IBKR…"
@@ -113,6 +124,7 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
       <div className="legend-note small muted">
         Times in New York (ET) · {d.extended ? "including pre-market and after-hours" : "regular hours"} · overnight and weekend gaps collapsed
         {d.sources.length > 0 && <> · Source {d.sources.map((s) => <SourceBadge key={s} source={s} />)}{d.delayed && <SourceBadge source={null} delayed />}</>}
+        {liveBuilt && <> · <span className="live-built" title={`The source's newest bar ended ${Math.round((d.lag_s ?? 0) / 60)} min ago; the minutes since are built from live quotes until its own bars arrive`}>latest minutes built from live quotes</span></>}
         {smas.length > 0 && <> · SMAs over the loaded bars</>}
         {short.length > 0 && <> · {short.map((n) => `SMA ${n}`).join(", ")}: fewer than {short[0]} bars loaded</>}
         {d.bars.length > 0 && bridge && <> · {bridge}</>}
@@ -122,11 +134,15 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
   );
 }
 
+/** How often the intraday bars are reloaded while live quotes flow and the window is visible. */
+const BARS_RELOAD_MS = 60_000;
+
 function IntradayChart({ sym, view, extended, smas, onExtended }: {
   sym: string; view: Extract<ChartView, { kind: "intraday" }>; extended: boolean; smas: SmaLength[]; onExtended: (available: boolean) => void;
 }) {
   const st = useApi(() => api.intradayBars(sym, view.interval, view.range, extended), [sym, view.interval, view.range, extended]);
   const fill = useBridgeFill(sym, st.data, st.reload);
+  useLiveInterval(st.reload, BARS_RELOAD_MS);   // settled source bars replace the live-built ones
   const hasExtended = st.data?.has_extended ?? false;
   useEffect(() => onExtended(hasExtended), [hasExtended, onExtended]);
   return <Async state={st}>{(d) => <IntradayBody sym={sym} d={d} smas={smas} fill={fill} />}</Async>;

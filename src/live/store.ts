@@ -1,6 +1,8 @@
 // The renderer's live-quote store (INTEGRATION.md §9): what the mounted views want live (refcounted, unioned into
 // the window's one subscription) and the latest live values per symbol / OSI, with per-key listeners so a patch
-// re-renders only the cells that show that key. Pure: the network side is connection.ts.
+// re-renders only the cells that show that key; and the intraday charts' live candles per series, kept for the
+// window's lifetime. Pure: the network side is connection.ts.
+import type { LiveCandle } from "./candles";
 
 export type LiveState = "live" | "delayed" | "connecting" | "stale" | "market_closed" | "not_connected" | "idle";
 
@@ -124,6 +126,16 @@ export class LiveStore {
     if (!set) this.keyListeners.set(k, (set = new Set()));
     set.add(cb);
     return () => { set!.delete(cb); if (!set!.size) this.keyListeners.delete(k); };
+  }
+
+  // ---------------- live candles of the intraday charts (closed ones too), per series (symbol | interval | hours)
+  private candles = new Map<string, LiveCandle>();
+
+  candle(series: string): LiveCandle | null { return this.candles.get(series) ?? null; }
+
+  keepCandle(series: string, c: LiveCandle | null): void {
+    if (c) this.candles.set(series, c);
+    else this.candles.delete(series);
   }
 
   // ---------------- status

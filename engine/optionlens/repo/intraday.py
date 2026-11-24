@@ -1,7 +1,10 @@
-"""intraday_bars / intraday_spans: stored intraday bars per (symbol, interval) and the spans already fetched."""
+"""intraday_bars / intraday_spans: stored intraday bars per (symbol, interval) and the spans already fetched.
+
+Live bars (source LIVE, 1m only, live/bars.py) share intraday_bars without a span: a source's candle of the same
+start replaces one, a live bar never replaces a source's candle, and they are kept LIVE_RETENTION."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Sequence
 
 from .. import db
@@ -9,6 +12,8 @@ from ..models import IntradayBar
 from ._sql import insert_arrow, query, utc_naive
 
 Span = tuple[datetime, datetime]
+LIVE = "live"
+LIVE_RETENTION = timedelta(days=3)
 
 
 def store(symbol: str, interval: str, bars: Sequence[IntradayBar], spans: Sequence[Span], source: str,
@@ -45,3 +50,24 @@ def bars(symbol: str, interval: str, start: datetime, end: datetime) -> list[dic
     return query("""SELECT ts, open, high, low, close, volume, source, delayed FROM intraday_bars
                     WHERE symbol = ? AND interval = ? AND ts >= ? AND ts <= ? ORDER BY ts""",
                  [symbol, interval, utc_naive(start), utc_naive(end)])
+
+
+def store_live(bars: dict[str, Sequence[IntradayBar]], now: datetime) -> int:
+    """Store live 1m bars per symbol (never over a stored bar of the same start), dropping live bars older than
+    LIVE_RETENTION. Returns bars stored."""
+    rows = [(sym, b) for sym, bs in bars.items() for b in {b.ts: b for b in bs}.values()]
+    with db.write() as cur:
+        n = insert_arrow(cur, "intraday_bars", {
+            "symbol": [s for s, _ in rows], "interval": ["1m"] * len(rows), "ts": [utc_naive(b.ts) for _, b in rows],
+            "open": [b.open for _, b in rows], "high": [b.high for _, b in rows], "low": [b.low for _, b in rows],
+            "close": [b.close for _, b in rows], "volume": [b.volume for _, b in rows], "source": [LIVE] * len(rows),
+            "delayed": [False] * len(rows)}, "INSERT OR IGNORE") if rows else 0
+        cur.execute("DELETE FROM intraday_bars WHERE source = ? AND ts < ?", [LIVE, utc_naive(now - LIVE_RETENTION)])
+        return n
+
+
+def live_bars(symbol: str, start: datetime, end: datetime) -> list[dict]:
+    """The stored live 1m bars of `symbol` starting in [start, end] (as `bars`)."""
+    return query("""SELECT ts, open, high, low, close, volume, source, delayed FROM intraday_bars
+                    WHERE symbol = ? AND interval = '1m' AND source = ? AND ts >= ? AND ts <= ? ORDER BY ts""",
+                 [symbol, LIVE, utc_naive(start), utc_naive(end)])

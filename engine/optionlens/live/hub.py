@@ -9,7 +9,9 @@
   `ingested_quotes`); outside market hours nothing is fetched (`market_closed`);
 - updates are coalesced: each key reaches a window at most once per TICK_S (4 per second);
 - the latest live values are kept in memory and persisted every PERSIST_S (quotes_latest field-wise, the served
-  option_latest rows' market fields) by the injected `persist`, so non-live views stay consistent; never archives.
+  option_latest rows' market fields) by the injected `persist`, so non-live views stay consistent; never archives;
+- the symbols' quotes are aggregated into 1-minute bars (live/bars.py): closed ones are handed to the injected
+  `store_bars` every PERSIST_S, the rest are served by `pending_bars` (the intraday charts' latest minutes).
 
 No I/O here: the drivers, the bridge check, the clock, the session calendar and persistence are injected.
 """
@@ -23,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Mapping, Protocol
 
+from ..models import IntradayBar
+from .bars import MinuteBars
 from .session import Session, next_live_start, session_at
 from .subscriptions import EMPTY, Registry, Wanted, diff, for_session
 
@@ -101,9 +105,12 @@ def _merge(into: dict[str, Fields], key: str, fields: Fields) -> None:
 class LiveHub:
     def __init__(self, questrade: Callable[[], Driver | None], bridge_connected: Callable[[], bool],
                  persist: Callable[[list[Fields], list[Fields]], Awaitable[None]] | None = None,
-                 clock: Callable[[], float] = time.time, session: Callable[[datetime], Session] = session_at):
+                 clock: Callable[[], float] = time.time, session: Callable[[datetime], Session] = session_at,
+                 store_bars: Callable[[dict[str, list[IntradayBar]]], Awaitable[None]] | None = None):
         self._questrade_factory, self._bridge_connected = questrade, bridge_connected
         self._persist, self.clock, self._session_at = persist, clock, session
+        self._store_bars = store_bars
+        self.bars = MinuteBars()
         self._questrade: Driver | None = None
         self._qtask: asyncio.Task | None = None
         self.registry = Registry()
@@ -241,6 +248,8 @@ class LiveHub:
                 latest[k] = entry
                 if old is not None and all(old.get(k2) == v for k2, v in f.items()) and old.get("source") == source:
                     continue      # unchanged: nothing to show or store
+                if latest is self._latest_q:
+                    self.bars.tick(k, entry.get("price"), entry.get("volume"), bool(entry.get("delayed")), now)
                 _merge(pending, k, {**f, "source": source, "ts": iso(now)})
                 if persist:
                     _merge(dirty, k, {**f, "source": source, "_at": now})
@@ -260,6 +269,10 @@ class LiveHub:
                 wanted = self.registry.union().symbols
                 self.publish("ibkr", {k: v for k, v in patches.items() if k in wanted}, {}, persist=False)
         loop.call_soon_threadsafe(apply)
+
+    def pending_bars(self, symbol: str) -> list[IntradayBar]:
+        """The live 1m bars of `symbol` not stored yet (closed ones, then the forming one)."""
+        return self.bars.pending(symbol)
 
     def bridge_wants(self) -> dict:
         """What the IBKR bridge should snapshot now: the visible symbols while it is the live fallback, else none."""
@@ -295,6 +308,7 @@ class LiveHub:
         self._expire_clients(now)
         self.session = self._session_at(datetime.fromtimestamp(now, timezone.utc))
         want = for_session(self.registry.union(), self.session)
+        self.bars.forget(set(want.symbols))
         q = self._driver()
         q_reason = q.usable() if q is not None else "not configured"
         active: Source | None = None
@@ -411,7 +425,12 @@ class LiveHub:
             self.tick()
 
     async def flush(self) -> None:
-        """Persist the live values changed since the last flush."""
+        """Persist the live values changed since the last flush, and the live bars closed since."""
+        if self._store_bars is not None and (closed := self.bars.take_closed(self.clock())):
+            try:
+                await self._store_bars(closed)
+            except Exception:  # noqa: BLE001 - those minutes stay unstored (the source's candles fill them later)
+                log.exception("live: storing live bars failed")
         if self._persist is None or (not self._dirty_q and not self._dirty_o):
             return
         dq, do = self._dirty_q, self._dirty_o

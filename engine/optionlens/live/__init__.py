@@ -14,12 +14,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from ..models import IntradayBar
 from .hub import LiveHub
 from .mode import FILE_NAME as MODE_FILE
 from .mode import Mode, ModeSetting
 from .subscriptions import Wanted
 
-__all__ = ["LiveHub", "Wanted", "instance", "mode_view", "set_mode", "start", "status", "stop"]
+__all__ = ["LiveHub", "Wanted", "instance", "mode_view", "pending_bars", "set_mode", "start", "status", "stop"]
 
 BRIDGE_CHECK_S = 10.0
 _hub: LiveHub | None = None
@@ -86,9 +87,14 @@ def instance() -> LiveHub:
     """The process-wide LiveHub."""
     global _hub
     if _hub is None:
-        from .persist import persist
-        _hub = LiveHub(_questrade_driver, _BridgeCheck(), persist)
+        from .persist import persist, store_bars
+        _hub = LiveHub(_questrade_driver, _BridgeCheck(), persist, store_bars=store_bars)
     return _hub
+
+
+def pending_bars(symbol: str) -> list[IntradayBar]:
+    """The live 1m bars of `symbol` not stored yet (IntradayBar, ascending); none without a running hub."""
+    return _hub.pending_bars(symbol) if _hub is not None else []
 
 
 async def start() -> None:

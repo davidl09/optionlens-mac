@@ -46,6 +46,17 @@ MAX_CANDLES = 2000   # documented per-response limit of markets/candles
 KEEPALIVE_S = 24 * 3600   # refresh an idle token daily: an unused refresh token lapses (reportedly after ~7 days)
 
 
+def _log_fetch(symbol: str, interval: str, end: datetime, got: list[IntradayBar]) -> None:
+    """One candles answer: the window end asked for, the count, the newest candle and how far it is behind now
+    (Questrade's candles end minutes before now; the newest minutes come from live quotes, services/intraday.py)."""
+    now = datetime.now(timezone.utc)
+    newest = max((c.ts for c in got), default=None)
+    log.info("questrade candles %s %s: asked up to %s, got %d, newest %s (%s)", symbol, interval,
+             end.astimezone(timezone.utc).isoformat(timespec="seconds"), len(got),
+             newest.astimezone(timezone.utc).isoformat(timespec="seconds") if newest else "none",
+             f"{(now - newest).total_seconds():.0f} s before now" if newest else "-")
+
+
 class SymbolIds:
     """OptionLens symbol -> Questrade symbolId (None: not listed, checked at), persisted as JSON."""
 
@@ -195,6 +206,7 @@ class QuestradeSource:
             while a < b:
                 got = candles(await self.api.get(f"markets/candles/{sid}", {
                     "startTime": candle_time(a), "endTime": candle_time(b), "interval": CANDLE_INTERVAL[interval]}))
+                _log_fetch(symbol, interval, b, got)
                 out.update((c.ts, c) for c in got if start <= c.ts <= end)
                 if len(got) < MAX_CANDLES:
                     break

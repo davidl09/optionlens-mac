@@ -130,3 +130,59 @@ def request_windows(span: Span, interval: str, max_bars: int) -> list[Span]:
 def settled(end: datetime, now: datetime) -> datetime:
     """Up to when a fetch that ended at `end` (as of `now`) may count as stored for good (see RECENT)."""
     return min(end, now - RECENT)
+
+
+def in_sessions(ts: datetime) -> bool:
+    """Whether `ts` is inside a trading day's 04:00-20:00 ET window (where sources have bars)."""
+    ny = ts.astimezone(NY)
+    return is_trading_day(ny.date()) and EXTENDED_OPEN <= ny.time() < EXTENDED_CLOSE
+
+
+def bucket(ts: datetime, interval: str, grid: datetime | None = None) -> datetime:
+    """Start of the `interval` bar holding `ts`: on the grid of the bar starting at `grid` within the same New York
+    day (a source's bars may start at 09:30), else on the New York clock (1h bars at whole hours)."""
+    step = timedelta(seconds=INTERVAL_S[interval])
+    if grid is not None and grid <= ts and grid.astimezone(NY).date() == ts.astimezone(NY).date():
+        return grid + (ts - grid) // step * step
+    ny = ts.astimezone(NY)
+    midnight = datetime.combine(ny.date(), time(0), NY)
+    return (midnight + (ny.replace(tzinfo=None) - midnight.replace(tzinfo=None)) // step * step).astimezone(timezone.utc)
+
+
+def aggregate(rows: list[dict], interval: str, grid: datetime | None = None) -> list[dict]:
+    """1m bar rows (ascending; ts, open, high, low, close, volume, ...) -> rows of `interval` (see `bucket`)."""
+    out: dict[datetime, dict] = {}
+    for r in rows:
+        t = bucket(r["ts"], interval, grid)
+        b = out.get(t)
+        if b is None:
+            out[t] = {**r, "ts": t}
+            continue
+        vols = [v for v in (b["volume"], r["volume"]) if v is not None]
+        b.update(high=max(b["high"], r["high"]), low=min(b["low"], r["low"]), close=r["close"],
+                 volume=sum(vols) if vols else None)
+    return list(out.values())
+
+
+def with_live(source: list[dict], live_1m: list[dict], interval: str) -> list[dict]:
+    """A source's bars of `interval` (ascending) followed by the live-built bars after its newest one: live 1m bars
+    aggregated to `interval` on the source's grid. A source's bar always wins: live bars only bridge the minutes the
+    source has not answered yet (its candles lag), and never fill a gap inside the source's bars."""
+    newest = source[-1]["ts"] if source else None
+    live = aggregate(live_1m, interval, newest)
+    return source + [r for r in live if newest is None or r["ts"] > newest]
+
+
+def live_only_from(span: Span, source_ts: Iterable[datetime], live_ts: Iterable[datetime],
+                   interval: str) -> datetime | None:
+    """Where the part of a fetched `span` that only live bars cover starts (one bar early, on the source's grid), so
+    that it is asked for again until the source has its own bars there; None when no live bar follows the source's
+    newest bar in `span`."""
+    s, e = span
+    step = timedelta(seconds=INTERVAL_S[interval])
+    newest = max((t for t in source_ts if s <= t <= e), default=None)
+    after = newest + step if newest is not None else s
+    first = min((t for t in live_ts if after <= t <= e), default=None)
+    if first is None:
+        return None
+    return max(s, bucket(first, interval, newest) - step)

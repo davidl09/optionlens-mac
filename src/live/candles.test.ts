@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { IntradayBar } from "../api/types";
 import { barLabel, chartView, inRegularHours, smaOf } from "../lib/chartRange";
 import { bucketStart, nextCandle, withLiveCandle, type LiveCandle } from "./candles";
+import { LiveStore } from "./store";
 
 const M5 = 300_000;
 const t = (iso: string) => Date.parse(iso);
@@ -49,6 +50,48 @@ describe("live candle", () => {
     expect(c?.volume).toBeNull();
     expect(nextCandle(c, { price: 1, volume: null, at: t("2026-11-17T14:56:30Z") }, M5, last)).toBe(c);   // older bucket
     expect(nextCandle(null, { price: 1, volume: null, at: t("2026-11-17T14:40:00Z") }, M5, last)).toBeNull();   // before the stored bars
+  });
+});
+
+describe("live candles across bar reloads", () => {
+  const M1 = 60_000;
+  // 1m bars 11:50..11:57 ET (the source's candles end ~15 minutes before now), Tue 2026-11-17 (EST)
+  const minute = (hm: string, o: Partial<IntradayBar> = {}) => bar(`2026-11-17T${String(Number(hm.slice(0, 2)) + 5).padStart(2, "0")}:${hm.slice(3)}:00.000Z`, o);
+  const loaded = ["11:50", "11:51", "11:52", "11:53", "11:54", "11:55", "11:56", "11:57"].map((x) => minute(x));
+  const hms = (bars: IntradayBar[]) => bars.map((b) => new Date(Date.parse(b.ts) - 5 * 3_600_000).toISOString().slice(11, 16));
+  const ticks = (store: LiveStore, series: string, bars: IntradayBar[], from: number, n: number) => {
+    for (let i = 0; i < n; i++) {
+      const at = t("2026-11-17T17:12:05Z") + (from + i) * 20_000;   // every 20 s from 12:12:05 ET
+      store.keepCandle(series, nextCandle(store.candle(series), { price: 200 + from + i, volume: 1_000 + 10 * (from + i), at }, M1, bars[bars.length - 1]));
+    }
+  };
+
+  it("keeps the closed candles in the store: a remount (fresh state from the store) continues them", () => {
+    const store = new LiveStore();
+    ticks(store, "DELL|60000|rth", loaded, 0, 9);                      // 12:12:05 .. 12:14:45: three minutes
+    const remounted = store.candle("DELL|60000|rth");
+    expect(hms(withLiveCandle(loaded, remounted))).toEqual([...hms(loaded), "12:12", "12:13", "12:14"]);
+    expect(store.candle("DELL|60000|ext")).toBeNull();                 // per series
+    ticks(store, "DELL|60000|rth", loaded, 9, 3);                      // 12:15:05 ..: rolls on from the kept state
+    expect(hms(withLiveCandle(loaded, store.candle("DELL|60000|rth"))).slice(-4)).toEqual(["12:12", "12:13", "12:14", "12:15"]);
+  });
+
+  it("a reload with lagging candles keeps the live minutes; reloaded bars win inside them, live fills what they lack", () => {
+    const store = new LiveStore();
+    ticks(store, "DELL|60000|rth", loaded, 0, 9);
+    const c = store.candle("DELL|60000|rth");
+    // reloaded: the source caught up to 11:59, the engine's live-built 12:13 is there too (12:12 it lacks)
+    const reloaded = [...loaded, minute("11:58"), minute("11:59"), minute("12:13", { close: 999 })];
+    const shown = withLiveCandle(reloaded, c);
+    expect(hms(shown)).toEqual([...hms(loaded), "11:58", "11:59", "12:12", "12:13", "12:14"]);
+    expect(shown.find((b) => hms([b])[0] === "12:13")?.close).toBe(205);   // the reloaded last bar: the live one replaces it
+    const reloadedMore = [...reloaded, minute("12:14", { close: 999 }), minute("12:15", { close: 998 })];
+    const later = withLiveCandle(reloadedMore, c);
+    expect(later.find((b) => hms([b])[0] === "12:13")?.close).toBe(999);   // inside the reloaded bars: theirs
+    // the forming candle (12:14) replaces the loaded bar of its start; nothing newer is dropped
+    expect(hms(later).slice(-3)).toEqual(["12:13", "12:14", "12:15"]);
+    expect(later.find((b) => hms([b])[0] === "12:14")?.close).toBe(208);
+    expect(withLiveCandle([minute("12:13")], c).map((b) => hms([b])[0])).toEqual(["12:13", "12:14"]);   // an older closed one before the range: left out
   });
 });
 

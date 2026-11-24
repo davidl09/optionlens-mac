@@ -3,6 +3,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { sse, STATUS } from "./mocks/live";
 import { setup } from "./mocks/stream";
+import { intradayBars } from "./mocks/symbol";
 
 const summary = (page: Page) => page.locator(".chart-summary");
 const radio = (page: Page, group: string, name: string) => page.getByRole("radiogroup", { name: group }).getByRole("radio", { name, exact: true });
@@ -54,5 +55,42 @@ test("live candle: streamed quotes update the last bar and roll to a new one at 
   live.serve(quote(239.9, "2026-11-19T20:50:05Z", 48_320_000));                       // 15:50: rolls over
   await expect(summary(page)).toHaveAttribute("data-bars", String(6 * 12 + 5));
   await expect(summary(page)).toContainText("15:50 ET: open 239.90, high 239.90, low 239.90, close 239.90, volume 8,000");
+  expect(live.errors).toEqual([]);
+});
+
+test("live-built minutes: no gap after the page opened, and a reload with lagging candles keeps them", async ({ page }) => {
+  // The source's candles end ~15 minutes before now (Questrade, even on a real-time account): the engine answers the
+  // stored 1m bars up to 15:29 ET at 15:45 ET; the reload a minute later still lags (to 15:31) and has no live bars.
+  await page.clock.install({ time: new Date("2026-11-19T20:45:05Z") });
+  const live = await setup(page);
+  live.serve(sse("status", STATUS.live));
+  const full = intradayBars("DELL", "1m", "1d", false);
+  const asked: string[] = [];
+  let until = "2026-11-19T20:30:00.000Z";
+  await page.route((u) => u.pathname === "/api/symbol/DELL/bars" && u.searchParams.has("interval"), async (route) => {
+    asked.push(until);
+    const bars = full.bars.filter((b) => b.ts < until);
+    const lag = Math.round((Date.parse("2026-11-19T20:45:05Z") - Date.parse(until)) / 1000) + 60 * (asked.length - 1);
+    await route.fulfill({ json: { ...full, bars, lag_s: lag } });
+  });
+  await page.goto("/s/DELL/chart?range=1d&interval=1m");
+  await expect(summary(page)).toHaveAttribute("data-bars", "360");                    // 09:30..15:29
+  const quote = (price: number, ts: string, volume: number) => sse("status", STATUS.live) + sse("patch", { quotes: { DELL: { price, volume, ts, source: "questrade" } } });
+  live.serve(quote(230.1, "2026-11-19T20:45:10Z", 9_000_000));
+  await expect(summary(page)).toHaveAttribute("data-bars", "361");
+  live.serve(quote(230.4, "2026-11-19T20:46:10Z", 9_000_400));
+  await expect(summary(page)).toHaveAttribute("data-bars", "362");
+  live.serve(quote(230.2, "2026-11-19T20:47:10Z", 9_000_900));
+  await expect(summary(page)).toHaveAttribute("data-bars", "363");                    // 15:45, 15:46, 15:47: no gap
+  await expect(summary(page)).toContainText("15:47 ET: open 230.20");
+  await expect(page.locator(".legend-note .live-built")).toHaveText("latest minutes built from live quotes");
+  until = "2026-11-19T20:32:00.000Z";
+  await page.clock.runFor(61_000);                                                    // the chart reloads its bars
+  await expect.poll(() => asked.length).toBe(2);
+  await expect(summary(page)).toHaveAttribute("data-bars", String(362 + 3));         // 09:30..15:31 + the live minutes
+  await expect(summary(page)).toContainText("15:47 ET: open 230.20");
+  live.serve(quote(230.9, "2026-11-19T20:48:05Z", 9_001_500));
+  await expect(summary(page)).toHaveAttribute("data-bars", String(362 + 4));
+  await expect(summary(page)).toContainText("15:48 ET: open 230.90, high 230.90, low 230.90, close 230.90, volume 600");
   expect(live.errors).toEqual([]);
 });

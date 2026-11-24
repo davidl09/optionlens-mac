@@ -93,6 +93,7 @@ const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutr
   model: { label: "model", tone: "warn", title: "Priced with a Black-Scholes model" },
   cboe: { label: "CBOE", tone: "neutral", title: "CBOE" },
   nasdaq: { label: "Nasdaq", tone: "neutral", title: "Nasdaq public data" },
+  live: { label: "live quotes", tone: "neutral", title: "Built from live quotes: the latest minutes, until the source's own bars for them arrive" },
 };
 
 export function isDataSource(v: unknown): v is DataSource {

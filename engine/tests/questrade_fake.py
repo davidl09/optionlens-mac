@@ -51,6 +51,7 @@ class FakeQuestrade:
         self.listed = {"XYZ": 1000, "SPY": 1001}   # symbols/search hits
         self.candle_cap = 2000      # candles per response (documented limit)
         self.candle_hours = (4, 20)  # ET hours candles exist (pre-market to after-hours)
+        self.candle_until: datetime | None = None   # candles start before this only (the source's lag behind now)
 
     def http(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
@@ -107,6 +108,8 @@ class FakeQuestrade:
         t, end = datetime.fromisoformat(params["startTime"]), datetime.fromisoformat(params["endTime"])
         t = datetime.fromtimestamp(-(-t.timestamp() // step.total_seconds()) * step.total_seconds(), timezone.utc)
         out = []
+        if self.candle_until is not None:
+            end = min(end, self.candle_until - timedelta(microseconds=1))
         while t <= end and len(out) < self.candle_cap:
             ny = t.astimezone(NY)
             if ny.weekday() < 5 and self.candle_hours[0] <= ny.hour < self.candle_hours[1]:
