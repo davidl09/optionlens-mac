@@ -25,7 +25,7 @@ import numpy as np
 
 from ..analytics import earnings as earn_a
 from ..analytics import stats as stats_a
-from ..analytics import vol
+from ..analytics import markets, vol
 from ..analytics.calendar import now_ny
 from ..analytics.chain import ChainArrays
 from ..analytics.stats import bar_arrays_from_columns
@@ -169,10 +169,16 @@ def forget_chains(symbols: Iterable[str]) -> None:
 
 
 # ============================================================================ rates / dividends
-def risk_free_rate(day: date | None = None) -> float:
-    """13-week T-bill (rates table, latest on/before day) else config RISK_FREE_RATE."""
-    r = market_repo.rate_on(day)
-    return float(r) if r is not None else get_settings().risk_free_rate
+def risk_free_rate(day: date | None = None, currency: str = "USD") -> float:
+    """The stored T-bill rate of `currency` on/before day (USD: Treasury 13-week, CAD: Bank of Canada 3-month), else
+    the configured fallback (RISK_FREE_RATE / RISK_FREE_RATE_CAD)."""
+    r = market_repo.rate_on(day, currency)
+    return float(r) if r is not None else get_settings().fallback_rate(currency)
+
+
+def rate_for(symbol: str, day: date | None = None) -> float:
+    """risk_free_rate in the currency of `symbol`'s market (a Canadian option is priced with the CAD rate)."""
+    return risk_free_rate(day, markets.currency_of(symbol))
 
 
 def _index_q(symbol: str, kind: str | None) -> float | None:
@@ -182,8 +188,9 @@ def _index_q(symbol: str, kind: str | None) -> float | None:
 def dividend_yield(symbol: str, spot: float | None, chain_arrays: ChainArrays | None = None,
                    day: date | None = None) -> float:
     """Continuous q: indices by default table; symbols whose stored dividend history covers the
-    trailing year: trailing-12m / spot; otherwise (Nasdaq has no history for NYSE/ARCA listings; a
-    calendar-only row is not a history) implied by put-call parity on the chain (0 when not estimable)."""
+    trailing year: trailing-12m / spot; Canadian listings (no Nasdaq dividend history): Questrade's indicated
+    yield when known; otherwise (Nasdaq has no history for NYSE/ARCA listings; a calendar-only row is not a
+    history) implied by put-call parity on the chain (0 when not estimable)."""
     sym = normalize_symbol(symbol)
     row = symbols_repo.get_symbol(sym)
     q = _index_q(sym, row and row["kind"])
@@ -192,19 +199,22 @@ def dividend_yield(symbol: str, spot: float | None, chain_arrays: ChainArrays | 
     divs = div_repo.for_symbol(sym)
     if covers_trailing_year(divs, day or today()):
         return trailing_yield(divs, spot, day or today())
+    if row and row.get("dividend_yield") is not None:
+        return float(row["dividend_yield"])
     ca = chain_arrays if chain_arrays is not None else load_chain_arrays(sym, ensure_fresh=False)
     if ca is None:
         return 0.0
-    return implied_yield_from_chain(ca, risk_free_rate(day)) or 0.0
+    return implied_yield_from_chain(ca, rate_for(sym, day)) or 0.0
 
 
 def _implied_yields_all() -> dict[str, float]:
     """Parity-implied q for every stored chain (near-ATM rows only; one query)."""
-    t, r = today(), risk_free_rate()
+    t = today()
     near = options_repo.near_atm_by_symbol(t + timedelta(days=PARITY_DTE[0]), t + timedelta(days=PARITY_DTE[1]),
                                            PARITY_BAND)
     out = {}
     for sym, cols in near.items():
+        r = rate_for(sym)
         ca = _arrays(sym, cols, r=r, with_src=False)
         q = implied_yield_from_chain(ca, r) if ca is not None else None
         if q is not None:
@@ -215,10 +225,12 @@ def _implied_yields_all() -> dict[str, float]:
 def dividend_yield_map(spots: Mapping[str, float]) -> dict[str, float]:
     """Bulk dividend_yield for {symbol: spot} (no per-symbol queries)."""
     def build():
-        kinds = {r["symbol"]: r["kind"] for r in symbols_repo.list_symbols()}
-        return (kinds, div_repo.symbols_with_history(covering=today() - timedelta(days=TRAILING_COVERAGE_DAYS)),
+        rows = symbols_repo.list_symbols()
+        kinds = {r["symbol"]: r["kind"] for r in rows}
+        indicated = {r["symbol"]: float(r["dividend_yield"]) for r in rows if r.get("dividend_yield") is not None}
+        return (kinds, indicated, div_repo.symbols_with_history(covering=today() - timedelta(days=TRAILING_COVERAGE_DAYS)),
                 div_repo.trailing_sum(today()))
-    kinds, with_hist, ttm = _memoized("div_inputs", build)
+    kinds, indicated, with_hist, ttm = _memoized("div_inputs", build)
     implied = None
     out = {}
     for sym, spot in spots.items():
@@ -226,24 +238,31 @@ def dividend_yield_map(spots: Mapping[str, float]) -> dict[str, float]:
         if q is None and sym in with_hist:
             q = ttm.get(sym, 0.0) / spot if spot and spot > 0 else 0.0
         if q is None:
+            q = indicated.get(sym)
+        if q is None:
             implied = implied if implied is not None else _memoized("implied_q", _implied_yields_all)
             q = implied.get(sym, 0.0)
         out[sym] = q
     return out
 
 
-def rate_fn() -> Callable[[date], float]:
-    """r(d): stored 13-week T-bill on/before d (config fallback) — for backtests (cached per sweep)."""
+def rate_fn(currency: str = "USD") -> Callable[[date], float]:
+    """r(d): stored T-bill rate of `currency` on/before d (config fallback) — for backtests (cached per sweep)."""
     def build():
-        rows = market_repo.rates_between(date(1900, 1, 1), date(2999, 12, 31))
+        rows = market_repo.rates_between(date(1900, 1, 1), date(2999, 12, 31), currency)
         return [r["date"] for r in rows], [float(r["rate"]) for r in rows]
-    days, rates = _memoized("rates", build)
-    fallback = get_settings().risk_free_rate
+    days, rates = _memoized(f"rates:{currency}", build)
+    fallback = get_settings().fallback_rate(currency)
 
     def r(d: date) -> float:
         i = bisect.bisect_right(days, d) - 1
         return rates[i] if i >= 0 else (rates[0] if rates else fallback)
     return r
+
+
+def rate_fn_for(symbol: str) -> Callable[[date], float]:
+    """rate_fn in the currency of `symbol`'s market."""
+    return rate_fn(markets.currency_of(symbol))
 
 
 # ============================================================================ bars
@@ -270,7 +289,7 @@ def quote_session(q: Quote) -> date | None:
     """The trading session a stored quote belongs to (its live daily bar's date): the session of its
     time stamp, so a quote fetched on a weekend or before the open is the previous session's, never a
     bar dated on a non-trading day."""
-    return session_date(q.ts) if q.ts else None
+    return session_date(q.ts, markets.calendar_for(q.symbol)) if q.ts else None
 
 
 def optionable(symbol: str) -> bool | None:
@@ -297,8 +316,10 @@ QUOTE_BARS_DAYS = 10   # calendar days of bars read for a quote (the latest bar 
 
 
 def bars_source(symbol: str) -> str:
-    """Who supplies a symbol's daily bars: the IBKR bridge for the cash indices, Nasdaq for stocks and ETFs."""
-    return "ibkr" if normalize_symbol(symbol) in INDEX_SYMBOLS else "nasdaq"
+    """Who supplies a symbol's daily bars: the IBKR bridge for the cash indices, Questrade for Canadian listings,
+    Nasdaq for US stocks and ETFs."""
+    sym = normalize_symbol(symbol)
+    return "ibkr" if sym in INDEX_SYMBOLS else "questrade" if markets.is_canadian(sym) else "nasdaq"
 
 
 def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
@@ -321,11 +342,12 @@ def quote_dict(symbol: str, bars: Sequence[Bar] | None = None) -> dict | None:
             if out[k] is None:
                 out[k] = from_bars.get(k)
         halt = halt_flags([sym]).get(sym)
-        return {**out, "delayed": bool(q.delayed), "after_hours": after_session(q.ts), "source": quotes_repo.source_of(sym),
-                "halted": halt["halted"] if halt else None}
+        return {**out, "delayed": bool(q.delayed), "after_hours": after_session(q.ts, markets.calendar_for(sym)),
+                "source": quotes_repo.source_of(sym), "halted": halt["halted"] if halt else None}
     if not from_bars or from_bars["price"] is None:
         return None
-    return {**dict.fromkeys(_QUOTE_KEYS), **from_bars, "symbol": sym, "ts": session_close(bars[-1].date),
+    return {**dict.fromkeys(_QUOTE_KEYS), **from_bars, "symbol": sym,
+            "ts": session_close(bars[-1].date, markets.calendar_for(sym)),
             "delayed": False, "after_hours": False, "source": bars_source(sym), "halted": None}
 
 
@@ -533,7 +555,7 @@ def load_chain_arrays(symbol: str, *, ensure_fresh: bool = True) -> ChainArrays 
     cols = options_repo.latest_by_symbol([sym]).get(sym)
     if cols is None:
         return None
-    r = risk_free_rate()
+    r = rate_for(sym)
     ca = _arrays(sym, cols, r=r, hv30=_hv30(sym), iv_rank=iv_rank_info(sym)["iv_rank"],
                  next_event=next_earnings_map().get(sym), with_src=True)
     if ca is None:
@@ -552,7 +574,7 @@ def eod_chain_arrays(symbol: str, day: date) -> ChainArrays | None:
     cols = options_repo.eod_for_date(day, [sym])
     if not len(cols["osi"]):
         return None
-    return _arrays(sym, cols, r=risk_free_rate(day), asof=close_dt(day))
+    return _arrays(sym, cols, r=rate_for(sym, day), asof=close_dt(day))
 
 
 def load_universe_chain_arrays(symbols: Sequence[str] | None = None, right: str | None = None,
@@ -567,14 +589,13 @@ def load_universe_chain_arrays(symbols: Sequence[str] | None = None, right: str 
         t + timedelta(days=dte_max) if dte_max is not None else None, min_oi or None, min_volume or None)
     if not by:
         return []
-    r = risk_free_rate()
     mets = metrics_repo.metrics_on()
     ranks, earn = iv_rank_all(), next_earnings_map()
     qs = dividend_yield_map({s: float(c["underlying"][0]) for s, c in by.items()})
     out = []
     for sym, cols in by.items():
         ev = earn.get(sym)
-        ca = _arrays(sym, cols, r=r, q=qs.get(sym, 0.0), hv30=num((mets.get(sym) or {}).get("hv30")),
+        ca = _arrays(sym, cols, r=rate_for(sym), q=qs.get(sym, 0.0), hv30=num((mets.get(sym) or {}).get("hv30")),
                      iv_rank=(ranks.get(sym) or {}).get("iv_rank"), next_event=ev)
         if ca is not None:
             out.append(ca)

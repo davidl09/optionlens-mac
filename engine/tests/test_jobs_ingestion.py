@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from optionlens import db
-from optionlens.analytics.calendar import NY
+from optionlens.analytics.calendar import NY, TSX
 from optionlens.jobs import _util, chains, prices, scheduler
 from optionlens.models import Bar
 from optionlens.repo import bars as bars_repo
@@ -57,7 +57,10 @@ def test_final_boundary_is_close_plus_feed_delay_everywhere(monkeypatch):
     assert eod.next_after(ny(2026, 11, 20, 21, 0)) == ny(2026, 11, 23, 20, 5)
     final = scheduler.JOBS["sweep_final"].schedule    # server-side closing snapshot at the boundary
     assert final.next_after(ny(2026, 11, 20, 12, 0)) == _util.final_since(FRI)
-    assert final.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 27))
+    # US Thanksgiving: the TSX closes (16:20); the next day NYSE closes early (13:20) and the TSX at 16:00 (16:20)
+    assert final.next_after(ny(2026, 11, 26, 12, 0)) == _util.final_since(date(2026, 11, 26), TSX)
+    assert final.next_after(ny(2026, 11, 26, 17, 0)) == _util.final_since(date(2026, 11, 27))
+    assert final.next_after(ny(2026, 11, 27, 14, 0)) == _util.final_since(date(2026, 11, 27), TSX)
 
 
 def test_eod_refuses_before_closing_data_arrived():

@@ -1,4 +1,6 @@
-"""Asyncio job scheduler (America/New_York, NYSE trading-day aware). No external scheduler library.
+"""Asyncio job scheduler (America/New_York; trading-day aware for every exchange followed: a trading-day job fires
+on days NYSE or TSX trades, and each run handles the markets that traded, jobs/chains.py). No external scheduler
+library.
 
 Every job runs through `run_job`, which records the run in job_runs, logs failures and never lets a
 job overlap itself. `start()`/`stop()` are called from the FastAPI lifespan; the CLI calls `run_job`.
@@ -14,7 +16,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Awaitable, Callable
 
 from .. import net
-from ..analytics.calendar import NY, close_time, is_trading_day, now_ny
+from ..analytics.calendar import CALENDARS, NY, any_trading_day, latest_close_time, now_ny
 from ..config import get_settings
 from ..repo import jobs as jobs_repo
 from ..sources import chain_source
@@ -64,7 +66,7 @@ def daily(at: time, weekdays: set[int] | None = None, trading_only: bool = False
     def times(d: date) -> list[time]:
         if weekdays is not None and d.weekday() not in weekdays:
             return []
-        if trading_only and not is_trading_day(d):
+        if trading_only and not any_trading_day(d):
             return []
         return [at]
     days = "trading days" if trading_only else ("days " + ",".join(map(str, sorted(weekdays))) if weekdays else "daily")
@@ -72,14 +74,15 @@ def daily(at: time, weekdays: set[int] | None = None, trading_only: bool = False
 
 
 def intraday(interval_min: int, first: time = time(9, 45)) -> Schedule:
-    """Trading days every interval_min (>= 1) from `first` until the (possibly early) close, inclusive."""
+    """Trading days (any exchange) every interval_min (>= 1) from `first` until the latest (possibly early) close of
+    the exchanges trading that day, inclusive."""
     if interval_min < 1:
         raise ValueError(f"intraday interval must be >= 1 minute, got {interval_min}")
 
     def times(d: date) -> list[time]:
-        if not is_trading_day(d):
+        if not any_trading_day(d):
             return []
-        out, t, end = [], datetime.combine(d, first), datetime.combine(d, close_time(d))
+        out, t, end = [], datetime.combine(d, first), datetime.combine(d, latest_close_time(d))
         while t <= end:
             out.append(t.time())
             t += timedelta(minutes=interval_min)
@@ -109,11 +112,11 @@ def manual() -> Schedule:
 
 
 def after_close(minutes: int) -> Schedule:
-    """Trading days at close + minutes (16:20, or 13:20 on early-close days for minutes=20)."""
+    """Trading days at each trading exchange's close + minutes (16:20, or 13:20 on an early-close day for minutes=20;
+    both when the exchanges close at different times)."""
     def times(d: date) -> list[time]:
-        if not is_trading_day(d):
-            return []
-        return [(datetime.combine(d, close_time(d)) + timedelta(minutes=minutes)).time()]
+        return sorted({(datetime.combine(d, c.close_time(d)) + timedelta(minutes=minutes)).time()
+                       for c in CALENDARS if c.is_trading_day(d)})
     return Schedule(times, f"trading days close+{minutes}m")
 
 
@@ -158,6 +161,7 @@ def build_jobs() -> dict[str, Job]:
         Job("dividends_history", calendars.dividends_history, daily(time(6, 30), {SUN})),
         Job("vix", marketdata.vix, manual(), catch_up=False),
         Job("rates", marketdata.rates, daily(time(17, 5))),
+        Job("rates_cad", marketdata.rates_cad, daily(time(17, 10))),
         Job("sweep", chains.sweep, intraday(s.sweep_interval_min) if server else manual(), catch_up=server),
         Job("sweep_final", chains.sweep_final, after_close(FINAL_DELAY_MIN) if server else manual(), catch_up=server),
         Job("sweep_fill", chains.sweep_fill, hourly(FILL_MINUTE) if server else manual(), catch_up=server),

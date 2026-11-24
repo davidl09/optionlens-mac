@@ -61,7 +61,7 @@ def options(req: dict) -> dict:
     q = ca.q if ca is not None else ctx.dividend_yield(sym, bars[-1].close if bars else None)
     try:
         return optbacktest.backtest_options(
-            sym, bars, req["strategy"], provider=ctx.DbPriceProvider(), rate=ctx.rate_fn(), div_yield=q,
+            sym, bars, req["strategy"], provider=ctx.DbPriceProvider(), rate=ctx.rate_fn_for(sym), div_yield=q,
             strike_rule=rule["type"], rule_value=rule.get("value"), width_pct=width,
             entry={k: v for k, v in req["entry"].items() if v is not None}, target_dte=req["target_dte"],
             exit={k: v for k, v in req["exit"].items() if v is not None}, start=req.get("start"),

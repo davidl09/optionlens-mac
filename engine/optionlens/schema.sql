@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS index_bars (
 );
 
 CREATE TABLE IF NOT EXISTS rates (date DATE PRIMARY KEY, rate DOUBLE NOT NULL);
+-- CAD risk-free rate: Bank of Canada 3-month T-bill (sources/boc.py), fraction; `rates` above is USD.
+CREATE TABLE IF NOT EXISTS rates_cad (date DATE PRIMARY KEY, rate DOUBLE NOT NULL);
 
 CREATE TABLE IF NOT EXISTS report_snapshots (
     date DATE NOT NULL, report_id VARCHAR NOT NULL, symbol VARCHAR NOT NULL, payload JSON,
@@ -263,3 +265,10 @@ CREATE TABLE IF NOT EXISTS halt_status (
     symbol VARCHAR PRIMARY KEY, halted BOOLEAN NOT NULL, changed_at TIMESTAMP, observed_at TIMESTAMP NOT NULL,
     source VARCHAR NOT NULL
 );
+
+-- Markets (analytics/markets.py, docs/SPEC.md §3 "Symbols"): a symbol's listing exchange ('TSX' | 'TSXV'; NULL = a US
+-- listing, venue not tracked) and trading currency ('USD' | 'CAD'; NULL = from the symbol's market), and for Canadian
+-- listings Questrade's indicated dividend yield (fraction; NULL = unknown), the BSM q when no dividend history exists.
+ALTER TABLE symbols ADD COLUMN IF NOT EXISTS exchange VARCHAR;
+ALTER TABLE symbols ADD COLUMN IF NOT EXISTS currency VARCHAR;
+ALTER TABLE symbols ADD COLUMN IF NOT EXISTS dividend_yield DOUBLE;

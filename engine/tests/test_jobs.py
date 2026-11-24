@@ -44,9 +44,13 @@ def test_intraday_sweep_schedule():
     assert s.next_after(ny(2026, 11, 19, 9, 45)) == ny(2026, 11, 19, 10, 15)
     assert s.next_after(ny(2026, 11, 19, 15, 50)) == ny(2026, 11, 20, 9, 45)       # Thu -> Fri
     assert s.next_after(ny(2026, 11, 20, 16, 0)) == ny(2026, 11, 23, 9, 45)        # skip weekend
-    assert s.next_after(ny(2026, 11, 25, 16, 0)) == ny(2026, 11, 27, 9, 45)        # skip Thanksgiving
-    early = s.times_on(date(2026, 11, 27))                                         # 13:00 close
-    assert early[0] == time(9, 45) and early[-1] == time(12, 45)
+    # trading days of any exchange followed (NYSE or TSX): US Thanksgiving is a TSX day, Good Friday closes both
+    assert s.next_after(ny(2026, 11, 25, 16, 0)) == ny(2026, 11, 26, 9, 45)
+    assert s.next_after(ny(2026, 4, 2, 16, 0)) == ny(2026, 4, 6, 9, 45)
+    early = s.times_on(date(2026, 11, 27))                    # NYSE closes 13:00, TSX 16:00: until the later close
+    assert early[0] == time(9, 45) and early[-1] == time(15, 45)
+    xmas_eve = s.times_on(date(2026, 12, 24))                 # both close at 13:00
+    assert xmas_eve[-1] == time(12, 45)
     assert scheduler.intraday(30).times_on(date(2026, 11, 19))[-1] == time(15, 45)
     assert scheduler.intraday(15).times_on(date(2026, 11, 19))[-1] == time(16, 0)  # inclusive close
     assert s.prev_before(ny(2026, 11, 23, 8, 0)) == ny(2026, 11, 20, 15, 45)
@@ -56,7 +60,8 @@ def test_intraday_sweep_schedule():
 def test_eod_and_daily_schedules():
     eod = scheduler.after_close(20)
     assert eod.next_after(ny(2026, 11, 19, 12, 0)) == ny(2026, 11, 19, 16, 20)
-    assert eod.next_after(ny(2026, 11, 25, 17, 0)) == ny(2026, 11, 27, 13, 20)     # early close day
+    assert eod.next_after(ny(2026, 11, 25, 17, 0)) == ny(2026, 11, 26, 16, 20)     # US Thanksgiving: TSX closes
+    assert eod.times_on(date(2026, 11, 27)) == [time(13, 20), time(16, 20)]        # NYSE early close, TSX full day
     assert eod.next_after(ny(2026, 12, 24, 9, 0)) == ny(2026, 12, 24, 13, 20)      # Christmas Eve early close
     assert eod.next_after(ny(2026, 12, 24, 14, 0)) == ny(2026, 12, 28, 16, 20)     # Christmas + weekend
     uni = scheduler.daily(time(6, 0), {scheduler.MON})
@@ -72,8 +77,8 @@ def test_eod_and_daily_schedules():
 
 def test_all_spec_jobs_defined():
     spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
-            "dividends", "dividends_history", "vix", "rates", "sweep", "sweep_final", "sweep_fill", "eod", "prune",
-            "splits", "extended_quotes"}
+            "dividends", "dividends_history", "vix", "rates", "rates_cad", "sweep", "sweep_final", "sweep_fill", "eod",
+            "prune", "splits", "extended_quotes"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests
     assert set(scheduler.JOBS) - {"digest_morning"} == spec
     # no CBOE collection; eod after the bridge's pushes
@@ -226,7 +231,6 @@ async def test_sweep_pipeline(tmpdb, mocked_vendor, monkeypatch):
 
 async def test_eod_writes_archive_and_bars(tmpdb, mocked_vendor, monkeypatch):
     _seed_symbols_and_bars()
-    monkeypatch.setattr(chains, "is_market_open", lambda now: False)
     got = []
     hooks.on_eod.append(lambda day, syms: got.append((day, syms)))
 

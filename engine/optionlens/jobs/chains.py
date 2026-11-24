@@ -24,8 +24,8 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from ..analytics import chainmetrics, computed_iv, vol
-from ..analytics.calendar import NY, OPEN, is_market_open, last_completed_session, now_ny
+from ..analytics import chainmetrics, computed_iv, markets, vol
+from ..analytics.calendar import NY, NYSE, OPEN, TradingCalendar, now_ny
 from ..models import Bar, ChainSnapshot, Quote
 from ..net import FetchError
 from ..repo import bars as bars_repo
@@ -88,11 +88,12 @@ def chain_metrics_row(snap: ChainSnapshot, day: date, now: datetime, after_hours
     }
 
 
-def writes_metrics(day: date, now: datetime, final: bool) -> bool:
+def writes_metrics(day: date, now: datetime, final: bool, cal: TradingCalendar = NYSE) -> bool:
     """Whether a chain fetched at `now` is session `day`'s own data for its metrics_daily row: fetched while
     the session is open and until its closing data has arrived (final_since), or a closing snapshot
-    (`final`). A later fetch (evening, weekend, next pre-market) is an after-hours fill (see module doc)."""
-    return final or now < final_since(day)
+    (`final`). A later fetch (evening, weekend, next pre-market) is an after-hours fill (see module doc).
+    `cal`: the underlying's exchange calendar."""
+    return final or now < final_since(day, cal)
 
 
 def is_stats_only(source: str | None) -> bool:
@@ -123,7 +124,8 @@ def _chain_row(snap: ChainSnapshot, day: date, now: datetime, existing: dict | N
                quality: precedence.Quality) -> dict:
     """The chain-derived row (with its precedence quality); values the chain cannot give are kept from a
     stats-only row of the same tier."""
-    row = {**chain_metrics_row(snap, day, min(now, session_close(day)), after_hours),
+    cal = markets.calendar_for(snap.quote.symbol)
+    row = {**chain_metrics_row(snap, day, min(now, session_close(day, cal)), after_hours),
            "chain_final": quality.final, "chain_quoted": quality.quoted,
            "chain_fetched_at": utc_naive(quality.fetched_at) if quality.fetched_at else None}
     if existing and is_stats_only(existing.get("source")) and is_after_hours(existing) == after_hours:
@@ -147,7 +149,7 @@ def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, sour
     Returns whether the chain is now the served one."""
     symbol = snap.quote.symbol
     quality = precedence.of_snapshot(snap, source, final)
-    served = precedence.of_latest(options_repo.latest_quality(symbol))
+    served = precedence.of_latest(options_repo.latest_quality(symbol), markets.calendar_for(symbol))
     wins = precedence.replaces(served, quality)
     if wins:
         options_repo.replace_option_latest(snap, source, final)
@@ -165,12 +167,13 @@ def _store_session(snap: ChainSnapshot, now: datetime, final: bool, source: str 
                    quality: precedence.Quality) -> None:
     """The session's metrics row and (closing snapshots) archive from `snap`, where it wins (store_chain)."""
     symbol = snap.quote.symbol
-    day = session_date(now)
-    after_hours = not writes_metrics(day, now, final)
+    cal = markets.calendar_for(symbol)
+    day = session_date(now, cal)
+    after_hours = not writes_metrics(day, now, final, cal)
     existing = metrics_repo.get_metrics(symbol, day)
     if may_touch(existing, after_hours) and _chain_replaces(existing, quality, after_hours):
         metrics_repo.upsert_metrics(day, symbol, _chain_row(snap, day, now, existing, after_hours, quality), source)
-    if final and now >= session_close(day):
+    if final and now >= session_close(day, cal):
         stored = options_repo.eod_quality(day, [symbol]).get(symbol)
         if precedence.replaces(None if stored is None else precedence.of_archive(stored), quality):
             options_repo.write_eod_chain(day, snap, source)
@@ -366,13 +369,31 @@ async def _sweep_source(src: ChainSource, syms: list[str], final: bool) -> tuple
     return done, detail
 
 
+def _sweep_universe() -> list[str]:
+    return list(dict.fromkeys([*symbols_repo.universe_symbols(), *bridge_plan.EOD_INDICES]))
+
+
+async def _fire_sweep_complete(now: datetime, done: set[str]) -> None:
+    """on_sweep_complete per market: each market's symbols with that market's session."""
+    for m, syms in markets.by_market(sorted(done)).items():
+        await hooks.fire(hooks.on_sweep_complete, session_date(now, m.calendar), syms)
+
+
 async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
-    """Refresh chains of the universe + the cash indices (bridge_plan.EOD_INDICES; or the given symbols) from every available server-side
-    ChainSource, then fire on_sweep_complete. `final`: the closing snapshot (archived per jobs/precedence.py).
-    A configured source that is not available (e.g. Questrade not connected, or it needs attention) is reported,
-    not swept. RuntimeError without any server-side source."""
+    """Refresh chains of the universe + the cash indices (bridge_plan.EOD_INDICES; or the given symbols) from every
+    available server-side ChainSource, then fire on_sweep_complete. Without `symbols`, only the markets trading
+    today are swept (a TSX holiday leaves the Canadian symbols out, and the other way round). `final`: the closing
+    snapshot (archived per jobs/precedence.py). A configured source that is not available (e.g. Questrade not
+    connected, or it needs attention) is reported, not swept. RuntimeError without any server-side source."""
     srcs = server_sources()
-    syms = symbols or list(dict.fromkeys([*await asyncio.to_thread(symbols_repo.universe_symbols), *bridge_plan.EOD_INDICES]))
+    now = now_ny()
+    if symbols:
+        syms = list(symbols)
+    else:
+        syms = [s for m, group in markets.by_market(await asyncio.to_thread(_sweep_universe)).items()
+                if m.calendar.is_trading_day(now.date()) for s in group]
+    if not syms:
+        return "skipped: no market of the universe trades today"
     done: set[str] = set()
     details = []
     for src in srcs:
@@ -384,26 +405,54 @@ async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
         done.update(got)
         details.append(detail)
     if done:
-        await hooks.fire(hooks.on_sweep_complete, session_date(now_ny()), sorted(done))
+        await _fire_sweep_complete(now, done)
     return "; ".join(details)
 
 
+# market code -> the session whose closing snapshot was taken (this process): a later close + 20 min run of the same
+# day (e.g. TSX at 16:20 after NYSE's 13:00 early close) does not sweep the market that already closed again.
+_final_done: dict[str, date] = {}
+
+
+def closing_markets(now: datetime) -> list[tuple[markets.Market, date]]:
+    """(market, session) pairs whose closing-snapshot window is open at `now` (close + 20 min until 20:00 ET) and
+    whose closing snapshot this process has not taken yet."""
+    out = []
+    for m in markets.MARKETS.values():
+        day = session_date(now, m.calendar)
+        if final_since(day, m.calendar) <= now < eod_deadline(day) and _final_done.get(m.code) != day:
+            out.append((m, day))
+    return out
+
+
 async def sweep_final() -> str:
-    """The closing snapshot from the server-side sources: from close + 20 min (the closing data has arrived) until
-    the closing-chain deadline (20:00 ET, as for the bridge); later the after-hours fill covers the session."""
+    """The closing snapshot from the server-side sources, per market: from its close + 20 min (the closing data has
+    arrived) until the closing-chain deadline (20:00 ET, as for the bridge); later the after-hours fill covers the
+    session."""
     now = now_ny()
-    day = session_date(now)
-    if not final_since(day) <= now < eod_deadline(day):
-        return f"skipped: closing snapshots of {day} are taken from {final_since(day):%H:%M} to {eod_deadline(day):%H:%M} ET"
-    return await sweep(final=True)
+    due = closing_markets(now)
+    if not due:
+        day = session_date(now)
+        return (f"skipped: no closing snapshot due (closing snapshots of {day} are taken from "
+                f"{final_since(day):%H:%M} to {eod_deadline(day):%H:%M} ET)")
+    codes = {m.code for m, _ in due}
+    syms = [s for s in await asyncio.to_thread(_sweep_universe) if markets.market_of(s).code in codes]
+    if not syms:
+        return f"skipped: no {'/'.join(sorted(codes))} symbols to snapshot"
+    out = await sweep(syms, final=True)
+    for m, day in due:
+        _final_done[m.code] = day
+    return out
 
 
 def fill_symbols(now: datetime, syms: list[str], source: str) -> tuple[list[str], int]:
     """(Of `syms`, those an after-hours fill from `source` should fetch, how many wait for a retry after failing).
-    A symbol is covered by a chain stored since the open of the current session (session_date), or by a recent
-    answer that it has none to give (not listed / no options, within CONFIRMED_RETRY_S). A failed attempt is never
-    coverage: the symbol is asked again FAILED_RETRY_S later (docs/INTEGRATION.md §6 "After-hours fills")."""
-    have = options_repo.fetched_since(datetime.combine(session_date(now), OPEN, NY), syms)
+    A symbol is covered by a chain stored since the open of its market's current session (session_date), or by a
+    recent answer that it has none to give (not listed / no options, within CONFIRMED_RETRY_S). A failed attempt is
+    never coverage: the symbol is asked again FAILED_RETRY_S later (docs/INTEGRATION.md §6 "After-hours fills")."""
+    have: set[str] = set()
+    for m, group in markets.by_market(syms).items():
+        have |= options_repo.fetched_since(datetime.combine(session_date(now, m.calendar), OPEN, NY), group)
     todo, waiting = [], 0
     for s in syms:
         if s in have:
@@ -420,16 +469,21 @@ def fill_symbols(now: datetime, syms: list[str], source: str) -> tuple[list[str]
 
 
 async def sweep_fill() -> str:
-    """After-hours fill: outside the session (evening, weekend, before the open) the universe symbols whose
-    current session has no chain yet are fetched once from each available server-side source (watchlists,
-    recently opened and most liquid first). A fill never writes the archive and never replaces the session's
-    own data (store_chain). Also keeps idle tokens alive (source keepalive)."""
+    """After-hours fill: outside its market's session (evening, weekend, holiday, before the open) a universe symbol
+    whose current session has no chain yet is fetched once from each available server-side source (watchlists,
+    recently opened and most liquid first). A fill never writes the archive and never replaces the session's own
+    data (store_chain). Also keeps idle tokens alive (source keepalive)."""
     now = now_ny()
-    if not after_session(now):
+    closed = [m for m in markets.MARKETS.values() if after_session(now, m.calendar)]
+    if not closed:
         return "skipped: the session is open or its closing data has not arrived yet"
     srcs = server_sources()
-    universe = await asyncio.to_thread(symbols_repo.universe_symbols)
-    order = await asyncio.to_thread(bridge_plan.prioritized, list(dict.fromkeys([*universe, *bridge_plan.EOD_INDICES])), now)
+    universe = await asyncio.to_thread(_sweep_universe)
+    universe = [s for s in universe if markets.market_of(s) in closed]
+    order = await asyncio.to_thread(bridge_plan.prioritized, universe, now)
+    present = list(markets.by_market(universe))
+    label = session_date(now) if present in ([], [markets.US]) else \
+        ", ".join(f"{m.code} {session_date(now, m.calendar)}" for m in present)
     done: set[str] = set()
     details = []
     for src in srcs:
@@ -440,36 +494,36 @@ async def sweep_fill() -> str:
             continue
         todo, waiting = await asyncio.to_thread(fill_symbols, now, order, src.name)
         if not todo:
-            details.append(f"{src.name}: session {session_date(now)} covered" if not waiting else
-                           f"{src.name}: {waiting} symbols of session {session_date(now)} failed recently; "
+            details.append(f"{src.name}: session {label} covered" if not waiting else
+                           f"{src.name}: {waiting} symbols of session {label} failed recently; "
                            f"asked again {FAILED_RETRY_S // 60} min after their attempt")
             continue
         got, detail = await _sweep_source(src, todo, final=False)
         done.update(got)
-        details.append(f"fill of {session_date(now)}: {detail}")
+        details.append(f"fill of {label}: {detail}")
     if done:
-        await hooks.fire(hooks.on_sweep_complete, session_date(now), sorted(done))
+        await _fire_sweep_complete(now, done)
     return "; ".join(details)
 
 
-def eod_day(now: datetime | None = None) -> date:
+def eod_day(now: datetime | None = None, cal: TradingCalendar = NYSE) -> date:
     """Session the EOD archive is for. ValueError while a session is open or before its closing data
     has arrived (final_since): the archive would hold intraday data."""
     now = now or now_ny()
-    if is_market_open(now):
+    if cal.is_market_open(now):
         raise ValueError("market is open: EOD can only run after the close")
-    day = last_completed_session(now)
-    if now < final_since(day):
-        raise ValueError(f"EOD for {day} can only run from {final_since(day):%H:%M} (delayed closing data)")
+    day = cal.last_completed_session(now)
+    if now < final_since(day, cal):
+        raise ValueError(f"EOD for {day} can only run from {final_since(day, cal):%H:%M} (delayed closing data)")
     return day
 
 
-def store_quote_bars(day: date, symbols: list[str] | None) -> list[Bar]:
+def store_quote_bars(day: date, symbols: list[str] | None, cal: TradingCalendar = NYSE) -> list[Bar]:
     """daily_bars for `day` from stored quotes of chains fetched at/after final_since(day) (the closing
     snapshot; quotes without a chain carry no fetch time and are skipped). Universe symbols keep any
-    stored bar (Nasdaq backfill/refresh owns their history); other symbols' bars are replaced, so an
+    stored bar (Nasdaq / Questrade backfill and refresh own their history); other symbols' bars are replaced, so an
     earlier non-final bar is corrected. Returns the bars offered."""
-    final = options_repo.fetched_since(final_since(day), symbols)
+    final = options_repo.fetched_since(final_since(day, cal), symbols)
     universe = set(symbols_repo.universe_symbols(include_unoptionable=True))
     out = [Bar(sym, day, q.open, q.high, q.low, q.price, q.volume or None)
            for sym, q in quotes_repo.all_quotes().items() if sym in final and q.price]
@@ -478,26 +532,48 @@ def store_quote_bars(day: date, symbols: list[str] | None) -> list[Bar]:
     return out
 
 
-def archive_unarchived(day: date, symbols: list[str] | None = None) -> int:
+def archive_unarchived(day: date, symbols: list[str] | None = None, cal: TradingCalendar = NYSE) -> int:
     """Archive stored chains fetched after the session's closing data arrived whose (day, symbol) has
     no archive yet (closing snapshots were archived when stored). Returns rows written."""
     have = options_repo.eod_sources([day], symbols)[day]
-    todo = sorted(options_repo.fetched_since(final_since(day), symbols) - set(have))
-    return options_repo.write_option_eod(day, final_since(day), todo) if todo else 0
+    todo = sorted(options_repo.fetched_since(final_since(day, cal), symbols) - set(have))
+    return options_repo.write_option_eod(day, final_since(day, cal), todo) if todo else 0
+
+
+def _closing_symbols(m: markets.Market, day: date, symbols: list[str] | None) -> list[str]:
+    """Market m's symbols (of `symbols`, or of every stored chain) with a chain fetched after `day`'s closing data
+    arrived: what its EOD archives."""
+    return sorted(s for s in options_repo.fetched_since(final_since(day, m.calendar), symbols)
+                  if markets.market_of(s) is m)
 
 
 async def eod(symbols: list[str] | None = None) -> str:
-    """Close a session: option_eod for chains stored after the closing data arrived and not archived yet (closing
-    snapshots were archived when stored), daily_bars from their quotes, on_eod hooks (report snapshots, digest).
-    Without `symbols`: every stored chain (pushed or fetched)."""
-    day = eod_day()
-    n_eod = await asyncio.to_thread(archive_unarchived, day, symbols)
-    bars = await asyncio.to_thread(store_quote_bars, day, symbols)
-    await hooks.fire(hooks.on_eod, day, sorted({b.symbol for b in bars}))
-    if not n_eod and not bars:
-        raise NothingArchived(f"{day}: nothing archived — no closing chain was stored after the close (is IB Gateway "
+    """Close the latest session, per market: option_eod for chains stored after the closing data arrived and not
+    archived yet (closing snapshots were archived when stored), daily_bars from their quotes, on_eod hooks (report
+    snapshots, digest: the US market's). Without `symbols`: every stored chain (pushed or fetched). A market closes
+    when its latest completed session is the latest one among the markets (on a TSX holiday only the US market
+    closes, on a US-only holiday only Canada); NothingArchived when no market had anything to archive."""
+    now = now_ny()
+    latest = max(m.calendar.last_completed_session(now) for m in markets.MARKETS.values())
+    parts, n_total = [], 0
+    for m in markets.MARKETS.values():
+        cal = m.calendar
+        if cal.last_completed_session(now) != latest:
+            continue
+        day = eod_day(now, cal)
+        scoped = await asyncio.to_thread(_closing_symbols, m, day, symbols)
+        n_eod = await asyncio.to_thread(archive_unarchived, day, scoped, cal) if scoped else 0
+        bars = await asyncio.to_thread(store_quote_bars, day, scoped, cal) if scoped else []
+        if m is markets.US:
+            await hooks.fire(hooks.on_eod, day, sorted({b.symbol for b in bars}))
+        elif not scoped:
+            continue
+        n_total += n_eod + len(bars)
+        parts.append(f"{day}{'' if m is markets.US else f' ({m.code})'}: {n_eod:,} option_eod rows, {len(bars):,} bars")
+    if not n_total:
+        raise NothingArchived(f"{latest}: nothing archived — no closing chain was stored after the close (is IB Gateway "
                               f"connected with the bridge on between the close and 20:00 ET, or Questrade connected?)")
-    return f"{day}: {n_eod:,} option_eod rows, {len(bars):,} bars"
+    return "; ".join(parts)
 
 
 class NothingArchived(RuntimeError):

@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping
 
+from ...analytics import markets
 from ...analytics.calendar import NY
 from ...models import (ChainSnapshot, Dividend, ExtendedQuote, Fundamentals, IntradayBar, OptionContract, Quote, Right,
                        normalize_symbol)
@@ -82,11 +83,22 @@ def is_delayed(item: Mapping) -> bool:
 
 
 # ----------------------------------------------------------------------------- symbols
+def _is_listing_of(r: Mapping, market: markets.Market) -> bool:
+    """A search result is a listing of `market`: its currency (when given), and for Canada a TSX / TSX Venture
+    listing (Questrade writes Canadian symbols with that suffix, e.g. RY.TO, BMO.PRJ.TO)."""
+    if r.get("currency") not in (None, market.currency):
+        return False
+    return market is not markets.CA or r.get("listingExchange") in (None, *markets.CA_SUFFIXES.values())
+
+
 def pick_symbol_id(payload: Mapping, symbol: str) -> int | None:
-    """The symbolId of `symbol` (canonical, e.g. BRK.B) in a symbols/search answer: a USD listing of exactly that
-    symbol; for an index (securityType "Index") the part before any '.' suffix. None when Questrade has none."""
+    """The symbolId of `symbol` (canonical, e.g. BRK.B, RY.TO) in a symbols/search answer: a listing of exactly that
+    symbol in its market (USD for US symbols; CAD on the TSX / TSX Venture for Canadian ones, so RY and RY.TO never
+    resolve to each other); for an index (securityType "Index") the part before any '.' suffix. None when Questrade
+    has none."""
+    market = markets.market_of(symbol)
     for r in first_of(payload, "symbols", "symbol") or []:
-        if r.get("currency") not in (None, "USD"):
+        if not _is_listing_of(r, market):
             continue
         name = normalize_symbol(str(r.get("symbol", "")))
         base = name.split(".")[0] if r.get("securityType") == "Index" else name
@@ -102,19 +114,23 @@ class SymbolInfo:
     prev_close: float | None
     pe: float | None = None
     eps: float | None = None
-    market_cap: float | None = None
+    market_cap: float | None = None        # in the listing's currency
     shares_outstanding: float | None = None
     high_52w: float | None = None
     low_52w: float | None = None
     avg_volume_20d: float | None = None
     avg_volume_3m: float | None = None
-    sector: str | None = None
+    sector: str | None = None              # industrySector, e.g. "BasicMaterials"
     industry_group: str | None = None
     industry_subgroup: str | None = None
     dividend: float | None = None          # one payment, $/share
     dividend_yield: float | None = None    # fraction (Questrade: percent)
     ex_date: date | None = None
     pay_date: date | None = None
+    name: str | None = None                # description
+    security_type: str | None = None       # "Stock" | "Option" | "Index" | ... (ETFs are "Stock")
+    listing_exchange: str | None = None    # "TSX" | "TSXV" | "NYSE" | ...
+    currency: str | None = None
 
 
 def symbol_info(payload: Mapping) -> SymbolInfo:
@@ -130,7 +146,9 @@ def symbol_info(payload: Mapping) -> SymbolInfo:
         avg_volume_3m=_price(s.get("averageVol3Months")), sector=_text(s.get("industrySector")),
         industry_group=_text(s.get("industryGroup")), industry_subgroup=_text(s.get("industrySubGroup")),
         dividend=_price(s.get("dividend")), dividend_yield=None if y is None else float(y) / 100.0,
-        ex_date=_day(s.get("exDate")), pay_date=_day(s.get("dividendDate")))
+        ex_date=_day(s.get("exDate")), pay_date=_day(s.get("dividendDate")), name=_text(s.get("description")),
+        security_type=_text(s.get("securityType")), listing_exchange=_text(s.get("listingExchange")),
+        currency=_text(s.get("currency")))
 
 
 def fundamentals(info: SymbolInfo, symbol: str, day: date) -> Fundamentals:

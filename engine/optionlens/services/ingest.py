@@ -9,7 +9,7 @@ import dataclasses
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from ..analytics import computed_iv
+from ..analytics import computed_iv, markets
 from ..analytics import dividends as divs_a
 from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
 from ..analytics.chain import ChainArrays
@@ -76,8 +76,9 @@ def complete_chain(snap: ChainSnapshot, source: str) -> ChainSnapshot:
     weekend snapshot holds the closing quotes), with the underlying's regular-session close then when stored.
     Used for pushed chains and, as a jobs.hooks.chain_preparers entry, for server-side sources' chains."""
     quote, fetched = snap.quote, snap.fetched_at
-    day = session_date(fetched)
-    close = session_close(day)
+    cal = markets.calendar_for(quote.symbol)
+    day = session_date(fetched, cal)
+    close = session_close(day, cal)
     asof = min(fetched, close)
     session_start = datetime.combine(day, OPEN, NY)
     spot = quote.price
@@ -87,7 +88,7 @@ def complete_chain(snap: ChainSnapshot, source: str) -> ChainSnapshot:
             spot = float(b["close"][-1])
     contracts = computed_iv.borrow_source_iv(snap.contracts, options_repo.latest_source_iv(quote.symbol, session_start),
                                              source)
-    r = ctx.risk_free_rate(day)
+    r = ctx.rate_for(quote.symbol, day)
     q = ctx.dividend_yield(quote.symbol, spot, ChainArrays.from_contracts(contracts, spot, asof, symbol=quote.symbol))
     done = computed_iv.fill_iv_greeks(contracts, spot=spot, asof=asof, r=r, q=q, session_start=session_start,
                                       source=source)

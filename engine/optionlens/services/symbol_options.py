@@ -185,7 +185,7 @@ def straddle(symbol: str) -> dict:
     ca = require_chain(symbol)
     row = ctx.ensure_known(ca.symbol)
     bars_ = ctx.load_bars(ca.symbol, live=False)
-    bt = optbacktest.straddle_backtest(ca.symbol, bars_, provider=ctx.DbPriceProvider(), rate=ctx.rate_fn(),
+    bt = optbacktest.straddle_backtest(ca.symbol, bars_, provider=ctx.DbPriceProvider(), rate=ctx.rate_fn_for(ca.symbol),
                                        div_yield=ca.q, years=STRADDLE_BACKTEST_YEARS,
                                        is_index=row["kind"] == "index") if bars_ else None
     return {"symbol": ca.symbol, "spot": ca.spot, "rows": cm.straddle_rows(ca), "backtest": bt}

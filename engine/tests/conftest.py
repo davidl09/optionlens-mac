@@ -2,7 +2,7 @@
 server-side chain source (Questrade, by default) is an offline stand-in that is not connected."""
 import pytest
 
-from optionlens.jobs import ondemand, source_health
+from optionlens.jobs import chains, ondemand, source_health
 from optionlens.net import FetchError
 from optionlens.services import refresh
 from optionlens.sources import cboe, chain_source
@@ -48,6 +48,7 @@ def _fresh_source_state():
     """Fetch outcomes and refresh rounds are process-wide memory: every test starts without them."""
     source_health._by_source.clear()
     refresh._rounds.clear()
+    chains._final_done.clear()     # closing snapshots taken (per market and session)
     ondemand._locks.clear()        # asyncio locks are bound to the loop of the test that first contended them
     yield
     source_health._by_source.clear()

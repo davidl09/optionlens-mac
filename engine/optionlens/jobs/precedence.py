@@ -20,6 +20,8 @@ from typing import Iterable, Mapping
 
 from ..models import ChainSnapshot, OptionContract
 from ..repo import options as options_repo
+from ..analytics.calendar import NYSE, TradingCalendar
+from ..analytics.markets import calendar_for
 from ._util import session_date
 
 SAME_SNAPSHOT = timedelta(minutes=15)
@@ -49,7 +51,7 @@ def _aware(t: datetime | None) -> datetime | None:
 
 def of_snapshot(snap: ChainSnapshot, source: str | None, final: bool) -> Quality:
     return Quality(source, final, snap.delayed is False, quoted(snap.contracts), snap.fetched_at,
-                   session_date(snap.fetched_at))
+                   session_date(snap.fetched_at, calendar_for(snap.quote.symbol)))
 
 
 def of_metrics_row(row: Mapping) -> Quality:
@@ -64,13 +66,14 @@ def of_archive(a: Mapping) -> Quality:
     return Quality(a["source"], True, a["delayed"] is False, int(a["quoted"]), _aware(a.get("fetched_at")))
 
 
-def of_latest(a: Mapping | None) -> Quality | None:
-    """repo.options.latest_quality entry -> Quality of the served chain (None: none stored)."""
+def of_latest(a: Mapping | None, cal: TradingCalendar = NYSE) -> Quality | None:
+    """repo.options.latest_quality entry -> Quality of the served chain (None: none stored); `cal`: the calendar of
+    the chain's underlying."""
     if a is None:
         return None
     fetched = _aware(a["fetched_at"])
     return Quality(a["source"], bool(a["final"]), a["delayed"] is False, int(a["quoted"]), fetched,
-                   session_date(fetched) if fetched else None)
+                   session_date(fetched, cal) if fetched else None)
 
 
 def replaces(existing: Quality | None, new: Quality) -> bool:

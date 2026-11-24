@@ -145,7 +145,7 @@ def _inputs(symbol: str) -> dict:
     bars = ctx.load_bars(sym, live=False)
     spot = bars[-1].close if bars else None
     return {"symbol": sym, "bars": bars, "events": _past(earn_repo.for_symbol(sym)),
-            "provider": ctx.DbPriceProvider(), "rate": ctx.rate_fn(),
+            "provider": ctx.DbPriceProvider(), "rate": ctx.rate_fn_for(sym),
             "div_yield": ctx.dividend_yield_map({sym: spot}).get(sym, 0.0) if spot else 0.0,   # bulk inputs, cached
             "is_index": row["kind"] == "index", "universe_event_var": ctx.universe_event_variance()}
 

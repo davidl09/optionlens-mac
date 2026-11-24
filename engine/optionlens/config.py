@@ -49,7 +49,7 @@ class Settings:
     etf_file: Path
     sweep_interval_min: int
     option_eod_retention_days: int
-    risk_free_rate: float
+    risk_free_rate: float                  # USD fallback (no stored Treasury rate)
     cboe_concurrency: int
     cboe_rps: float
     nasdaq_rps: float
@@ -74,6 +74,9 @@ class Settings:
     # "stream" = Level 1 WebSocket streams (Questrade: freezes the market data of other IQ platforms open meanwhile).
     questrade_live: str = "poll"
     tz: str = "America/New_York"
+    risk_free_rate_cad: float = 0.03       # CAD fallback (no stored Bank of Canada rate)
+    universe_ca_stocks: int = 200          # Canadian universe: largest N optionable TSX/TSXV stocks (jobs/universe_ca.py)
+    ca_file: Path = PACKAGE_DIR / "canada.txt"   # Canadian candidates (Montréal Exchange equity / ETF option classes)
 
     def __post_init__(self) -> None:
         bad = [f"OPTIONLENS_{n.upper()}={getattr(self, n)} must be > 0" for n in _POSITIVE if getattr(self, n) <= 0]
@@ -82,6 +85,8 @@ class Settings:
                        "the engine only serves the local app")
         if not 0 <= self.port <= 65535:
             bad.append(f"OPTIONLENS_PORT={self.port} must be in 0..65535")
+        if self.universe_ca_stocks < 0:
+            bad.append(f"OPTIONLENS_UNIVERSE_CA_STOCKS={self.universe_ca_stocks} must be >= 0")
         if self.universe_stocks < 0:
             bad.append(f"OPTIONLENS_UNIVERSE_STOCKS={self.universe_stocks} must be >= 0")
         if self.chain_universe_size < 0:
@@ -98,6 +103,10 @@ class Settings:
             bad.append(f"OPTIONLENS_PARENT_PID={self.parent_pid} must be > 0")
         if bad:
             raise ValueError("invalid settings: " + "; ".join(bad))
+
+    def fallback_rate(self, currency: str) -> float:
+        """The configured risk-free rate of `currency` (used until a rate is stored)."""
+        return self.risk_free_rate_cad if currency == "CAD" else self.risk_free_rate
 
     @property
     def db_path(self) -> Path:
@@ -138,6 +147,9 @@ def load_settings() -> Settings:
         questrade_expiries=_num("QUESTRADE_EXPIRIES", "8", int),
         questrade_moneyness=_num("QUESTRADE_MONEYNESS", "0.25", float),
         questrade_live=(_env("QUESTRADE_LIVE", "poll") or "poll").strip().lower(),
+        risk_free_rate_cad=_num("RISK_FREE_RATE_CAD", "0.03", float),
+        universe_ca_stocks=_num("UNIVERSE_CA_STOCKS", "200", int),
+        ca_file=Path(_env("CA_FILE", str(PACKAGE_DIR / "canada.txt"))).expanduser(),
     )
 
 

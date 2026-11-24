@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from typing import Awaitable, Callable, Iterable, TypeVar
 
-from ..analytics.calendar import NY, OPEN, close_time, is_trading_day, now_ny, prev_trading_day
+from ..analytics.calendar import NY, NYSE, OPEN, TradingCalendar, now_ny
 from ..repo import jobs as jobs_repo
 
 log = logging.getLogger("optionlens.jobs")
@@ -23,27 +23,29 @@ EOD_DEADLINE = time(20, 0)
 current_run_id: ContextVar[int | None] = ContextVar("current_run_id", default=None)
 
 
-def session_date(now: datetime | None = None) -> date:
+# Every session helper takes the exchange's calendar (default NYSE; a Canadian symbol's is TSX:
+# analytics.markets.calendar_for).
+def session_date(now: datetime | None = None, cal: TradingCalendar = NYSE) -> date:
     """Trading session the current market data belongs to: today once the session opened, else the previous one."""
     ts = (now or now_ny()).astimezone(NY)
     d = ts.date()
-    return d if is_trading_day(d) and ts.time() >= OPEN else prev_trading_day(d)
+    return d if cal.is_trading_day(d) and ts.time() >= OPEN else cal.prev_trading_day(d)
 
 
-def session_close(day: date) -> datetime:
+def session_close(day: date, cal: TradingCalendar = NYSE) -> datetime:
     """Close of a trading session (aware NY; 13:00 on early-close days)."""
-    return datetime.combine(day, close_time(day), NY)
+    return datetime.combine(day, cal.close_time(day), NY)
 
 
-def final_since(day: date) -> datetime:
+def final_since(day: date, cal: TradingCalendar = NYSE) -> datetime:
     """Earliest fetch time whose (delayed) data is the session's closing snapshot: close + FINAL_DELAY_MIN."""
-    return session_close(day) + timedelta(minutes=FINAL_DELAY_MIN)
+    return session_close(day, cal) + timedelta(minutes=FINAL_DELAY_MIN)
 
 
-def after_session(ts: datetime) -> bool:
+def after_session(ts: datetime, cal: TradingCalendar = NYSE) -> bool:
     """Whether data observed at `ts` was collected after its session's closing data arrived (final_since): in the
     evening, on a weekend or before the next open, IBKR sends the session's frozen closing values."""
-    return ts >= final_since(session_date(ts))
+    return ts >= final_since(session_date(ts, cal), cal)
 
 
 def eod_deadline(day: date) -> datetime:
