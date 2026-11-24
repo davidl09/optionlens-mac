@@ -135,6 +135,8 @@ class OptionLensTools:
             except EngineError as e:
                 data.append({**entry, "error": str(e)})
                 continue
+            if t.post == "report_list":            # e.g. the dashboard's report catalog: the compact list
+                result = shaping.report_list(result, {})
             entry["result"] = self.shape_view(result, req, args)
             data.append(entry)
         meta = {k: v for k, v in view.items() if k != "data"}

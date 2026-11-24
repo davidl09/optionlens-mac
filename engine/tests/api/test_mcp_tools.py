@@ -113,6 +113,12 @@ async def test_current_view_returns_the_view_and_the_rows_on_screen(tools, app):
     assert mime == "application/json" and '"report_id":"large-volume-contracts"' in text
 
 
+async def test_current_view_keeps_the_report_catalog_compact(tools, app):
+    await put_view(app, {"route": "/", "data": [{"method": "GET", "path": "/api/reports"}]})
+    [entry] = (await tools.call("get_current_view", {}))["data"]
+    assert entry["tool"] == "report_list" and set(entry["result"][0]) == {"id", "title", "category", "description", "params"}
+
+
 async def test_current_view_never_replays_a_write(tools, app):
     await put_view(app, {"route": "/watchlists", "data": [{"method": "POST", "path": "/api/watchlists",
                                                           "body": {"name": "x"}}]})
