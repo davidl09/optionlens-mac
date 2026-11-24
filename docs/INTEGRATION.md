@@ -26,6 +26,9 @@ API against other local processes and web pages.
 | `OPTIONLENS_QUESTRADE_EXPIRIES` | `8` | Questrade sweeps: first N expiries (on/after today) |
 | `OPTIONLENS_QUESTRADE_MONEYNESS` | `0.25` | Questrade sweeps: strikes within ±this fraction of the underlying price |
 | `OPTIONLENS_QUESTRADE_LIVE` | `poll` | Default live mode until the user chooses one in Settings (`PUT /api/live/mode`, saved in `DATA_DIR/live_mode.json`, §9): `poll` = Level 1 snapshots of what is on screen at a cadence within the rate limits; `stream` = Level 1 WebSocket streams (Questrade: freezes the market data of any other IQ platform open at the same time). Anything else: the engine refuses to start |
+| `OPTIONLENS_UNIVERSE_CA_STOCKS` | `200` | Canadian universe: the largest N optionable TSX / TSX Venture stocks (plus every optionable Canadian ETF), selected with Questrade (SPEC §5 `universe_ca`) |
+| `OPTIONLENS_CA_FILE` | bundled `canada.txt` | The Canadian candidates (Montréal Exchange equity / ETF option classes) |
+| `OPTIONLENS_RISK_FREE_RATE_CAD` | `0.03` | CAD risk-free rate until a Bank of Canada rate is stored |
 | `OPTIONLENS_DATA_DIR` | `~/.local/share/optionlens` | Database directory; the app passes `<userData>/data` (macOS `~/Library/Application Support/OptionLens/data`, Windows `%APPDATA%\OptionLens\data`, Linux `~/.config/OptionLens/data`) |
 
 Launch: `python -m optionlens.cli serve [--port N] [--exit-on-stdin-eof]`. Once the API is ready the engine
@@ -155,11 +158,23 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   Intraday SMAs are over the loaded bars
   ("SMA 20 (bars)"); earnings / dividend markers are drawn on daily ranges only; the time axis has one slot per bar
   (nights and weekends collapsed).
+- **Markets** (SPEC §3 "Symbols and markets"): `SymbolRef`, `SymbolSummary` and profile peers carry `market` ("US" |
+  "CA"), `exchange` ("TSX" | "TSXV" | null) and `currency` ("USD" | "CAD"); report and watchlist rows of a symbol carry
+  `currency`. Universe reports take `market` (US default / CA / all; aggregates US / CA; US-only sources none, SPEC §7).
+  `Earnings.unavailable` / `Dividends.unavailable`: why that data is missing for a Canadian listing (null otherwise).
+  The renderer labels money by currency (`src/lib/format.ts` MoneyStyle: C$; US$ where a view mixes currencies). A
+  stock backtest takes symbols of one market (422 otherwise).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
   of that same value, and only when it is from the last session (else null: stale, never shown as today's).
 
 ## 6. Ingest API (written by the IBKR bridge; all POST except `wants`, Bearer auth, JSON, idempotent)
+
+**The bridge serves US listings only** (`sources/chain_source.bridge_serves`; renderer `src/lib/markets.ts`
+`bridgeServes`). Canadian listings (TSX / MX) would need IBKR's Canadian market-data permissions and other contract
+definitions, so every work list (`wants`, `live-wants`) leaves them out, a refresh round of a Canadian symbol does not
+mark IBKR pending, and the renderer neither asks the bridge for its chain nor for its intraday bars: Canadian data
+comes from Questrade (§8).
 
 Times are ISO-8601 with offset; dates `YYYY-MM-DD`; IV/percent as fractions; prices per share.
 
@@ -633,8 +648,9 @@ model (source `questrade`). `dividend` is ONE payment, not the annual rate: the 
 0.47 and yield 1.84 at prevDayClosePrice 102.5, and 4 × 0.47 / 102.5 = 1.83%; `exDate` is its ex-date, `dividendDate`
 its pay date. The snapshot is the single source of those figures (§5 "Key stats").
 
-**Extended hours** (`jobs/extended.py`): during a trading day's pre-market (04:00–09:30 ET) and after-hours (close–20:00
-ET) the `extended_quotes` job asks every 5 min for the universe and watchlist symbols' Level 1 quotes
+**Extended hours** (`jobs/extended.py`): during a NYSE trading day's pre-market (04:00–09:30 ET) and after-hours
+(close–20:00 ET) the `extended_quotes` job asks every 5 min for the universe and watchlist US listings' Level 1 quotes
+(Canadian ones have no extended-hours trading)
 (`markets/quotes?ids=`, 100 ids per call, ids the sweeps cached — no searches: ~12 calls a round) and stores the latest
 per symbol and market (`lastTradePrice`, `lastTradePriceTrHrs`, `volume` as reported for the day, `lastTradeTime`)
 plus the halt flags. The pre-market / after-hours movers reports show every symbol whose last trade falls in the window
@@ -644,12 +660,26 @@ the watchlist and most active symbols Questrade has no quote for (not connected,
 **Quotes**: `VWAP` is read when Questrade sends it (it is not in the documented quote sample; null otherwise),
 `isHalted` as is (halt_status keeps the state and when it changed).
 
+**Canadian listings** (SPEC §3): `symbols/search?prefix=RY.TO` resolves the TSX listing (exact symbol, currency CAD,
+`listingExchange` TSX / TSXV; never the NYSE `RY`). The documentation's `symbols/:id/options` sample is itself an MX
+chain (Bank of Montreal: `listingExchange` "MX", root "BMO", multiplier 100, American); MX contracts map like OPRA ones
+with the root = the ticker before any class / unit suffix and the OSI-like code rooted at the canonical symbol
+(`BMO.TO150117C00060000`). Daily history: `markets/candles/:id` with interval `OneDay` (2,000 per response, continued).
+The Canadian universe (`universe_ca`, weekly and when a token is saved) is selected from `symbols/:id` fields:
+`hasOptions`, `marketCap`, `industrySector`, `description` (the reference snapshot and current dividend above are
+stored for Canadian listings like for US ones).
+Not verified against the live API: how far back daily candles go, whether they are split-adjusted, and Canadian
+symbols' behaviour in search beyond the documented sample (BMO.PRJ.TO).
+
 **Schedule** (jobs/scheduler.py; each run skips Questrade when it is not connected): `sweep` every
 `SWEEP_INTERVAL_MIN` (60) from 09:45 to the close; `sweep_final` at close + 20 min (until 20:00 ET, also as a
 catch-up after a late start): the closing snapshot, archived per "Chain precedence"; `sweep_fill` hourly at :35
 outside the session (evening, weekend, before the open): an after-hours fill of the universe symbols without a chain
 fetched since the current session's open, watchlists / recently opened / most liquid first (the bridge's fill order) —
-never archived, never over the session's own data; it also refreshes an idle token daily. Coverage is a stored chain
+never archived, never over the session's own data; it also refreshes an idle token daily. Per market: a sweep asks for
+the symbols of the markets trading today, the closing snapshot is taken per market at its close + 20 min (once per
+session: on a US early close, NYSE at 13:20 and the TSX at 16:20), a fill covers the markets whose session is over, and
+the EOD archive closes the markets whose latest completed session is the latest one. Coverage is a stored chain
 (or a confirmed "not listed" / "no options", asked again after 6 h), never an attempt: a symbol whose fetch failed is
 asked again 30 min later, and the run says "N symbols … failed recently" instead of "covered". Swept: the universe plus SPX, NDX, RUT, XSP. With ~1,150 symbols a sweep is ~3,500 calls (the day's first ~5,800
 with the daily symbol info), under the 10,500/h budget; the on-demand refresh of an opened symbol also uses Questrade
@@ -701,7 +731,9 @@ when it is connected (§7).
   `GET /api/live/status` is the current status.
 - `state`: `live` (data flowing, real-time) · `delayed` (flowing, `delay` set) · `connecting` · `stale` (no success for
   max(10 s, 3 × the poll interval), detail = the last error) · `market_closed` (outside 04:00–20:00 ET on NYSE trading
-  days, or only options wanted outside 09:30–close; nothing is fetched) · `not_connected` (no usable source) · `idle`
+  days, or only options wanted outside 09:30–close; nothing is fetched; Canadian symbols: outside 09:30–close on TSX
+  trading days — the TSX has no pre-market trading and its 16:15–17:00 session trades at the close only; each symbol
+  follows its own market, `session` is the most open session of the markets shown) · `not_connected` (no usable source) · `idle`
   (nothing subscribed). Extended hours (04:00–09:30, close–20:00) keep underlyings live, never options.
 - Source: Questrade while it is usable (connected, not needing attention); when it is unavailable, or failing for 30 s,
   and the IBKR bridge is connected, the bridge snapshots the visible symbols (`live-wants`, §6; option cells keep the

@@ -223,8 +223,10 @@ def test_closing_snapshots_per_market_and_once_per_session():
 
 async def test_eod_closes_only_the_markets_that_traded(recorder, monkeypatch):
     monkeypatch.setattr(chains, "now_ny", lambda: ny(2026, 7, 3, 20, 5))       # NYSE holiday, TSX session
-    with pytest.raises(chains.NothingArchived, match="2026-07-03"):
+    with pytest.raises(chains.NothingArchived, match="2026-07-03"):          # Canada is followed: its archive is owed
         await chains.eod()
+    symbols_repo.set_universe([], markets.CA)                                 # no Canadian symbols: nothing to close
+    assert (await chains.eod()) == "skipped: no symbols on the markets that closed 2026-07-03"
 
 
 # ----------------------------------------------------------------------------- live sessions

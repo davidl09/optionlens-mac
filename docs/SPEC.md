@@ -30,6 +30,11 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
    IV proxy for model pricing, in order: stored ATM IV for that symbol/date/tenor → stored IV30 →
    `HV30(date) * k` where k = median(IV30/HV30) over stored history for that symbol, else 1.15.
 4. Data is ~15 min delayed (CBOE delayed feed). Show "as of" timestamps everywhere.
+5. Canadian listings (§3 "Symbols and markets"): no free source of earnings dates, dividend histories, financial
+   statements, insider trades or news is used for them (Nasdaq covers US listings only, and a Toronto ticker can name a
+   different US company: T.TO is TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current
+   dividend) cover them like US listings. The engine never sends a Canadian symbol to Nasdaq; the symbol's Earnings
+   and Dividends answers say so in `unavailable`, and earnings / dividend reports cover US listings only.
 
 ---------------------------------------------------------------------------------------------
 ## 1. Data sources (all free, verified reachable)
@@ -52,10 +57,15 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
 | Nasdaq extended hours | `/api/quote/{SYM}/extended-trading?markettype=pre|post&assetclass=stocks&time=0` | pre/after-hours last, volume |
 | Nasdaq earnings surprise | `/api/company/{SYM}/earnings-surprise` | last 4 quarters EPS vs consensus |
 
+| Bank of Canada Valet | `https://www.bankofcanada.ca/valet/observations/TB.CDN.90D.MID/json?start_date=YYYY-MM-DD` | CAD risk-free rate: "Treasury bills, 3-month" mid yield (legacy id V39065), percent, business daily: `observations[] {d, TB.CDN.90D.MID: {v}}` (verified 2026-11-24) |
+| Questrade (user's account) | `symbols/search`, `symbols/:id`, `symbols/:id/options`, `markets/quotes`, `markets/candles/:id` (docs/INTEGRATION.md §8) | Canadian listings: symbol ids (TSX `.TO`, TSX Venture `.VN`, CAD), market cap / hasOptions / yield, Montréal Exchange chains, daily (`OneDay`) and intraday candles |
+| Montréal Exchange options list | `https://www.m-x.ca/en/trading/data/options-list` (read once, 2026-11-24) | the equity / ETF option classes bundled as `engine/optionlens/canada.txt` (the Canadian universe's candidates; not fetched at run time) |
+
 All Nasdaq calls need a browser User-Agent and `Accept: application/json`. Use a generic UA,
 never personal info. Rate limits: Nasdaq ≤ 4 req/s, CBOE ≤ 8 concurrent. Retries: 3 with
 exponential backoff on 429/5xx/timeouts. Yahoo is rate-limited from this host: **do not use**.
 Risk-free rate: Treasury 13-week bill (`https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{YEAR}/all?type=daily_treasury_bill_rates&field_tdr_date_value={YEAR}&_format=csv`, column for 13 weeks "COUPON EQUIVALENT"), fallback config `RISK_FREE_RATE=0.04`.
+CAD (Canadian listings' options): Bank of Canada 3-month T-bill (above), fallback config `RISK_FREE_RATE_CAD=0.03`.
 
 ---------------------------------------------------------------------------------------------
 ## 2. Architecture
@@ -66,7 +76,8 @@ server/optionlens/
                      UNIVERSE_STOCKS(1000), ETF list file, SWEEP_INTERVAL_MIN(30), HOST, PORT(8473),
                      NTFY_URL, SMTP_* (optional), RISK_FREE_RATE, TZ, API_TOKEN, PARENT_PID,
                      CORS_ORIGINS, CHAIN_UNIVERSE_SIZE, CHAIN_SOURCES, QUESTRADE_EXPIRIES,
-                     QUESTRADE_MONEYNESS (HOST loopback only)
+                     QUESTRADE_MONEYNESS, UNIVERSE_CA_STOCKS(200), CA_FILE, RISK_FREE_RATE_CAD
+                     (HOST loopback only)
   models.py          frozen dataclasses shared across layers (see §3)
   net.py             one shared httpx.AsyncClient, per-host rate limiter, retry
   sources/           INFRA: parse remote payloads -> models.  cboe.py nasdaq.py treasury.py
@@ -77,7 +88,8 @@ server/optionlens/
                      cache, jobs). Only module that writes SQL.
   analytics/         DOMAIN: pure functions over numpy arrays / models, no I/O. Fully unit tested.
                      bs.py vol.py chainmetrics.py earnings.py stats.py strategies.py payoff.py
-                     backtest.py dividends.py calendar.py (NYSE trading calendar/holidays)
+                     backtest.py dividends.py calendar.py (NYSE and TSX trading calendars)
+                     markets.py (symbol -> market / exchange / currency / calendar)
   services/          APPLICATION: compose repo + analytics for the API. symbol.py market.py
                      backtests.py alerts.py; reports/ (registry + one module per report family)
   jobs/              scheduler.py (asyncio, NY tz, trading-day aware) + collectors
@@ -109,6 +121,22 @@ Right = Literal["C","P"]
 @dataclass(frozen=True) class Dividend: symbol, ex_date, amount, pay_date, record_date, declared_date, kind:str
 ```
 OSI parse: root = chars before the 6-digit date, YYMMDD, C/P, strike = int(last 8)/1000.
+
+**Symbols and markets** (analytics/markets.py, the one place that maps a symbol to its market). Two markets:
+- US: NYSE / Nasdaq listings, OPRA options, USD, NYSE calendar. Canonical symbol = the bare ticker (`RY`, `BRK.B`).
+- Canada: TSX / TSX Venture listings, Montréal Exchange (MX) options, CAD, TSX calendar. Canonical symbol = the
+  Toronto ticker with Questrade's exchange suffix: `.TO` (TSX) or `.VN` (TSX Venture), class shares and units keeping
+  their dot (`RY.TO`, `RCI.B.TO`, `AP.UN.TO`). So `RY` (NYSE, USD) and `RY.TO` (TSX, CAD) are two symbols and never
+  resolve to each other (Questrade search: exact symbol, the market's currency, TSX / TSXV listing). Canadian listings
+  in the universe are CAD-traded (USD units such as `DLR.U.TO` are left out), so a symbol's market fixes its currency.
+- MX contracts get an OSI-like code whose root is the underlying's canonical symbol: `RY.TO261218C00120000` (OPRA's
+  RY contract is `RY261218C00120000`). Questrade lists an MX equity option under the ticker before any class / unit
+  suffix (`TECK` for TECK.B, `AP` for AP.UN); roots with a digit (adjusted deliverables) and multipliers other than
+  100 are dropped, as for OPRA. MX equity options are American, 100 shares, expire on the third Friday (the trading
+  day before when it is a holiday) and stop trading 16:00 ET, as US options.
+- Every symbol reference in the API carries `market` ("US" | "CA"), `exchange` ("TSX" | "TSXV" | null for US) and
+  `currency` ("USD" | "CAD"); report rows of a symbol carry `currency`. Money is shown in it (C$ always; US$ where a
+  view mixes currencies, else $) and never converted or summed across currencies.
 CBOE index roots in OSI may differ from symbol (e.g. `SPXW`); keep `symbol` = requested symbol
 (without `_`), store root in osi only. `mid = (bid+ask)/2` when both >0 else last.
 
@@ -138,7 +166,9 @@ earnings(symbol, date, timing, fiscal_quarter, eps_actual, eps_estimate, surpris
         PK(symbol,date))
 dividends(symbol, ex_date, amount, pay_date, record_date, declared_date, kind, PK(symbol, ex_date))
 index_bars(symbol, date, open, high, low, close, PK(symbol,date))   -- VIX family
-rates(date PK, rate)                                                 -- 13w T-bill fraction
+rates(date PK, rate)                                                 -- 13w T-bill fraction (USD)
+rates_cad(date PK, rate)                                             -- Bank of Canada 3-month T-bill fraction
+symbols.dividend_yield DOUBLE                                        -- Questrade's indicated yield (Canadian listings)
 report_snapshots(date, report_id, symbol, payload JSON, PK(date, report_id, symbol))
 watchlists(id PK, name UNIQUE, created_at); watchlist_items(watchlist_id, symbol, added_at, PK(watchlist_id, symbol))
 presets(id PK, report_id, name, payload JSON, created_at, UNIQUE(report_id,name))
@@ -151,17 +181,27 @@ Moneyness buckets: ATM if |strike/spot − 1| ≤ 2.5%; calls OTM if strike > sp
 < spot·0.975; puts mirror.
 
 ---------------------------------------------------------------------------------------------
-## 5. Jobs (America/New_York, NYSE trading days incl. holidays & early closes)
+## 5. Jobs (America/New_York; NYSE and TSX trading days incl. holidays & early closes)
+
+Trading-day jobs fire on days either exchange trades and each run handles the markets that traded (a TSX holiday
+leaves the Canadian symbols out, a US-only holiday the US ones); sessions, closing-data boundaries, after-hours fills,
+live sessions and intraday sessions use the symbol's exchange calendar. TSX calendar (tsx.com, 2026 / 2027 lists):
+closed New Year's Day, Family Day (3rd Mon Feb), Good Friday, Victoria Day (Monday before May 25), Canada Day, Civic
+Holiday (1st Mon Aug), Labour Day, Thanksgiving (2nd Mon Oct), Christmas, Boxing Day; a weekend holiday is taken on
+the next free weekday (Christmas / Boxing Day on a weekend: Monday and Tuesday); early close 13:00 on a weekday
+Christmas Eve only. Report snapshots and the EOD digest are the US market's.
 
 | Job | When | What |
 |---|---|---|
 | universe | Mon 06:00 + first run | Top `UNIVERSE_STOCKS` common stocks by market cap from Nasdaq screener (exclude `^`, `/`, warrants/units/preferreds: symbols with `^`/`/` or names containing "Warrant", "Unit", "Right", "Preferred"), plus `server/optionlens/etfs.txt` (~120 liquid optionable ETFs incl. SPY QQQ IWM DIA, sector SPDRs XLK XLF XLE XLV XLY XLP XLI XLB XLU XLRE XLC, GLD SLV TLT HYG EEM EFA FXI KWEB SMH ARKK UVXY VXX SOXL TQQQ SQQQ …) and indices SPX NDX RUT XSP (CBOE `_` prefix). Upsert `symbols`. |
-| prices_backfill | first run + daily 06:10 for symbols missing history | Nasdaq 10y history → daily_bars |
+| universe_ca | Mon 06:05 + when a Questrade token is saved (skipped without Questrade) | Canadian universe: each candidate of `canada.txt` (MX equity / ETF option classes) resolved with Questrade (`<ticker>.TO`, else `.VN`, CAD) and described with `symbols/:id`; kept: `hasOptions`; of the stocks the `UNIVERSE_CA_STOCKS` (200) largest by Questrade's `marketCap`, plus every ETF / trust. Only Canadian universe flags change |
+| prices_backfill | first run + daily 06:10 for symbols missing history | Nasdaq 10y history → daily_bars (Canadian listings: Questrade `OneDay` candles, continued past the 2,000-candle limit; depth and split adjustment are not documented — stored as returned, the weekly refresh replaces a changed history) |
 | prices_refresh | Sat 07:00 | refetch last 30 days for all (corrects splits/revisions); on detected split (close jump inconsistent) refetch full |
 | earnings | daily 05:30; backfill once | calendar for today−10 … today+90 (one call/day). Backfill: every weekday for the past 3 years (resumable; store progress in job_runs). Store every row (not only universe). |
 | dividends | daily 05:45 | calendar today−10 … today+60; weekly (Sun) per-universe-symbol dividend history |
 | vix | daily 17:00 | CBOE VIX family CSVs → index_bars |
 | rates | daily 17:05 | Treasury 13w bill |
+| rates_cad | daily 17:10 | Bank of Canada 3-month T-bill since the last stored day (11 years on first run) |
 | sweep | trading days every SWEEP_INTERVAL_MIN from 09:45 to 16:00 | fetch CBOE chain for every universe symbol (concurrency 8): replace option_latest, upsert quotes_latest, compute chain metrics + HV → upsert today's metrics_daily, then evaluate alerts |
 | eod | trading days 16:20 (13:20 early close) | final sweep + write option_eod for the day + write today's daily_bars from CBOE quote (o/h/l/c/volume) + store report snapshots (unusual volume report rows) + evaluate alerts + digest notification |
 | prune | daily 03:00 | retention for option_eod, job_runs (90d), notifications (180d) |
@@ -251,6 +291,12 @@ run: (params) -> list[dict], row_key)`. API: `GET /api/reports` (definitions) an
 column-group toggles, CSV export of the filtered rows, saved presets (params + filters + sort +
 hidden columns), watchlist membership filter, row click → symbol page. Max 5000 rows returned
 (`truncated: true` flag otherwise).
+
+**Markets.** Every report declares `ReportDef.markets`: `any` = a `market` param US (default) / CA / all; `one` =
+US / CA (aggregates: options-broad-view, performance-by-sector, performance-by-industry); `us` = a US-only source, no
+param (earnings, dividends, splits / IPO calendars, pre-market / after-hours movers, event-driven). The filter
+applies before limits (universe frame, chain loads) and again to the result rows; an explicit `symbols` list is
+shown whatever its market, a watchlist is narrowed to it. Rows of a symbol carry `currency`.
 
 Column `fmt` values: `symbol`, `text`, `int`, `num`, `num2`, `money`, `bigmoney` (1.2B), `pct`
 (fraction→%), `pct_signed` (colored ±), `vol` (IV/HV fraction → "25.3"), `date`, `datetime`,
@@ -439,7 +485,7 @@ symbol (default 240 min). Digests at 08:00 (earnings today, top premarket from w
 ```
 GET  /api/health                                  {ok, version, auth, server_id} (no auth)
 GET  /api/status                                  Status
-GET  /api/search?q=                               SymbolRef[] (max 20; prefix match symbol, then name contains)
+GET  /api/search?q=                               SymbolRef[] (max 20; prefix match symbol, then name contains; with market / exchange / currency)
 GET  /api/market/overview                         MarketOverview
 GET  /api/symbol/{sym}/summary                    SymbolSummary
 GET  /api/symbol/{sym}/bars?range=1m|3m|6m|1y|3y|5y|10y|max   Bar[]
@@ -479,5 +525,6 @@ GET/POST /api/presets?report_id= ; DELETE /api/presets/{id}
 GET/POST /api/alerts ; PUT/DELETE /api/alerts/{id}
 GET  /api/notifications?unread=1 ; POST /api/notifications/read (body {ids?:number[]} all if omitted)
 ```
+Canadian symbols are `RY.TO` / `XYZ.VN` (§3); one not stored yet is looked up on Questrade (404 without it).
 Errors: `{detail: string}` with 404 for unknown symbol, 422 for bad params. Symbols upper-cased;
 index symbols accepted as `SPX` or `^SPX` (stored as `SPX`, fetched as `_SPX`). NaN/inf → null.

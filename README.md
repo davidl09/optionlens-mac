@@ -235,6 +235,20 @@ Nasdaq's history where it has one, else dividends derived from IBKR's dividend-a
 backfills ten years per symbol, a few hours on the first connection), else Questrade's current dividend — each with
 its source, and amounts that disagree between sources flagged.
 
+### Canadian markets (with Questrade)
+
+With Questrade connected OptionLens also follows Canada: about 200 of the largest TSX / TSX Venture stocks with options
+on the Montréal Exchange (MX), plus the Canadian ETFs with MX options (XIU, XIC, XEG, XFN, ZEB, HXT, …), chosen weekly
+from the MX option list by Questrade's market cap. Canadian symbols carry their exchange suffix — **RY.TO** is Royal
+Bank on the TSX, **RY** its NYSE listing; search shows both with exchange and currency. Canadian prices are in CAD
+(shown as **C$**; in a table holding both currencies US amounts read **US$**) and are never converted or added to US
+amounts. Reports have a **Market** filter (US by default, Canada, or All; totals are per market). Canadian chains,
+price history, intraday charts and live quotes come from Questrade, sessions follow the TSX holiday calendar, and options
+are priced with the Bank of Canada 3-month T-bill rate. Questrade's daily figures (P/E, EPS, market cap, current
+dividend, …) cover Canadian listings too. Not available for them (no free source): earnings dates, dividend histories
+(only Questrade's current dividend is shown), financial statements, insider trades and news. Pre-market / after-hours
+quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
+
 ## Portfolio (read-only)
 
 **My → Portfolio** shows your positions from Questrade and IBKR: totals (net liquidation, cash, buying power, market

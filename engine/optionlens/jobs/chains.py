@@ -555,7 +555,8 @@ async def eod(symbols: list[str] | None = None) -> str:
     closes, on a US-only holiday only Canada); NothingArchived when no market had anything to archive."""
     now = now_ny()
     latest = max(m.calendar.last_completed_session(now) for m in markets.MARKETS.values())
-    parts, n_total = [], 0
+    followed = {markets.market_of(s) for s in await asyncio.to_thread(symbols_repo.universe_symbols, True)}
+    parts, n_total, expected = [], 0, False
     for m in markets.MARKETS.values():
         cal = m.calendar
         if cal.last_completed_session(now) != latest:
@@ -566,10 +567,13 @@ async def eod(symbols: list[str] | None = None) -> str:
         bars = await asyncio.to_thread(store_quote_bars, day, scoped, cal) if scoped else []
         if m is markets.US:
             await hooks.fire(hooks.on_eod, day, sorted({b.symbol for b in bars}))
-        elif not scoped:
-            continue
+        if not scoped and m is not markets.US and m not in followed:
+            continue    # a market without symbols (e.g. Canada before Questrade is connected): nothing to close
+        expected = True
         n_total += n_eod + len(bars)
         parts.append(f"{day}{'' if m is markets.US else f' ({m.code})'}: {n_eod:,} option_eod rows, {len(bars):,} bars")
+    if not expected:
+        return f"skipped: no symbols on the markets that closed {latest}"
     if not n_total:
         raise NothingArchived(f"{latest}: nothing archived — no closing chain was stored after the close (is IB Gateway "
                               f"connected with the bridge on between the close and 20:00 ET, or Questrade connected?)")
