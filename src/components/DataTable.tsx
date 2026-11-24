@@ -5,13 +5,13 @@ import { Link, useNavigate } from "react-router-dom";
 import type { ColumnDef, ColumnFilter, ReportRow } from "../api/types";
 import { toCsv, downloadText } from "../lib/csv";
 import { badgeTone, displayScale, fmt, isMissing, isNumericFmt, signClass } from "../lib/format";
-import { emptyColumnKeys, humanize } from "../lib/table";
+import { applyTable, emptyColumnKeys, filterActive, humanize } from "../lib/table";
 import { Flash, isFlowing, useLive, useLiveCell, useLiveStatus } from "../live";
 import { liveKeyOf, rowKeys } from "../live/merge";
 import { isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
-export interface SortState { key: string; dir: "asc" | "desc" }
-export interface TableState { sort: SortState | null; filters: Record<string, ColumnFilter>; hidden: string[] }
+export type { SortState, TableState } from "../lib/table";
+import type { SortState, TableState } from "../lib/table";
 
 export function initialTableState(columns: ColumnDef[], sort?: SortState | null): TableState {
   return { sort: sort ?? null, filters: {}, hidden: columns.filter((c) => c.default_hidden).map((c) => c.key) };
@@ -49,49 +49,6 @@ const LOW_CARDINALITY = 14;
 /** Text cells longer than this wrap (a sentence, e.g. a job's detail) instead of widening the table. */
 const LONG_TEXT = 60;
 const PAGE_SIZES = [50, 100, 250, 500];
-
-function filterActive(f: ColumnFilter | undefined): boolean {
-  if (!f) return false;
-  return f.min != null || f.max != null || (f.text != null && f.text !== "") || (f.values != null && f.values.length > 0);
-}
-
-function passes(v: unknown, f: ColumnFilter): boolean {
-  if (f.min != null || f.max != null) {
-    const n = typeof v === "number" ? v : Number(v);
-    if (isMissing(v) || !Number.isFinite(n)) return false;
-    if (f.min != null && n < f.min) return false;
-    if (f.max != null && n > f.max) return false;
-  }
-  if (f.text) {
-    if (isMissing(v) || !String(v).toLowerCase().includes(f.text.toLowerCase())) return false;
-  }
-  if (f.values && f.values.length) {
-    if (!f.values.includes(isMissing(v) ? "" : String(v))) return false;
-  }
-  return true;
-}
-
-function compare(a: unknown, b: unknown): number {
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
-  return String(a).localeCompare(String(b), undefined, { numeric: true });
-}
-
-export function applyTable(rows: ReportRow[], state: TableState): ReportRow[] {
-  const active = Object.entries(state.filters).filter(([, f]) => filterActive(f));
-  let out = active.length ? rows.filter((r) => active.every(([k, f]) => passes(r[k], f))) : rows.slice();
-  const s = state.sort;
-  if (s) {
-    const sign = s.dir === "asc" ? 1 : -1;
-    out = out.sort((ra, rb) => {
-      const a = ra[s.key], b = rb[s.key];
-      const ma = isMissing(a), mb = isMissing(b);
-      if (ma || mb) return ma && mb ? 0 : ma ? 1 : -1;  // missing always last
-      return sign * compare(a, b);
-    });
-  }
-  return out;
-}
 
 function filterSummary(col: ColumnDef, f: ColumnFilter): string {
   const sc = displayScale(col.fmt);

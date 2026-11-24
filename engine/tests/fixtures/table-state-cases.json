@@ -1,0 +1,26 @@
+{
+  "_comment": "The table-state rule (filters, sort, missing values last) of the renderer's tables (src/lib/table.ts applyTable) and of the MCP server's current view (engine/optionlens/mcp/shaping.py apply_table). Both test suites run these cases; `expect` lists the row ids in order.",
+  "rows": [
+    {"id": 1, "symbol": "AAPL", "iv": 0.31, "volume": 1200, "sector": "Technology", "earnings": true, "expiry": "2026-12-18"},
+    {"id": 2, "symbol": "MSFT", "iv": 0.22, "volume": null, "sector": "Technology", "earnings": false, "expiry": "2026-11-27"},
+    {"id": 3, "symbol": "XOM", "iv": null, "volume": 800, "sector": "Energy", "earnings": false, "expiry": "2027-01-15"},
+    {"id": 4, "symbol": "aal", "iv": 0.55, "volume": 5000, "sector": "", "earnings": true, "expiry": "2026-12-18"},
+    {"id": 5, "symbol": "SPY10", "iv": 0.12, "volume": 90000, "sector": "ETF", "earnings": false, "expiry": "2026-11-21"},
+    {"id": 6, "symbol": "SPY9", "iv": 0.31, "volume": 3, "sector": "ETF", "earnings": false, "expiry": null}
+  ],
+  "cases": [
+    {"name": "no state keeps the order", "state": {"sort": null, "filters": {}}, "expect": [1, 2, 3, 4, 5, 6]},
+    {"name": "numeric sort desc, missing last", "state": {"sort": {"key": "iv", "dir": "desc"}, "filters": {}}, "expect": [4, 1, 6, 2, 5, 3]},
+    {"name": "numeric sort asc, missing still last", "state": {"sort": {"key": "volume", "dir": "asc"}, "filters": {}}, "expect": [6, 3, 1, 4, 5, 2]},
+    {"name": "text sort is numeric-aware and case-insensitive", "state": {"sort": {"key": "symbol", "dir": "asc"}, "filters": {}}, "expect": [4, 1, 2, 6, 5, 3]},
+    {"name": "boolean sort desc keeps ties in order", "state": {"sort": {"key": "earnings", "dir": "desc"}, "filters": {}}, "expect": [1, 4, 2, 3, 5, 6]},
+    {"name": "date strings sort as text", "state": {"sort": {"key": "expiry", "dir": "asc"}, "filters": {}}, "expect": [5, 2, 1, 4, 3, 6]},
+    {"name": "min/max filter drops missing values", "state": {"sort": null, "filters": {"iv": {"min": 0.2, "max": 0.4}}}, "expect": [1, 2, 6]},
+    {"name": "text filter is a case-insensitive substring", "state": {"sort": null, "filters": {"symbol": {"text": "sp"}}}, "expect": [5, 6]},
+    {"name": "values filter; empty string matches missing", "state": {"sort": null, "filters": {"sector": {"values": ["Energy", ""]}}}, "expect": [3, 4]},
+    {"name": "values filter on booleans uses their text", "state": {"sort": null, "filters": {"earnings": {"values": ["true"]}}}, "expect": [1, 4]},
+    {"name": "values filter on numbers uses their text", "state": {"sort": null, "filters": {"volume": {"values": ["800", "3"]}}}, "expect": [3, 6]},
+    {"name": "inactive filters are ignored", "state": {"sort": null, "filters": {"iv": {"min": null, "max": null, "text": "", "values": []}}}, "expect": [1, 2, 3, 4, 5, 6]},
+    {"name": "filters and sort together", "state": {"sort": {"key": "volume", "dir": "desc"}, "filters": {"sector": {"values": ["Technology", "ETF"]}}}, "expect": [5, 1, 6, 2]}
+  ]
+}
