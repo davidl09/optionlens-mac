@@ -1,6 +1,7 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
 import type { CalcRequest, Watchlist } from "../../src/api/types";
 import * as live from "./live";
+import * as mcp from "./mcp";
 import * as m from "./market";
 import * as refresh from "./refresh";
 import { reportResult, REPORT_DEFS } from "./reports";
@@ -20,6 +21,9 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
   const syms = (q.get("symbols") ?? "").split(",").filter(Boolean);
 
   if (p === "/api/health") return ok({ ok: true });
+  if (p === "/api/view") return ok(method === "PUT" ? mcp.reportView(body as Parameters<typeof mcp.reportView>[0]) : mcp.currentView());
+  if (p === "/api/mcp") return ok(method === "PUT" ? mcp.set((body as { enabled: boolean }).enabled) : mcp.status());
+  if (p === "/api/mcp/regenerate" && method === "POST") { const r = mcp.regenerate(); return r ? ok(r) : { status: 409, body: { detail: "MCP access is off" } }; }
   if (p === "/api/live/stream") return { status: 200, body: null, text: live.defaultStream(), contentType: "text/event-stream" };
   if (p === "/api/live/subscribe" && method === "POST") return ok(live.subscribed(body as Parameters<typeof live.subscribed>[0]));
   if (p === "/api/live/status") return ok({ ...live.STATUS.closed, questrade: null });

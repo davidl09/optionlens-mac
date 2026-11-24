@@ -9,9 +9,10 @@ import type {
   CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events,
   Fundamentals, ImpliedMoves, Insiders, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, NewsItem, Notification, OpenInterest,
   OptionsBacktestRequest, Preset, PresetPayload, PriceAction, Profile, ReportDef, ReportResult,
-  QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
+  McpStatus, QuestradeStatus, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef,
   SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist,
 } from "./types";
+import type { CurrentView, DataRequest } from "../state/view";
 
 export class ApiError extends Error {
   /** `code`: the engine's machine-readable error code where it sends one (e.g. "no_chain"), else null. */
@@ -105,7 +106,23 @@ export function engineFetch(path: string, init: RequestInit = {}): Promise<Respo
 /** A GET the engine has not answered by then fails with a retryable error instead of loading forever. */
 export const GET_TIMEOUT_MS = 45_000;
 
+// ---------------- what a page's data comes from (the current view, INTEGRATION.md §10) ----------------
+let capturing: DataRequest[] | null = null;
+
+/** Runs `fn` and returns the engine reads it started synchronously (GETs, and the read-style POSTs a page runs). */
+export function captureRequests<T>(fn: () => T): { value: T; requests: DataRequest[] } {
+  const outer = capturing;
+  const mine: DataRequest[] = [];
+  capturing = mine;
+  try { return { value: fn(), requests: mine }; } finally { capturing = outer; }
+}
+
+function record(method: string, url: string, body?: unknown): void {
+  if (capturing && (method === "GET" || method === "POST")) capturing.push(body === undefined ? { method, path: url } : { method, path: url, body });
+}
+
 async function request<T>(method: string, url: string, body?: unknown, timeoutMs: number | null = null): Promise<T> {
+  if (method !== "GET") record(method, url, body);
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (conn?.token) headers.Authorization = `Bearer ${conn.token}`;
@@ -138,6 +155,7 @@ const DEFAULT_TTL_MS = 30_000;
 const cache = new Map<string, { at: number; promise: Promise<unknown> }>();
 
 function get<T>(url: string, ttl = DEFAULT_TTL_MS): Promise<T> {
+  record("GET", url);
   const hit = cache.get(url);
   if (ttl > 0 && hit && Date.now() - hit.at < ttl) return hit.promise as Promise<T>;
   const promise = request<T>("GET", url, undefined, GET_TIMEOUT_MS);
@@ -181,6 +199,12 @@ export const api = {
   /** In effect at once in the engine (streams opened or closed, no restart). */
   setLiveMode: (mode: LiveMode) => mutate<LiveModeSetting>("PUT", "/api/live/mode", { mode }, ["/api/live"]),
   liveStatus: () => get<LiveStatusReport>("/api/live/status", 0),
+  /** AI-agent access (Settings → AI agents): never returns the key. */
+  mcpStatus: () => get<McpStatus>("/api/mcp", 0),
+  setMcp: (enabled: boolean) => request<McpStatus>("PUT", "/api/mcp", { enabled }),
+  regenerateMcpKey: () => request<McpStatus>("POST", "/api/mcp/regenerate"),
+  /** What the user is looking at, for agents (get_current_view). */
+  reportView: (view: CurrentView) => request<{ ok: boolean }>("PUT", "/api/view", view),
   search: (q: string) => get<SymbolRef[]>(`/api/search${qs({ q })}`, 60_000),
   marketOverview: () => get<MarketOverview>("/api/market/overview"),
 

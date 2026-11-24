@@ -8,6 +8,7 @@ import { badgeTone, displayScale, fmt, isMissing, isNumericFmt, signClass } from
 import { applyTable, emptyColumnKeys, filterActive, humanize } from "../lib/table";
 import { Flash, isFlowing, useLive, useLiveCell, useLiveStatus } from "../live";
 import { liveKeyOf, rowKeys } from "../live/merge";
+import { useViewTable, type DataRequest } from "../state/view";
 import { isDataSource, ModelBadge, NullValue, Popover, SourceBadge } from "./ui";
 
 export type { SortState, TableState } from "../lib/table";
@@ -43,6 +44,11 @@ export interface DataTableProps {
    * (INTEGRATION.md §9). Rows keep their order until the data reloads, so sorting and scrolling stay put.
    */
   live?: boolean;
+  /**
+   * The engine requests these rows came from (useApi's `requests`): the table's state and visible rows are then part of
+   * the current view reported for agents (INTEGRATION.md §10); `symbols`: a "Watchlist only" filter applied upstream.
+   */
+  view?: { requests: DataRequest[]; symbols?: string[] };
 }
 
 const LOW_CARDINALITY = 14;
@@ -230,6 +236,8 @@ export function DataTable(props: DataTableProps) {
   const emptyLabels = emptyShown.map((c) => c.label).join(", ");
   const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const pageRows = minimal ? view : view.slice(page * pageSize, page * pageSize + pageSize);
+  useViewTable(props.view?.requests, { ...state, ...(props.view?.symbols ? { symbols: props.view.symbols } : {}) },
+    minimal ? { offset: 0, limit: Math.min(5000, Math.max(1, view.length)), total: view.length } : { offset: page * pageSize, limit: pageSize, total: view.length });
   const activeFilters = columns.filter((c) => filterActive(state.filters[c.key]));
   const liveRows = useMemo(() => (props.live ? rowKeys(pageRows) : null), [props.live, pageRows]);
   useLive(liveRows);

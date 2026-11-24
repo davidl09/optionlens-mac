@@ -439,3 +439,11 @@ export type ColumnFilter = { min?: number | null; max?: number | null; text?: st
 export type AlertKind = "price_above" | "price_below" | "pct_change_abs" | "iv30_above" | "iv30_below" | "iv_rank_above" | "iv_rank_below" | "rel_option_volume_above" | "unusual_volume" | "earnings_within_days" | "ex_div_within_days";
 export interface Alert { id: number; kind: AlertKind; symbol: string | null; params: { value?: number; watchlist_id?: number }; enabled: boolean; cooldown_min: number; last_fired_at: ISODateTime | null; created_at: ISODateTime }
 export interface Notification { id: number; ts: ISODateTime; alert_id: number | null; title: string; body: string; link: string | null; read: boolean }
+
+// ---------------- AI agents (MCP, INTEGRATION.md §10) ----------------
+/** GET /api/mcp: never the key. `clients`: MCP clients that called in the last 10 minutes. */
+export interface McpStatus {
+  enabled: boolean; connection_file: string; port: number | null;
+  last_call: { at: ISODateTime; operation: string; client: string } | null;
+  clients: { name: string; last_seen_at: ISODateTime }[];
+}

@@ -1,6 +1,6 @@
 // /backtest/stock, /backtest/options, /backtest/straddle-wing
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import { api } from "../api/client";
+import { api, captureRequests } from "../api/client";
 import type { BacktestResult, OptionsBacktestRequest, StockBacktestRequest } from "../api/types";
 import { useApi } from "../api/useApi";
 import { BacktestResultView } from "../components/BacktestResultView";
@@ -9,6 +9,7 @@ import { addDays, todayNY } from "../lib/dates";
 import { MONTHS } from "../lib/format";
 import { parseSymbols } from "../lib/params";
 import { templateUsesWidth } from "../lib/strategy";
+import { useViewData, type DataRequest } from "../state/view";
 
 function Field({ label, children, help }: { label: string; children: ReactNode; help?: string }) {
   return <div className="param" title={help}><label>{label}</label>{children}</div>;
@@ -29,11 +30,16 @@ function PeriodField({ start, end, onStart, onEnd }: { start?: string; end?: str
 }
 
 /** Runs a POST backtest and tracks loading / error / result. */
+/** A backtest run on demand; the last run's request is part of the current view (agents see the result shown). */
 function useRunner<Req>(fn: (r: Req) => Promise<BacktestResult>) {
   const [state, setState] = useState<{ loading: boolean; error: Error | null; data: BacktestResult | null }>({ loading: false, error: null, data: null });
+  const [requests, setRequests] = useState<DataRequest[]>([]);
+  useViewData(requests);
   const run = (req: Req) => {
     setState((s) => ({ ...s, loading: true, error: null }));
-    fn(req).then((data) => setState({ loading: false, error: null, data }), (e: unknown) => setState({ loading: false, error: e instanceof Error ? e : new Error(String(e)), data: null }));
+    const { value, requests: made } = captureRequests(() => fn(req));
+    setRequests(made);
+    value.then((data) => setState({ loading: false, error: null, data }), (e: unknown) => setState({ loading: false, error: e instanceof Error ? e : new Error(String(e)), data: null }));
   };
   return { ...state, run };
 }

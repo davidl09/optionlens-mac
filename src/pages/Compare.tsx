@@ -82,7 +82,7 @@ export function CompareStraddlePage() {
           {r.rows.some((row) => row.straddle == null) && (
             <InfoBox>No stored option chain for {r.rows.filter((row) => row.straddle == null).map((row) => row.symbol).join(", ")} yet: their columns stay empty. <ChainCollectionNote /></InfoBox>
           )}
-          <Card className="flush"><DataTable columns={r.columns} rows={r.rows} csvName="compare-straddle" emptyState={<ReportEmpty result={r} chainBased />} /></Card>
+          <Card className="flush"><DataTable columns={r.columns} rows={r.rows} csvName="compare-straddle" view={{ requests: st.requests }} emptyState={<ReportEmpty result={r} chainBased />} /></Card>
         </>
       )}</Async>
     </div>

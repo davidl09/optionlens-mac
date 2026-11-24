@@ -189,6 +189,7 @@ function ReportView({ def }: { def: ReportDef }) {
       {result.data && (
         <Card className={`flush ${result.loading ? "refetching" : ""}`}>
           <DataTable live columns={columns} rows={rows} state={table} onStateChange={setTable} csvName={`${def.id}-${todayNY()}`}
+            view={{ requests: result.requests, symbols: wl ? [...wlSymbols] : undefined }}
             emptyState={rows.length === 0 && (result.data.rows.length ? <EmptyNotice>None of these rows is in the chosen watchlist.</EmptyNotice> : <ReportEmpty result={result.data} chainBased={coverage.length > 0} />)}
             toolbar={<><WatchlistFilter value={wl} onChange={setWl} /><PresetBar def={def} params={applied} table={table} onApply={applyPreset} /></>} maxHeight="70vh" />
         </Card>

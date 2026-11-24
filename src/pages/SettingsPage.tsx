@@ -1,11 +1,12 @@
 // /settings — desktop app settings: the engine (status, restart, data import), the chain sources side by side (IBKR and
-// Questrade, the same status fields), the IBKR bridge (live work, connection settings, cancel work), launch at login and
-// updates.
+// Questrade, the same status fields), the IBKR bridge (live work, connection settings, cancel work), launch at login,
+// updates and AI agents (MCP).
 import { FormEvent, useEffect, useState } from "react";
 import { JOB_KINDS, type AppSettings, type BridgeSettings, type BridgeStatus, type EngineStatus, type LoginItemStatus } from "../../electron/shared/api";
 import { reloadAll } from "../api/client";
 import { bridgeSummary, bridgeTone } from "../components/Desktop";
 import { StatGrid } from "../components/StatGrid";
+import { McpCard } from "../components/McpCard";
 import { QuestradeCard } from "../components/QuestradeCard";
 import { SourceStateBadge, SourceSummary } from "../components/SourceSummary";
 import { ibkrView } from "../lib/sources";
@@ -189,6 +190,7 @@ export default function SettingsPage() {
         </Card>
       )}
       {settings && update && <UpdatesCard u={update} settings={settings} onSave={save} />}
+      <McpCard />
     </div>
   );
 }

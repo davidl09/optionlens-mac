@@ -5,6 +5,7 @@
 import { expect, Page, test } from "@playwright/test";
 import { handle } from "./mocks";
 import { STATUS } from "./mocks/live";
+import * as mcp from "./mocks/mcp";
 import { resetRefresh } from "./mocks/refresh";
 import { questradeStatus } from "./mocks/market";
 import { skew } from "./mocks/symbol";
@@ -81,6 +82,8 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
       installUpdate: async () => { (w.__updateCalls as string[]).push("install"); return { ok: true }; },
       dismissUpdateNotice: async () => { (w.__updateCalls as string[]).push("dismiss"); },
       onEngineStatus: on("engine"), onBridgeStatus: on("bridge"), onNavigate: on("navigate"), onImportProgress: on("import-progress"), onUpdateStatus: on("update"),
+      mcpSetup: async () => ({ command: "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp", args: [],
+        launcher: "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp", launcherFound: true, platform: "darwin" }),
     };
   }, { base: BASE, token: TOKEN, state: opts.engineState ?? "running", refresh: opts.refresh ?? { status: "refreshed" }, tws: opts.tws ?? "connected",
     update: { ...UP_TO_DATE, ...opts.update }, populate: opts.populate ?? null, bridgeOverrides: opts.bridge ?? {} });
@@ -98,6 +101,7 @@ interface Seen { auth: (string | null)[]; hosts: Set<string>; unmocked: string[]
 /** `questrade`: Questrade's part of every refresh round (null: Questrade not connected). */
 async function mockEngine(page: Page, failFirst = 0, questrade: Parameters<typeof resetRefresh>[0] = null): Promise<Seen> {
   resetRefresh(questrade);
+  mcp.resetMcp();
   const seen: Seen = { auth: [], hosts: new Set(), unmocked: [] };
   let failures = failFirst;
   await page.route("**/api/**", async (route) => {
@@ -481,4 +485,68 @@ test("settings: the stream switch toggles the live mode, with Questrade's warnin
   await expect(sw).toHaveAttribute("aria-checked", "false");
   await expect(status).toHaveText("Polling: snapshots every 2.0 s.");
   expect(puts).toEqual([{ mode: "stream" }, { mode: "poll" }]);
+});
+
+test("Settings → AI agents (MCP): off by default; on shows the warning, who is connected and setup snippets; regenerate; off", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await fakeDesktop(page);
+  const seen = await mockEngine(page);
+  await page.goto("/settings");
+  const card = page.locator("section.card").filter({ has: page.getByRole("heading", { name: "AI agents (MCP)" }) });
+  const sw = card.getByRole("switch", { name: "Allow AI agents (MCP)" });
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  await expect(card.getByTestId("mcp-status")).toHaveText("Off: no agent can connect.");
+  await expect(card.getByText("Agents with this access can read all your OptionLens data and edit watchlists/alerts/presets. No trading is possible.")).toBeVisible();
+  const claudeCode = 'claude mcp add optionlens -- "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"';
+  await expect(card.getByLabel("Claude Code", { exact: true })).toHaveText(claudeCode);
+  await expect(card.getByLabel("Claude Desktop", { exact: true })).toContainText('"command": "/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"');
+  await expect(card.getByText("add to ~/Library/Application Support/Claude/claude_desktop_config.json")).toBeVisible();
+  await expect(card.getByLabel("Any MCP client (stdio command)", { exact: true })).toHaveText('"/Applications/OptionLens.app/Contents/Resources/mcp/optionlens-mcp"');
+  await card.getByRole("button", { name: "Copy Claude Code" }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(claudeCode);
+  await expect(card.getByRole("button", { name: "Copy Claude Code" })).toHaveText("Copied");
+  await expect(card.getByRole("button", { name: "Regenerate key" })).toHaveCount(0);
+
+  await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", "true");
+  await expect(card.getByTestId("mcp-status")).toContainText("On · connected: claude-code/2.1.0");
+  await expect(card.getByTestId("mcp-status")).toContainText("Last call: GET /api/symbol/{sym}/summary by claude-code/2.1.0");
+  await expect(card.getByText("mcp-connection.json")).toBeVisible();
+  page.once("dialog", (d) => void d.accept());
+  await card.getByRole("button", { name: "Regenerate key" }).click();
+  await expect.poll(() => mcp.regenerations()).toBe(1);
+  await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  expect(seen.unmocked).toEqual([]);
+});
+
+test("the current view is reported for agents: route, report, table state, visible rows, page details", async ({ page }) => {
+  await fakeDesktop(page);
+  const seen = await mockEngine(page);
+  await page.goto("/reports/stock-screener");
+  await expect(page.getByText("600 rows")).toBeVisible();
+  const last = () => mcp.views.at(-1);
+  await expect.poll(() => last()?.report_id).toBe("stock-screener");
+  const reportData = () => last()?.data.find((d) => d.path.startsWith("/api/reports/stock-screener"));
+  await expect.poll(() => reportData()?.rows).toEqual({ offset: 0, limit: 100, total: 600 });
+  expect(last()).toMatchObject({ route: "/reports/stock-screener", symbol: null, tab: null, title: "Stock screener" });
+  expect(reportData()?.method).toBe("GET");
+  await page.locator("th").filter({ hasText: "Price" }).locator(".th-sort").click();
+  await expect.poll(() => reportData()?.table?.sort).toEqual({ key: "price", dir: "desc" });
+  await page.getByRole("button", { name: "Filter IV30" }).click();
+  await page.getByLabel("IV30 minimum").fill("50");
+  await expect.poll(() => reportData()?.table?.filters?.iv30?.min).toBe(0.5);
+  await expect.poll(() => (reportData()?.rows?.total ?? 600) < 600).toBe(true);
+  await page.keyboard.press("Escape");
+
+  await page.goto("/s/AAPL/chain");
+  await expect.poll(() => last()?.symbol).toBe("AAPL");
+  expect(last()).toMatchObject({ tab: "chain", route: "/s/AAPL/chain" });
+  await expect.poll(() => typeof last()?.details.expiry).toBe("string");
+  expect(last()?.details).toMatchObject({ side: "both", strikes_around_atm: "10", greeks: false });
+  const paths = last()?.data.map((d) => d.path) ?? [];
+  expect(paths).toContain("/api/symbol/AAPL/chain");
+  expect(paths).toContain("/api/symbol/AAPL/summary");                 // the quote header is on screen too
+  expect(paths.some((p) => p.startsWith("/api/notifications"))).toBe(false);  // the header bell is not the page
+  expect(seen.unmocked).toEqual([]);
 });

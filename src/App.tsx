@@ -11,6 +11,8 @@ import ReportsIndex from "./pages/ReportsIndex";
 import SettingsPage from "./pages/SettingsPage";
 import SymbolLayout from "./pages/symbol/SymbolLayout";
 import Watchlists from "./pages/Watchlists";
+import { ViewReporter } from "./components/ViewReporter";
+import { ViewScope } from "./state/view";
 
 export default function App() {
   return (
@@ -21,23 +23,26 @@ export default function App() {
           <Header />
           <ConnectionBanner />
           <main className="app-main">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/reports" element={<ReportsIndex />} />
-              <Route path="/reports/:id" element={<ReportPage />} />
-              <Route path="/s/:sym/*" element={<SymbolLayout />} />
-              <Route path="/backtest/stock" element={<StockBacktest />} />
-              <Route path="/backtest/options" element={<OptionsBacktest />} />
-              <Route path="/backtest/straddle-wing" element={<StraddleWingBacktest />} />
-              <Route path="/compare/volatility" element={<CompareVolatilityPage />} />
-              <Route path="/compare/straddle" element={<CompareStraddlePage />} />
-              <Route path="/watchlists" element={<Watchlists />} />
-              <Route path="/alerts" element={<Alerts />} />
-              <Route path="/status" element={<StatusPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/about" element={<AboutPage />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <ViewReporter />
+            <ViewScope>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/reports" element={<ReportsIndex />} />
+                <Route path="/reports/:id" element={<ReportPage />} />
+                <Route path="/s/:sym/*" element={<SymbolLayout />} />
+                <Route path="/backtest/stock" element={<StockBacktest />} />
+                <Route path="/backtest/options" element={<OptionsBacktest />} />
+                <Route path="/backtest/straddle-wing" element={<StraddleWingBacktest />} />
+                <Route path="/compare/volatility" element={<CompareVolatilityPage />} />
+                <Route path="/compare/straddle" element={<CompareStraddlePage />} />
+                <Route path="/watchlists" element={<Watchlists />} />
+                <Route path="/alerts" element={<Alerts />} />
+                <Route path="/status" element={<StatusPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/about" element={<AboutPage />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ViewScope>
           </main>
           <Footer />
         </div>

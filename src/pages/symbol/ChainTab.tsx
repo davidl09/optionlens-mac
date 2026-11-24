@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api/client";
 import type { Chain, Leg, OptionRow } from "../../api/types";
 import { useApi } from "../../api/useApi";
+import { useViewDetails } from "../../state/view";
 import { StatGrid } from "../../components/StatGrid";
 import { AfterHoursBadge, AsOf, Async, Card, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
@@ -180,6 +181,8 @@ export default function ChainTab() {
   const { legs, addLeg } = useLegs();
   const [lastAdded, setLastAdded] = useState<Leg | null>(null);
   const st = useApi(() => api.chain(sym, expiry), [sym, expiry]);
+  // For agents (current view): the expiry shown and what part of the chain is on screen.
+  useViewDetails({ expiry: st.data?.expiry ?? expiry ?? null, side, strikes_around_atm: range, greeks });
 
   const onLeg = (row: OptionRow, qty: number, price: number) => {
     const leg: Leg = { kind: "option", right: row.right, strike: row.strike, expiry: row.expiry, qty, price, iv: row.iv };
