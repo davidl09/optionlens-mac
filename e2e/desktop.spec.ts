@@ -48,8 +48,11 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
     w.__saved = [] as unknown[];
     w.__cancelRefreshCalls = [] as string[];
     w.__emit = (ch: string, v: unknown) => (listeners[ch] ?? []).forEach((cb) => cb(v));
-    let finish: ((r: unknown) => void) | null = null;
-    w.__finishRefresh = (r: unknown) => finish?.(r);
+    // "manual": every refresh waits for __finishRefresh, also when the test finishes it before the bridge's "pending"
+    // report has been answered (a deferred created up front: no lost call, whatever the timing).
+    let finish: (r: unknown) => void = () => undefined;
+    const finished = new Promise<unknown>((resolve) => { finish = resolve; });
+    w.__finishRefresh = (r: unknown) => finish(r);
     w.__startEngine = () => { (w.__emit as (c: string, v: unknown) => void)("engine", { ...engine, state: "running", connection: { baseUrl: base, token } }); };
     w.optionlens = {
       engine: async () => engine, restartEngine: async () => undefined, importData: async () => ({ ok: false, cancelled: true }),
@@ -71,7 +74,7 @@ async function fakeDesktop(page: Page, opts: { engineState?: "running" | "starti
           body: JSON.stringify({ source: "ibkr", symbol: sym, status: r.status, message: r.message ?? null, waiting_for: r.waitingFor ?? null }),
         }).catch(() => undefined);
         await report({ status: "pending" });
-        const r = (refresh === "manual" ? await new Promise<unknown>((resolve) => { finish = resolve; }) : refresh) as { status: string };
+        const r = (refresh === "manual" ? await finished : refresh) as { status: string };
         await report(r);
         return r;
       },

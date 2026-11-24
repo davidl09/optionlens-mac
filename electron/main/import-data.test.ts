@@ -38,17 +38,21 @@ describe("importDatabase", () => {
     expect(looksLikeDuckDb(join(dir, "missing"))).toBe(false);
   });
 
+  // Timing-independent: no wall-clock tick counting and a file small enough for slow CI disks (an 80 MB copy timed out
+  // on a macOS runner); the progress interval is scaled down instead of the file up.
   it("copies without blocking the event loop and reports progress for large files", async () => {
     const dir = tempDir();
     const src = join(dir, "big.duckdb");
-    writeFileSync(src, Buffer.alloc(80 * 1024 * 1024, 7));
+    const size = 6 * 1024 * 1024 + 123;
+    writeFileSync(src, Buffer.alloc(size, 7));
     const progress: ImportProgress[] = [];
-    let ticks = 0;
-    const timer = setInterval(() => { ticks += 1; }, 1);
-    await copyWithProgress(src, join(dir, "copy.duckdb"), (p) => progress.push(p));
-    clearInterval(timer);
-    expect(progress.at(-1)).toEqual({ copied: 80 * 1024 * 1024, total: 80 * 1024 * 1024 });
-    expect(statSync(join(dir, "copy.duckdb")).size).toBe(80 * 1024 * 1024);
-    expect(ticks).toBeGreaterThan(0);
-  });
+    const copy = copyWithProgress(src, join(dir, "copy.duckdb"), (p) => progress.push(p), 1024 * 1024);
+    expect(progress).toEqual([]);                       // returned before copying anything: the caller's loop runs on
+    await copy;
+    expect(progress.at(-1)).toEqual({ copied: size, total: size });
+    expect(progress.every((p, i) => i === 0 || p.copied >= progress[i - 1].copied)).toBe(true);
+    // a streamed copy (no copy-on-write clone here) reports along the way; a clone (APFS) is instant: final only
+    expect(progress.length === 1 || progress.length >= 6).toBe(true);
+    expect(statSync(join(dir, "copy.duckdb")).size).toBe(size);
+  }, 30_000);
 });

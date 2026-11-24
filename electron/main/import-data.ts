@@ -27,8 +27,13 @@ export function looksLikeDuckDb(path: string): boolean {
 export interface ImportProgress { copied: number; total: number }
 export interface ImportOutcome { target: string; backup: string | null }
 
-/** Copies src → dst without blocking: a copy-on-write clone if the file system can, else a streamed copy. */
-export async function copyWithProgress(src: string, dst: string, onProgress: (p: ImportProgress) => void = () => undefined): Promise<void> {
+/** Progress is reported every this many bytes of a streamed copy. */
+export const PROGRESS_EVERY_BYTES = 64 * 1024 * 1024;
+
+/** Copies src → dst without blocking: a copy-on-write clone if the file system can, else a streamed copy reporting
+ * progress every `progressEveryBytes`. */
+export async function copyWithProgress(src: string, dst: string, onProgress: (p: ImportProgress) => void = () => undefined,
+  progressEveryBytes = PROGRESS_EVERY_BYTES): Promise<void> {
   const total = (await stat(src)).size;
   try {
     await copyFile(src, dst, constants.COPYFILE_FICLONE_FORCE);
@@ -38,7 +43,7 @@ export async function copyWithProgress(src: string, dst: string, onProgress: (p:
     const count = new Transform({
       transform(chunk: Buffer, _enc, done) {
         copied += chunk.length;
-        if (copied - reported >= 64 * 1024 * 1024) { reported = copied; onProgress({ copied, total }); }
+        if (copied - reported >= progressEveryBytes) { reported = copied; onProgress({ copied, total }); }
         done(null, chunk);
       },
     });
