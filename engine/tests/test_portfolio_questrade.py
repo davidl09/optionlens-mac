@@ -61,6 +61,17 @@ def test_symbol_details_and_holdings():
         assert h.account_id == account_id("questrade", NUMBER) != account_id("ibkr", NUMBER)
 
 
+def test_montreal_exchange_option_position_is_coded_under_its_canadian_underlying():
+    syms = m.parse_symbols({"symbols": [{
+        "symbol": "RY18Dec26C120.00.MX", "symbolId": 77, "currency": "CAD", "prevDayClosePrice": 3.1,
+        "optionType": "Call", "optionRoot": "RY", "optionExpiryDate": "2026-12-18T00:00:00.000000-05:00",
+        "optionStrikePrice": 120, "securityType": "Option",
+        "optionContractDeliverables": {"underlyings": [{"multiplier": 100, "underlyingSymbol": "RY.TO"}]}}]})
+    acct = m.QAccount("123456", "TFSA", "Active")
+    (h,) = m.holdings(acct, [m.QPosition("RY18Dec26C120.00.MX", 77, 1, 3.0, 3.2, None)], syms)
+    assert (h.underlying, h.osi, h.currency) == ("RY.TO", "RY.TO261218C00120000", "CAD")   # never OPRA's RY261218C...
+
+
 def test_currency_without_symbol_details():
     acct = m.QAccount("123456", "TFSA", "Active")
     hs = m.holdings(acct, [m.QPosition("SHOP.TO", None, 10, 100.0, 110.0, None),

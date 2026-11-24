@@ -30,7 +30,8 @@ from typing import Any, Iterable, Mapping
 
 from ...models import normalize_symbol
 from ...portfolio.model import Account, Balance, FxRate, Holding, account_id, account_label
-from ..osi import osi_code
+from ...analytics.markets import is_canadian
+from ..osi import osi_code, osi_root
 
 BROKER = "questrade"
 OPTION_MULTIPLIER = 100.0
@@ -180,7 +181,9 @@ def holdings(acct: QAccount, positions: Iterable[QPosition], symbols: Mapping[in
         currency = (info.currency if info and info.currency else None) or _currency_of(p.symbol)
         if info and info.is_option:
             und = info.underlying or normalize_symbol(p.symbol)
-            osi = osi_code(info.root or und.replace(".", ""), info.expiry, info.right, info.strike)  # type: ignore[arg-type]
+            # a Montréal Exchange contract is coded under its Canadian underlying (sources/osi.py), never OPRA's root
+            root = osi_root(und) if is_canadian(und) else info.root or und.replace(".", "")
+            osi = osi_code(root, info.expiry, info.right, info.strike)  # type: ignore[arg-type]
             out.append(Holding(BROKER, aid, label, "option", osi, und, currency, p.qty, p.avg_price,
                                info.multiplier or OPTION_MULTIPLIER, osi, info.expiry, info.right,  # type: ignore[arg-type]
                                info.strike, p.current_price, p.day_pnl, info.prev_close))

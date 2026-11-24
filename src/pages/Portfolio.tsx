@@ -10,9 +10,11 @@ import { api } from "../api/client";
 import type { Portfolio, PortfolioAggregate, PortfolioPosition, PortfolioSource, PortfolioUnderlying } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Payoff } from "../components/charts/Payoff";
+import { MoneyScope } from "../components/Money";
 import { StatGrid } from "../components/StatGrid";
 import { AsOf, Async, Card, Empty, ErrorBox, InfoBox, Segmented, Spinner } from "../components/ui";
 import { fmt, signClass } from "../lib/format";
+import { currencyOf } from "../lib/markets";
 import { anySourceUsable, calculatorLegs, instrumentText, MAX_CALC_LEGS, money, PRICE_SOURCE_TEXT, SOURCE_TONE, sourceStateText, sumText, sumValue, unknownCount } from "../lib/portfolio";
 import { Flash, isFlowing, useLive, useLiveStatus } from "../live";
 import type { SymbolNavState } from "./symbol/SymbolLayout";
@@ -148,7 +150,7 @@ function RiskPanel({ underlying, onClose }: { underlying: string; onClose: () =>
     <Card title={`Risk graph · ${underlying}`} subtitle={<span className="muted small">every position on {underlying} across accounts, each leg at its cost basis</span>}
       actions={<button className="btn btn-sm" onClick={onClose}>Close</button>}>
       <Async state={risk}>{(r) => (
-        <>
+        <MoneyScope currency={currencyOf(underlying)}>
           {r.prices && r.pnl_expiry && r.pnl_today && r.pnl_eval && r.breakevens ? (
             <>
               <Payoff result={{ prices: r.prices, pnl_expiry: r.pnl_expiry, pnl_eval: r.pnl_eval, pnl_today: r.pnl_today, spot: r.spot, breakevens: r.breakevens }} evalLabel={null} scaleKey={underlying} height={300} />
@@ -161,7 +163,7 @@ function RiskPanel({ underlying, onClose }: { underlying: string; onClose: () =>
             </>
           ) : <Empty>No legs to chart.</Empty>}
           {r.skipped.length > 0 && <p className="muted small">Left out: {r.skipped.map((s) => `${s.symbol} (${s.reason})`).join("; ")}</p>}
-        </>
+        </MoneyScope>
       )}</Async>
     </Card>
   );
