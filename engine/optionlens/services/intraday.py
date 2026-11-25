@@ -9,7 +9,8 @@ Live bars: the source's candles end minutes before now (Questrade's ~15 min, eve
 bars the live subsystem builds from the quotes of a symbol while it is live (live/bars.py, stored as source "live",
 not yet stored ones from memory) follow the source's newest bar, aggregated to the interval shown. A source's candle
 replaces them; a fetched span is only stored up to where live bars alone cover it (asked for again until the source
-has those minutes). `lag_s`: how far the source's newest bar ends before now.
+has those minutes). `lag_s`: how far the source's newest bar ends before now; `gaps`: the holes the chart marks
+(analytics/intraday.chart_gaps: the candles' lag before the first live bar, unfilled missing spans).
 """
 from __future__ import annotations
 
@@ -130,6 +131,9 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
     has_extended = any(not intraday.is_regular(r["ts"], cal) for r in rows)
     shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"], cal)]
     sources, delayed = _summary(shown)
+    first_live = rows[len(source)]["ts"] if len(rows) > len(source) else None
+    gaps = intraday.chart_gaps([r["ts"] for r in shown], source[-1]["ts"] if source else None, first_live, missing,
+                               interval, now, extended, cal)
     vwap, vwap_how = intraday.day_vwap(shown, extended, cal)
     return {
         "symbol": sym, "interval": interval, "range": rng, "extended": extended,
@@ -140,6 +144,7 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
         "vwap_source": "computed" if vwap_how == "computed" else (sources[0] if vwap_how and sources else None),
         "sources": sources, "delayed": delayed,
         "missing": [{"start": a, "end": b} for a, b in missing], "problem": problem,
+        "gaps": [{"start": a, "end": b, "kind": k} for k, (a, b) in gaps],
         "lag_s": _lag_s(source, interval, now),
     }
 

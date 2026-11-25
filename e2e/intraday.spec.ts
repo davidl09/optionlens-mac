@@ -95,3 +95,20 @@ test("live-built minutes: no gap after the page opened, and a reload with laggin
   await expect(summary(page)).toContainText("15:48 ET: open 230.90, high 230.90, low 230.90, close 230.90, volume 600");
   expect(live.errors).toEqual([]);
 });
+
+test("a hole before the first live-built bar is marked, not collapsed", async ({ page }) => {
+  // Opened at 15:40 ET: Questrade's candles reach 15:29, live-built bars start at 15:40; the engine answers the hole.
+  const live = await setup(page);
+  live.serve(sse("status", STATUS.closed));
+  const full = intradayBars("DELL", "1m", "1d", false);
+  const hole = { start: "2026-11-19T20:30:00.000Z", end: "2026-11-19T20:40:00.000Z" };
+  const bars = full.bars.filter((b) => b.ts < hole.start || b.ts >= hole.end);
+  await page.route((u) => u.pathname === "/api/symbol/DELL/bars" && u.searchParams.has("interval"), (route) =>
+    route.fulfill({ json: { ...full, bars, sources: ["questrade", "live"], lag_s: 16 * 60, gaps: [{ ...hole, kind: "lag" }] } }));
+  await page.goto("/s/DELL/chart?range=1d&interval=1m");
+  await expect(summary(page)).toHaveAttribute("data-bars", String(360 + 5));          // 09:30..15:29, 15:40..15:44
+  await expect(summary(page)).toHaveAttribute("data-gaps", "1");
+  await expect(page.locator(".legend-note .gap-note")).toHaveText("15:30–15:39 · Questrade candles arrive ~16 min late — filling in");
+  await expect(page.locator(".legend-note")).toContainText("overnight and weekend gaps collapsed");
+  expect(live.errors).toEqual([]);
+});

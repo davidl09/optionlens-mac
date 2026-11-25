@@ -49,6 +49,10 @@ export interface IntradayBar {
   vwap?: number | null;
 }
 export interface TimeSpan { start: ISODateTime; end: ISODateTime }
+/** A hole in the hours shown that the chart marks instead of collapsing (INTEGRATION.md §5 "Intraday bars"): `lag` —
+ * the candle source has not answered these minutes yet and no live-built bar covers them; `missing` — no source could
+ * fill them. */
+export interface IntradayGap extends TimeSpan { kind: "lag" | "missing" }
 export interface IntradayBars {
   symbol: string; interval: IntradayInterval; range: IntradayRange; extended: boolean;
   start: ISODateTime; end: ISODateTime;
@@ -62,6 +66,8 @@ export interface IntradayBars {
   /** Seconds from the end of the source's newest bar to now (null: no source bars); the bars after it are built from
    * live quotes (source "live") while the symbol is live. Absent from older engines. */
   lag_s?: number | null;
+  /** Holes to mark, ascending (absent from older engines). */
+  gaps?: IntradayGap[];
 }
 
 // ---------------- status ----------------

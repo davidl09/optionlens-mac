@@ -167,6 +167,61 @@ async def test_an_unusable_questrade_is_named(tmpdb, tmp_path, monkeypatch):
 
 
 # ----------------------------------------------------------------------------- session VWAP
+def _gaps(newest, first_live, now, interval="1m", extended=False, missing=(), bars=None):
+    """chart_gaps with every bar of `interval` shown from 09:30 up to `newest` (and from `first_live` to now)."""
+    step = timedelta(seconds=intraday.INTERVAL_S[interval])
+    def run(a, b):
+        out, t = [], a
+        while t <= b:
+            out.append(t)
+            t += step
+        return out
+    if bars is None:
+        bars = run(newest.replace(hour=9, minute=30), newest) + (run(first_live, now - step) if first_live else [])
+    return [(k, (a.astimezone(NY).strftime("%d %H:%M"), b.astimezone(NY).strftime("%d %H:%M")))
+            for k, (a, b) in intraday.chart_gaps(bars, newest, first_live, list(missing), interval, now, extended)]
+
+
+def test_chart_gaps_mark_the_candles_lag_before_the_first_live_bar():
+    # Questrade's candles end at 12:01 at 12:17; live bars from 12:16 (the symbol was opened then)
+    assert _gaps(ny(2026, 11, 17, 12, 1), ny(2026, 11, 17, 12, 16), ny(2026, 11, 17, 12, 17, 10)) == [
+        ("lag", ("17 12:02", "17 12:16"))]
+    # no live bar yet: up to the bar forming now
+    assert _gaps(ny(2026, 11, 17, 12, 1), None, ny(2026, 11, 17, 12, 17, 10)) == [("lag", ("17 12:02", "17 12:17"))]
+    # live bars right after the source's newest one (the symbol was live already): no hole
+    assert _gaps(ny(2026, 11, 17, 12, 1), ny(2026, 11, 17, 12, 2), ny(2026, 11, 17, 12, 17, 10)) == []
+    # current candles (no lag): the forming bar is not a hole
+    assert _gaps(ny(2026, 11, 17, 12, 16), None, ny(2026, 11, 17, 12, 17, 10)) == []
+    # a hole starting long ago is not the candles' lag (nothing traded, or the source stopped)
+    assert _gaps(ny(2026, 11, 17, 11, 0), None, ny(2026, 11, 17, 12, 17, 10)) == []
+    # 15m bars: the source's 11:45 bar ends 12:00, the live-built 12:15 bar follows
+    assert _gaps(ny(2026, 11, 17, 11, 45), ny(2026, 11, 17, 12, 15), ny(2026, 11, 17, 12, 17), "15m") == [
+        ("lag", ("17 12:00", "17 12:15"))]
+
+
+def test_chart_gaps_never_mark_nights_and_stop_at_the_hours_shown():
+    # yesterday's last candle 15:59, live bars from 09:45: only 09:30-09:45 is a hole, not the night
+    bars = [ny(2026, 11, 16, 15, 59)] + [ny(2026, 11, 17, 9, 45) + timedelta(minutes=i) for i in range(5)]
+    assert _gaps(ny(2026, 11, 16, 15, 59), ny(2026, 11, 17, 9, 45), ny(2026, 11, 17, 9, 50), bars=bars) == [
+        ("lag", ("17 09:30", "17 09:45"))]
+    # after the close (regular hours): the candles' last 15 minutes up to 16:00 only
+    assert _gaps(ny(2026, 11, 17, 15, 45), None, ny(2026, 11, 17, 16, 20)) == [("lag", ("17 15:46", "17 16:00"))]
+    assert _gaps(ny(2026, 11, 17, 15, 45), None, ny(2026, 11, 17, 16, 20), extended=True) == [
+        ("lag", ("17 15:46", "17 16:20"))]
+    assert _gaps(ny(2026, 11, 17, 15, 59), None, ny(2026, 11, 18, 3, 0)) == []               # night
+
+
+def test_chart_gaps_mark_missing_spans_in_the_hours_shown_without_bars():
+    newest = ny(2026, 11, 17, 11, 0)
+    bars = [ny(2026, 11, 17, 9, 30) + timedelta(minutes=i) for i in range(60)] + [ny(2026, 11, 17, 10, 33)]
+    missing = [(ny(2026, 11, 16, 18, 0), ny(2026, 11, 17, 12, 0))]           # no source could fill it
+    got = _gaps(newest, None, ny(2026, 11, 17, 12, 0), missing=missing, bars=bars)
+    assert got == [("missing", ("17 10:34", "17 12:00"))]                     # the 10:30-10:33 minutes are too short
+    assert _gaps(newest, None, ny(2026, 11, 17, 12, 0), extended=True, missing=missing, bars=bars) == [
+        ("missing", ("16 18:00", "16 20:00")), ("missing", ("17 04:00", "17 09:30")),
+        ("missing", ("17 10:34", "17 12:00"))]
+
+
 def test_day_vwap_uses_candle_vwaps_else_typical_prices_and_resets_each_session():
     from optionlens.analytics.calendar import NY as _NY
 

@@ -24,6 +24,11 @@ EXTENDED_CLOSE = time(20, 0)
 # Bars this close to now are asked for again on the next request (the current bar is still forming, and a delayed
 # feed delivers the last minutes late), so a stored span never claims them.
 RECENT = timedelta(minutes=20)
+# chart_gaps: a hole after the source's newest bar counts as its candles' lag only when it starts this recently (else
+# nothing traded, or the source stopped); a hole no source could fill is marked from this length (shorter ones are
+# minutes without a trade between live-built bars).
+LAG_GAP_MAX = timedelta(minutes=45)
+MISSING_GAP_MIN = timedelta(minutes=5)
 
 Span = tuple[datetime, datetime]
 
@@ -207,6 +212,30 @@ def live_only_from(span: Span, source_ts: Iterable[datetime], live_ts: Iterable[
     if first is None:
         return None
     return max(s, bucket(first, interval, newest) - step)
+
+
+def chart_gaps(bars_ts: Iterable[datetime], source_newest: datetime | None, first_live: datetime | None,
+               missing_spans: list[Span], interval: str, now: datetime, extended: bool,
+               cal: TradingCalendar = NYSE) -> list[tuple[str, Span]]:
+    """The holes a chart marks instead of collapsing them, ascending: parts of the hours shown (`extended` or regular
+    sessions; nights, weekends and holidays are never holes) without a bar (`bars_ts`: the shown bars' starts), each at
+    least one bar long:
+    - ("lag", span): after the source's newest bar (`source_newest`) up to the first live-built bar after it
+      (`first_live`) or the bar forming now, starting within LAG_GAP_MAX of `now`: minutes the source has not answered
+      yet (its candles arrive late) and no live bar covers; never inside a missing span;
+    - ("missing", span): parts of `missing_spans` (no source could fill them), at least MISSING_GAP_MIN long."""
+    step = timedelta(seconds=INTERVAL_S[interval])
+    covered = [(t, t + step) for t in bars_ts]
+
+    def holes(span: Span) -> list[Span]:
+        return [h for w in session_windows(span, cal, extended) for h in missing(covered, w)]
+    out = [("missing", h) for sp in missing_spans for h in holes(sp) if h[1] - h[0] >= max(step, MISSING_GAP_MIN)]
+    if source_newest is not None:
+        lag = (source_newest + step, first_live or bucket(now, interval, source_newest))
+        if lag[1] > lag[0]:
+            out += [("lag", h) for part in missing(missing_spans, lag) for h in holes(part)
+                    if h[1] - h[0] >= step and h[0] >= now - LAG_GAP_MAX]
+    return sorted(out, key=lambda g: g[1])
 
 
 def day_vwap(bars: list[dict], extended: bool = False,

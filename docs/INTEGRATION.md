@@ -166,7 +166,13 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   where live bars alone cover it, so those minutes are asked for again until the source has them. `lag_s`: seconds
   from the end of the source's newest bar to now (null without source bars); the chart notes "latest minutes built
   from live quotes" when it exceeds 2 minutes while live-built bars are shown, and reloads the bars every 60 s while
-  visible. Live: while quotes flow the chart's last bar follows the live price (≤ 1 update/s), rolling to a new bar
+  visible. `gaps: [{start, end, kind}]`: the holes inside the hours shown (regular sessions, or 04:00–20:00 ET with
+  `extended`; nights, weekends and holidays never) that hold no bar and that the chart marks instead of collapsing,
+  each at least one bar long: `lag` — from the end of the source's newest bar to the first live-built bar after it (or
+  the bar forming now), when it starts within 45 minutes of now (a symbol that was not live before its chart opened:
+  its candles have not arrived yet; it fills in as they do); `missing` — the parts of `missing` without bars, from 5
+  minutes. The chart inserts one empty slot per missing bar (at most 30) and shades it with its times and why, e.g.
+  "12:02–12:15 · Questrade candles arrive ~16 min late — filling in" (also in the legend note). Live: while quotes flow the chart's last bar follows the live price (≤ 1 update/s), rolling to a new bar
   at the interval boundary; its volume grows by the quote's day-volume deltas, or stays the source's bar volume
   without them. The live candles (closed ones too) are kept per symbol and interval for the window's lifetime, so a
   reload or remount of the chart keeps them: merged with the loaded bars by start (a loaded bar replaces a closed live

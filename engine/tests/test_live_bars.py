@@ -184,3 +184,15 @@ async def test_coarser_intervals_aggregate_the_live_1m_bars(lagging, interval, r
     assert first["volume"] == sum(m[4] for m in minutes)
     assert hm(r["bars"][-1]) == {"5m": "12:10", "15m": "12:00", "1h": "12:00"}[interval]
     assert r["bars"][-1]["close"] == 600.5                                      # the forming minute is the last close
+
+
+async def test_the_candles_lag_before_the_first_live_bar_is_answered_as_a_gap(lagging, monkeypatch):
+    r = await service.bars("AAPL", "1m", "1d", False, now=NOW)
+    assert r["gaps"] == []                                         # live bars follow the source's newest at once
+    # the symbol became live only at 12:05 (opened then, not followed before): 11:43-12:04 has no bar yet
+    only_late = service._live_rows
+    monkeypatch.setattr(service, "_live_rows", lambda sym, want, pending: [
+        x for x in only_late(sym, want, pending) if x["ts"] >= ny(2026, 11, 17, 12, 5)])
+    r = await service.bars("AAPL", "1m", "1d", False, now=NOW)
+    assert r["gaps"] == [{"start": ny(2026, 11, 17, 11, 43), "end": ny(2026, 11, 17, 12, 5), "kind": "lag"}]
+    assert r["missing"] == [] and hm(r["bars"][-8]) == "12:05" and hm(r["bars"][-9]) == "11:42"

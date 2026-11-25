@@ -19,6 +19,7 @@ import { liveVwapFor, nextCandle, vwapValues, withLiveCandle, type LiveCandle } 
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 import { useMoney } from "../../components/Money";
+import { gapText, layoutGaps, spread, type GapLayout } from "../../lib/chartGaps";
 import { bridgeServes } from "../../lib/markets";
 
 /** The candles with today's bar following the live price (at most once a second; only while quotes flow). */
@@ -111,11 +112,16 @@ function vwapLabel(d: IntradayBars): string {
   return d.vwap_source === "computed" ? "VWAP (computed)" : "VWAP";
 }
 
-function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[], vwap: { label: string; values: (number | null)[] } | null): CandleSeries {
+/** The bars as chart categories, with the engine's gaps as marked empty slots (lib/chartGaps.ts). */
+function intradaySeries(bars: IntradayBar[], range: IntradayBars["range"], smas: readonly SmaLength[], vwap: { label: string; values: (number | null)[] } | null, layout: GapLayout): CandleSeries {
+  const { slots, bands } = layout;
   return {
-    labels: bars.map((b) => barLabel(b.ts, range)), titles: bars.map((b) => barTitle(b.ts)), bars,
-    smas: smas.filter((n) => bars.length >= n).map((n) => ({ label: `SMA ${n} (bars)`, length: n, values: smaOf(bars, n) })),
-    markers: [], lines: vwap && vwap.values.some((v) => v !== null) ? [vwap] : [],
+    labels: slots.map((s) => barLabel("bar" in s ? bars[s.bar].ts : s.ts, range)),
+    titles: slots.map((s) => ("bar" in s ? barTitle(bars[s.bar].ts) : bands[s.gap].text)),
+    bars: spread(slots, bars),
+    smas: smas.filter((n) => bars.length >= n).map((n) => ({ label: `SMA ${n} (bars)`, length: n, values: spread(slots, smaOf(bars, n)) })),
+    markers: [], lines: vwap && vwap.values.some((v) => v !== null) ? [{ ...vwap, values: spread(slots, vwap.values) }] : [],
+    gaps: bands.map((b) => ({ from: b.from, to: b.to, label: b.short })),
   };
 }
 
@@ -124,7 +130,11 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
   const shown = live.bars;
   const liveBuilt = (d.lag_s ?? 0) > LAG_NOTE_S && (d.sources.includes("live") || shown.length > d.bars.length);
   const liveVwap = liveVwapFor(d.bars, d.extended, live.vwap);
-  const series = useMemo(() => intradaySeries(shown, d.range, smas, { label: vwapLabel(d), values: vwapValues(shown, liveVwap) }), [shown, d, smas, liveVwap]);
+  const layout = useMemo(() => {
+    const ms = INTERVAL_MS[d.interval];
+    return layoutGaps(shown, d.gaps ?? [], ms, (g) => gapText(g, d, ms));
+  }, [shown, d]);
+  const series = useMemo(() => intradaySeries(shown, d.range, smas, { label: vwapLabel(d), values: vwapValues(shown, liveVwap) }, layout), [shown, d, smas, liveVwap, layout]);
   const short = smas.filter((n) => shown.length < n);
   const bridge = fill === "fetching" ? "Fetching the missing bars from IBKR…"
     : fill && fill.status !== "fetched" ? `IBKR: ${fill.message}` : null;
@@ -135,6 +145,7 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
       <div className="legend-note small muted">
         Times in New York (ET) · {d.extended ? "including pre-market and after-hours" : "regular hours"} · overnight and weekend gaps collapsed
         {d.sources.length > 0 && <> · Source {d.sources.map((s) => <SourceBadge key={s} source={s} />)}{d.delayed && <SourceBadge source={null} delayed />}</>}
+        {layout.bands.map((b) => <span key={b.from}> · <span className="gap-note">{b.text}</span></span>)}
         {liveBuilt && <> · <span className="live-built" title={`The source's newest bar ended ${Math.round((d.lag_s ?? 0) / 60)} min ago; the minutes since are built from live quotes until its own bars arrive`}>latest minutes built from live quotes</span></>}
         {smas.length > 0 && <> · SMAs over the loaded bars</>}
         {series.lines?.length ? <> · {d.vwap_source === "computed" ? "VWAP computed from the bars (typical price × volume)" : "Session VWAP"}{!d.extended && live.vwap !== null && " · live point from the quote's VWAP"}{d.extended && " · extended hours included"}</> : null}
