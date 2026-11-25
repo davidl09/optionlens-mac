@@ -124,6 +124,7 @@ class LiveHub:
         self._store_bars = store_bars
         self._read_background = background
         self._background: frozenset[str] = frozenset()   # the followed symbols (background.compose)
+        self._bg_read: asyncio.Future | None = None       # the background read in progress (a thread)
         self.bars = MinuteBars()
         self._questrade: Driver | None = None
         self._qtask: asyncio.Task | None = None
@@ -170,6 +171,9 @@ class LiveHub:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self._bg_read is not None:
+            await asyncio.gather(self._bg_read, return_exceptions=True)
+            self._bg_read = None
         await self.flush()
         self._loop = None
 
@@ -361,12 +365,23 @@ class LiveHub:
             self._background = new
             self._wake.set()
 
+    def _background_possible(self) -> bool:
+        """Whether background symbols can be kept live now: Questrade usable and some market not closed."""
+        q = self._driver()
+        return q is not None and q.usable() is None and any(s != "closed" for s in self.sessions.values())
+
     async def _backgrounder(self) -> None:
+        """Re-read the background set every REFRESH_S while it can be kept live (no database reads otherwise). The read
+        runs in a thread: one in progress is waited for by stop(), so it never outlives the hub."""
         while True:
-            try:
-                self.set_background(await asyncio.to_thread(self._read_background))  # type: ignore[arg-type]
-            except Exception:  # noqa: BLE001 - e.g. no database yet: the previous set stays, read again later
-                log.exception("live: reading the background symbols failed")
+            if self._background_possible():
+                self._bg_read = asyncio.ensure_future(asyncio.to_thread(self._read_background))  # type: ignore[arg-type]
+                try:
+                    self.set_background(await asyncio.shield(self._bg_read))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - e.g. no database yet: the previous set stays, read again later
+                    log.exception("live: reading the background symbols failed")
             await asyncio.sleep(bg.REFRESH_S)
 
     def _background_live(self) -> frozenset[str]:

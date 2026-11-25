@@ -129,6 +129,41 @@ async def test_the_driver_runs_for_the_background_alone_and_stops_without_it():
         await h.stop()
 
 
+async def test_the_background_set_is_read_only_while_it_can_be_kept_live():
+    reads: list[int] = []
+
+    def reader():
+        reads.append(1)
+        return ["AAPL"]
+    for driver, sessions in ((None, None), (FakeDriver("not connected"), None),
+                             (FakeDriver(), {"US": "closed", "CA": "closed"})):
+        h, _ = make_hub(sessions=sessions, driver=driver, background=reader)
+        await h.start()
+        await asyncio.sleep(0.05)
+        await h.stop()
+    assert reads == []                                  # no Questrade, Questrade unusable, every market closed
+
+
+async def test_stop_waits_for_a_background_read_in_progress():
+    import threading
+    started, release, done = threading.Event(), threading.Event(), []
+
+    def reader():
+        started.set()
+        release.wait(5)
+        done.append(1)
+        return ["AAPL"]
+    h, _ = make_hub(driver=FakeDriver(), background=reader)
+    await h.start()
+    await asyncio.to_thread(started.wait, 5)
+    stopping = asyncio.create_task(h.stop())
+    await asyncio.sleep(0.05)
+    assert not stopping.done()                          # the database read is still running in its thread
+    release.set()
+    await stopping
+    assert done == [1]
+
+
 async def test_the_hub_reads_the_background_set_from_the_injected_reader():
     d = FakeDriver()
     h, _ = make_hub(driver=d, background=lambda: ["AAPL", "MSFT"])
