@@ -210,16 +210,18 @@ def forward_vol(iv1: float, t1: float, iv2: float, t2: float) -> float | None:
     return float(math.sqrt(fv)) if fv >= 0 else None
 
 
-def _iv_at_delta(d: np.ndarray, iv: np.ndarray, target: float) -> float | None:
-    ok = np.isfinite(d) & np.isfinite(iv)
+def interp_bracketed(x: np.ndarray, iv: np.ndarray, target: float) -> float | None:
+    """IV at ``target`` interpolated linearly in ``x`` (e.g. delta, log-moneyness) between the points that bracket
+    it; None with fewer than 2 finite points or when ``target`` is outside them (never extrapolated)."""
+    ok = np.isfinite(x) & np.isfinite(iv)
     if ok.sum() < 2:
         return None
-    d, iv = d[ok], iv[ok]
-    order = np.argsort(d, kind="stable")
-    d, iv = d[order], iv[order]
-    if not (d[0] <= target <= d[-1]):
+    x, iv = x[ok], iv[ok]
+    order = np.argsort(x, kind="stable")
+    x, iv = x[order], iv[order]
+    if not (x[0] <= target <= x[-1]):
         return None
-    return float(np.interp(target, d, iv))
+    return float(np.interp(target, x, iv))
 
 
 def delta_skew_by_expiry(ca: ChainArrays, target: float = 0.25) -> list[dict]:
@@ -231,8 +233,8 @@ def delta_skew_by_expiry(ca: ChainArrays, target: float = 0.25) -> list[dict]:
         d, iv = ca.delta[sl], ca.iv[sl]
         out.append({
             "expiry": ca.expiries[i], "dte": int(ca.dte[sl][0]), "t": float(ca.t[sl][0]),
-            "call25": _iv_at_delta(d[c], iv[c], target),
-            "put25": _iv_at_delta(d[~c], iv[~c], -target),
+            "call25": interp_bracketed(d[c], iv[c], target),
+            "put25": interp_bracketed(d[~c], iv[~c], -target),
         })
     return out
 
@@ -269,5 +271,5 @@ def iv_by_delta(ca: ChainArrays, expiry_index: int, deltas: Sequence[float] = SM
     IV interpolated linearly in delta within each side, None when not bracketed."""
     sl = ca.expiry_slices()[expiry_index]
     c, d, iv = ca.is_call[sl], ca.delta[sl], ca.iv[sl]
-    return [{"delta": float(x), "iv": _iv_at_delta(d[c], iv[c], x) if x > 0 else _iv_at_delta(d[~c], iv[~c], x)}
+    return [{"delta": float(x), "iv": interp_bracketed(d[c], iv[c], x) if x > 0 else interp_bracketed(d[~c], iv[~c], x)}
             for x in deltas]
