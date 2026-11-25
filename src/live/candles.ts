@@ -58,11 +58,21 @@ export function nextCandle(state: LiveCandle | null, tick: LiveTick, intervalMs:
 export const MAX_CLOSED = 2000;
 
 /**
- * The session VWAP per bar: the loaded bars' (engine: day-cumulative, null outside regular hours), the live quote's
- * VWAP for the live candles (they carry none), null without it.
+ * The session VWAP per bar: the loaded bars' (engine: day-cumulative; outside regular hours null, or with extended
+ * hours counted from the pre-market), `liveVwap` for the live candles (they carry none), null without it.
  */
 export function vwapValues(bars: IntradayBar[], liveVwap: number | null | undefined): (number | null)[] {
   return bars.map((b) => (b.vwap === undefined ? liveVwap ?? null : b.vwap));
+}
+
+/**
+ * The VWAP for the live candles: the quote's (a regular-session VWAP) on a regular-hours chart; with extended hours
+ * the newest loaded bar's, carried forward, since the quote's would leave out the extended-hours volume the line counts.
+ */
+export function liveVwapFor(bars: IntradayBar[], extended: boolean, quoteVwap: number | null): number | null {
+  if (!extended) return quoteVwap;
+  for (let i = bars.length - 1; i >= 0; i--) if (bars[i].vwap != null) return bars[i].vwap ?? null;
+  return null;
 }
 
 /**

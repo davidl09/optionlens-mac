@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IntradayBar } from "../api/types";
 import { barLabel, chartView, inRegularHours, smaOf } from "../lib/chartRange";
-import { bucketStart, nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "./candles";
+import { bucketStart, liveVwapFor, nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "./candles";
 import { LiveStore } from "./store";
 
 const M5 = 300_000;
@@ -130,5 +130,16 @@ describe("vwapValues", () => {
     const live: IntradayBar = { ts: "2026-11-20T14:40:00Z", open: 1, high: 1, low: 1, close: 1, volume: 1 };
     expect(vwapValues([...stored, live], 1.02)).toEqual([1.0, null, 1.02]);
     expect(vwapValues([...stored, live], null)).toEqual([1.0, null, null]);
+  });
+});
+
+describe("liveVwapFor", () => {
+  const b = (vwap: number | null) => ({ ts: "2026-11-20T21:05:00Z", open: 1, high: 1, low: 1, close: 1, volume: 1, vwap });
+  it("uses the quote's VWAP on a regular-hours chart", () => {
+    expect(liveVwapFor([b(1.0)], false, 1.05)).toBe(1.05);
+  });
+  it("carries the newest loaded VWAP forward with extended hours (the quote's leaves out extended volume)", () => {
+    expect(liveVwapFor([b(1.0), b(1.1), b(null)], true, 1.05)).toBe(1.1);
+    expect(liveVwapFor([], true, 1.05)).toBeNull();
   });
 });

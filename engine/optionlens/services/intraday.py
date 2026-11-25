@@ -130,7 +130,7 @@ async def bars(symbol: str, interval: str, rng: str, extended: bool, now: dateti
     has_extended = any(not intraday.is_regular(r["ts"], cal) for r in rows)
     shown = rows if extended else [r for r in rows if intraday.is_regular(r["ts"], cal)]
     sources, delayed = _summary(shown)
-    vwap, vwap_how = intraday.day_vwap(shown)
+    vwap, vwap_how = intraday.day_vwap(shown, extended, cal)
     return {
         "symbol": sym, "interval": interval, "range": rng, "extended": extended,
         "start": want[0], "end": want[1], "has_extended": has_extended,

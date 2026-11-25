@@ -207,10 +207,13 @@ def live_only_from(span: Span, source_ts: Iterable[datetime], live_ts: Iterable[
     return max(s, bucket(first, interval, newest) - step)
 
 
-def day_vwap(bars: list[dict]) -> tuple[list[float | None], str | None]:
+def day_vwap(bars: list[dict], extended: bool = False,
+             cal: TradingCalendar = NYSE) -> tuple[list[float | None], str | None]:
     """The session VWAP after each bar (ascending bars {ts, high, low, close, volume, vwap}): per New York trading day,
-    Σ(price × volume) / Σ volume over its regular-hours bars so far, price = the bar's own VWAP when its source sent
-    one, else the typical price (high + low + close) / 3. None for extended-hours bars and before any volume.
+    Σ(price × volume) / Σ volume over its bars so far, price = the bar's own VWAP when its source sent one, else the
+    typical price (high + low + close) / 3. Regular-hours bars only (None for the others) unless `extended`: then
+    every bar counts, the day's VWAP starting at its first pre-market bar (as charts with extended hours draw it).
+    None before any volume.
     -> (values, how: 'candles' when every bar used had its own VWAP, 'computed' when any used the typical price,
     None without a value)."""
     out: list[float | None] = []
@@ -218,7 +221,7 @@ def day_vwap(bars: list[dict]) -> tuple[list[float | None], str | None]:
     pv = vol = 0.0
     used_own = used_typical = False
     for b in bars:
-        if not is_regular(b["ts"]):
+        if not extended and not is_regular(b["ts"], cal):
             out.append(None)
             continue
         d = b["ts"].astimezone(NY).date()

@@ -15,7 +15,7 @@ import { barLabel, barTitle, CHART_RANGES, chartView, inRegularHours, INTERVAL_L
 import { todayNY } from "../../lib/dates";
 import { fmt } from "../../lib/format";
 import { isFlowing, liveStore, useLive, useLiveInterval, useLiveQuote, useLiveStatus, useThrottled } from "../../live";
-import { nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "../../live/candles";
+import { liveVwapFor, nextCandle, vwapValues, withLiveCandle, type LiveCandle } from "../../live/candles";
 import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 import { useMoney } from "../../components/Money";
@@ -123,7 +123,8 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
   const live = useLiveCandle(sym, d.bars, INTERVAL_MS[d.interval], d.extended);
   const shown = live.bars;
   const liveBuilt = (d.lag_s ?? 0) > LAG_NOTE_S && (d.sources.includes("live") || shown.length > d.bars.length);
-  const series = useMemo(() => intradaySeries(shown, d.range, smas, { label: vwapLabel(d), values: vwapValues(shown, live.vwap) }), [shown, d, smas, live.vwap]);
+  const liveVwap = liveVwapFor(d.bars, d.extended, live.vwap);
+  const series = useMemo(() => intradaySeries(shown, d.range, smas, { label: vwapLabel(d), values: vwapValues(shown, liveVwap) }), [shown, d, smas, liveVwap]);
   const short = smas.filter((n) => shown.length < n);
   const bridge = fill === "fetching" ? "Fetching the missing bars from IBKR…"
     : fill && fill.status !== "fetched" ? `IBKR: ${fill.message}` : null;
@@ -136,7 +137,7 @@ function IntradayBody({ sym, d, smas, fill }: { sym: string; d: IntradayBars; sm
         {d.sources.length > 0 && <> · Source {d.sources.map((s) => <SourceBadge key={s} source={s} />)}{d.delayed && <SourceBadge source={null} delayed />}</>}
         {liveBuilt && <> · <span className="live-built" title={`The source's newest bar ended ${Math.round((d.lag_s ?? 0) / 60)} min ago; the minutes since are built from live quotes until its own bars arrive`}>latest minutes built from live quotes</span></>}
         {smas.length > 0 && <> · SMAs over the loaded bars</>}
-        {series.lines?.length ? <> · {d.vwap_source === "computed" ? "VWAP computed from the bars (typical price × volume)" : "Session VWAP"}{live.vwap !== null && " · live point from the quote's VWAP"}</> : null}
+        {series.lines?.length ? <> · {d.vwap_source === "computed" ? "VWAP computed from the bars (typical price × volume)" : "Session VWAP"}{!d.extended && live.vwap !== null && " · live point from the quote's VWAP"}{d.extended && " · extended hours included"}</> : null}
         {short.length > 0 && <> · {short.map((n) => `SMA ${n}`).join(", ")}: fewer than {short[0]} bars loaded</>}
         {d.bars.length > 0 && bridge && <> · {bridge}</>}
         {d.bars.length > 0 && d.problem && !bridge && d.missing.length > 0 && <> · Some bars missing ({d.problem})</>}

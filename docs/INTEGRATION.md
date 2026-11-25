@@ -150,11 +150,13 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   at the interval boundary; its volume grows by the quote's day-volume deltas, or stays the source's bar volume
   without them. The live candles (closed ones too) are kept per symbol and interval for the window's lifetime, so a
   reload or remount of the chart keeps them: merged with the loaded bars by start (a loaded bar replaces a closed live
-  one; the forming one replaces the loaded bar of its start). **VWAP**: `bars[].vwap` is the session VWAP after each
-  regular-hours bar (null in extended hours), Σ(price × volume) / Σ volume from 09:30 that day with price = the bar's
+  one; the forming one replaces the loaded bar of its start). **VWAP**: `bars[].vwap` is the day's VWAP after each bar:
+  without `extended`, over the regular-hours bars from 09:30 (null in extended hours); with `extended=true`, over
+  every bar from the first pre-market bar through after-hours. Σ(price × volume) / Σ volume, with price = the bar's
   own VWAP when its source sent one (Questrade candles' `VWAP`, stored in `intraday_bars.vwap`), else the typical
   price (high + low + close) / 3; `vwap_source` is the bars' source, or `"computed"` when any bar used the typical
-  price (the chart labels the line "VWAP (computed)"). While quotes flow, the live bars take the live quote's VWAP.
+  price (the chart labels the line "VWAP (computed)"). While quotes flow, the live bars take the live quote's VWAP
+  (a regular-session figure), or with extended hours the newest loaded bar's VWAP carried forward.
   Intraday SMAs are over the loaded bars
   ("SMA 20 (bars)"); earnings / dividend markers are drawn on daily ranges only; the time axis has one slot per bar
   (nights and weekends collapsed).

@@ -119,7 +119,8 @@ CURATED: dict[str, Curated] = {
     "GET /api/symbol/{sym}/bars": Curated("symbol_bars", "Daily OHLCV bars (oldest first) with SMA20/50/200; with "
                                           "interval=1m|5m|15m|1h and range=1d|5d|1m|3m, intraday bars instead (ts = bar "
                                           "start, regular hours unless extended=true; `missing` = spans not stored; "
-                                          "`vwap` = the session VWAP after each regular-hours bar, `vwap_source` "
+                                          "`vwap` = the day's VWAP after each bar (regular-hours bars only; with "
+                                          "extended=true every bar from the pre-market on), `vwap_source` "
                                           "'computed' when from typical prices). "
                                           f"{U_PRICE} {PAGING}"),
     "GET /api/symbol/{sym}/price-action": Curated("symbol_price_action", f"Daily moves (newest first), gap and "

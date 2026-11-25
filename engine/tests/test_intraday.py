@@ -180,3 +180,15 @@ def test_day_vwap_uses_candle_vwaps_else_typical_prices_and_resets_each_session(
     vals, how = intraday.day_vwap(mixed)
     assert vals == [10.0, pytest.approx(11.0), 20.0] and how == "computed"                    # a new session restarts
     assert intraday.day_vwap([bar(17, 9, 30, None)]) == ([None], None)                         # no volume: unknown
+
+
+def test_day_vwap_with_extended_hours_runs_from_the_pre_market_through_after_hours():
+    from optionlens.analytics.calendar import NY as _NY
+
+    def bar(d, hh, mm, vol, vwap):
+        return {"ts": datetime(2026, 11, d, hh, mm, tzinfo=_NY), "high": vwap, "low": vwap, "close": vwap,
+                "volume": vol, "vwap": vwap}
+    bars = [bar(17, 7, 0, 100, 8.0), bar(17, 9, 30, 100, 10.0), bar(17, 16, 5, 200, 13.0), bar(18, 4, 0, 10, 20.0)]
+    assert intraday.day_vwap(bars)[0] == [None, 10.0, None, None]                                   # regular hours only
+    vals, how = intraday.day_vwap(bars, extended=True)
+    assert vals == [8.0, 9.0, pytest.approx((800 + 1000 + 2600) / 400), 20.0] and how == "candles"  # next day restarts
