@@ -5,6 +5,8 @@ from datetime import date, timedelta
 
 import pytest
 
+from optionlens.services import context as ctx
+
 S = "/api/symbol/AAPL"
 
 
@@ -63,7 +65,9 @@ def test_contract_history(client):
     get(client, f"{S}/contract/NOTANOSI", 422)
 
 
-def test_volatility_skew_moves(client):
+def test_volatility_skew_moves(client, monkeypatch):
+    # term_1w looks 7 days back from today; pinned to the fixture day, no stored EOD chain is that old.
+    monkeypatch.setattr(ctx, "today", lambda: date(2026, 11, 19))
     v = get(client, f"{S}/volatility")
     cm = {r["tenor"]: r for r in v["constant_maturity"]}
     assert cm[30]["iv"] == pytest.approx(v["iv30"]) and cm[30]["chg_1d"] is None
