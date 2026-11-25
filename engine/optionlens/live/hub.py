@@ -318,7 +318,8 @@ class LiveHub:
         shown = self._markets_shown()
         self.session = max((self.sessions[m] for m in shown), key=_SESSION_RANK.index)
         want = for_sessions(self.registry.union(), self.sessions)
-        self.bars.forget(set(want.symbols))
+        kept = self._kept_live(want)
+        self.bars.forget(set(kept.symbols))
         q = self._driver()
         q_reason = q.usable() if q is not None else "not configured"
         active: Source | None = None
@@ -327,9 +328,9 @@ class LiveHub:
                 active = "questrade"
             elif self._bridge_connected():
                 active = "ibkr"
-        run_q = q is not None and q_reason is None and not want.empty
+        run_q = q is not None and q_reason is None and not kept.empty
         if q is not None:
-            q.set_wanted(want if run_q else EMPTY)
+            q.set_wanted(kept if run_q else EMPTY)
         if run_q and self._qtask is None and self._loop is not None:
             self._qtask = asyncio.create_task(self._run_driver(q), name="live:questrade")  # type: ignore[arg-type]
         elif not run_q and self._qtask is not None:
@@ -339,6 +340,10 @@ class LiveHub:
             log.info("live: source %s -> %s", self.active, active)
         self.active = active
         self._set_status(self._compute_status(now, want, q, q_reason))
+
+    def _kept_live(self, want: Wanted) -> Wanted:
+        """What the Questrade driver keeps live: the windows' set in its sessions (`want`)."""
+        return want
 
     async def _run_driver(self, d: Driver) -> None:
         try:
