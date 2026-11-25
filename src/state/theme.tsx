@@ -12,7 +12,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.dataset.theme = theme;
     savePref(KEY, theme);
   }, [theme]);
-  const toggle = useCallback(() => setTheme((t) => (t === "dark" ? "light" : "dark")), []);
+  // The attribute changes before the re-render, so charts re-read the new theme's CSS variables (usePalette).
+  const toggle = useCallback(() => setTheme((t) => {
+    const next = t === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    return next;
+  }), []);
   return <ThemeCtx.Provider value={{ theme, toggle }}>{children}</ThemeCtx.Provider>;
 }
 
