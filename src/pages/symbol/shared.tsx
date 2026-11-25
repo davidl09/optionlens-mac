@@ -1,6 +1,8 @@
 // Pieces shared by several symbol tabs.
-import { useParams, useSearchParams } from "react-router-dom";
-import type { ColumnDef, ExpiryInfo, ReportRow, TradeIdea } from "../../api/types";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import type { ColumnDef, ExpiryInfo, Leg, ReportRow, TradeIdea } from "../../api/types";
+import { MoneyText } from "../../components/Money";
+import { describeLeg } from "../../state/legs";
 import { todayNY } from "../../lib/dates";
 import { fmt, MONTHS } from "../../lib/format";
 
@@ -62,3 +64,15 @@ export const IDEA_COLUMNS: ColumnDef[] = [
 ];
 
 export const ideasAsRows = (ideas: TradeIdea[]) => ideas as unknown as ReportRow[];
+
+/** "Added +1 C 350 2026-12-18 @ $4.20 · 2 legs in calculator · Open calculator →" after a click added a leg. A leg
+ *  without a price follows the live mid in the calculator. */
+export function LegAddedToast({ sym, leg, count, onDismiss }: { sym: string; leg: Leg; count: number; onDismiss: () => void }) {
+  return (
+    <div className="leg-toast" role="status">
+      Added <b>{describeLeg(leg)}</b> {leg.price == null ? "at the live mid" : <>@ <MoneyText value={leg.price} /></>} · {count} leg{count === 1 ? "" : "s"} in calculator
+      <Link className="btn btn-sm btn-primary" to={`/s/${sym}/calculator`}>Open calculator →</Link>
+      <button className="btn btn-sm btn-ghost" onClick={onDismiss} aria-label="Dismiss">×</button>
+    </div>
+  );
+}

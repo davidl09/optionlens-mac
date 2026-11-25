@@ -22,7 +22,7 @@ function SeasonalityBody({ s }: { s: Seasonality }) {
   const heat = useMemo(() => {
     const years = [...s.years].sort((a, b) => b - a);
     const yi = new Map(years.map((y, i) => [y, i]));
-    return { years: years.map(String), data: s.monthly.filter((m) => yi.has(m.year)).map((m) => [m.month - 1, yi.get(m.year) as number, m.ret] as [number, number, number | null]) };
+    return { years: years.map(String), cells: s.monthly.filter((m) => yi.has(m.year)).map((m) => ({ x: m.month - 1, y: yi.get(m.year) as number, value: m.ret })) };
   }, [s]);
   const cur = s.by_month.find((m) => m.month === s.current_month);
   return (
@@ -36,7 +36,7 @@ function SeasonalityBody({ s }: { s: Seasonality }) {
         </Card>
       )}
       <Card title="Monthly returns by year">
-        <Heatmap xLabels={MONTHS} yLabels={heat.years} data={heat.data} height={Math.max(220, 34 + heat.years.length * 28)} ariaLabel="Monthly return heatmap" />
+        <Heatmap xLabels={MONTHS} yLabels={heat.years} cells={heat.cells} height={Math.max(220, 34 + heat.years.length * 28)} ariaLabel="Monthly return heatmap" />
       </Card>
       <div className="grid-2">
         <Card title="Average return by month">

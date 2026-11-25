@@ -11,10 +11,9 @@ import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
 import { Flash, isFlowing, useLive, useLiveOption, useLiveQuote, useLiveStatus } from "../../live";
 import { withLiveOption } from "../../live/merge";
-import { contractKey, describeLeg, heldQty, useLegs } from "../../state/legs";
-import { ExpiryPills, useQueryValue, useSym } from "./shared";
+import { contractKey, heldQty, useLegs } from "../../state/legs";
+import { ExpiryPills, LegAddedToast, useQueryValue, useSym } from "./shared";
 import { moneyStyleOf } from "../../lib/markets";
-import { MoneyText } from "../../components/Money";
 
 type Side = "both" | "calls" | "puts";
 type RangeOpt = "10" | "20" | "all";
@@ -229,13 +228,7 @@ export default function ChainTab() {
               <span className="muted small legend-inline"><span className="swatch itm" /> in the money · <span className="swatch hot" /> volume &gt; OI · click bid to sell / ask to buy</span>
             </div>
           </Card>
-          {lastAdded && (
-            <div className="leg-toast" role="status">
-              Added <b>{describeLeg(lastAdded)}</b> @ <MoneyText value={lastAdded.price} /> · {legs.length} leg{legs.length === 1 ? "" : "s"} in calculator
-              <Link className="btn btn-sm btn-primary" to={`/s/${sym}/calculator`}>Open calculator →</Link>
-              <button className="btn btn-sm btn-ghost" onClick={() => setLastAdded(null)} aria-label="Dismiss">×</button>
-            </div>
-          )}
+          {lastAdded && <LegAddedToast sym={sym} leg={lastAdded} count={legs.length} onDismiss={() => setLastAdded(null)} />}
           <Card className="flush">
             <ChainTable chain={chain} side={side} range={range} greeks={greeks} onLeg={onLeg} held={held} />
           </Card>

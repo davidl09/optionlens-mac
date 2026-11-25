@@ -36,6 +36,8 @@ export function legendStyle(p: Palette) {
 }
 
 export const GRID = { left: 8, right: 16, top: 30, bottom: 6, containLabel: true };
+/** Heatmaps: a fixed plot area (cells line up with known positions; y labels up to ~10 characters). */
+export const HEAT_GRID = { left: 72, right: 12, top: 8, bottom: 26, containLabel: false };
 
 interface TooltipItem { axisValue?: unknown; axisValueLabel?: string; marker?: string; seriesName?: string; value?: unknown }
 
