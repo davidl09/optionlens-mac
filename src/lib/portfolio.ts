@@ -2,6 +2,7 @@
 // what to show: a sum in the reporting currency (converted) or per currency, money with its currency, source state
 // texts, and the calculator legs of an underlying's positions at their cost basis.
 import type { Leg, PortfolioAggregate, PortfolioPosition, PortfolioSource, PortfolioSums } from "../api/types";
+import { streamedWord } from "../live/store";
 
 const MONEY = new Map<string, Intl.NumberFormat>();
 
@@ -97,6 +98,12 @@ export function instrumentText(p: PortfolioPosition): string {
   return `${p.right === "C" ? "Call" : "Put"} ${p.strike} · ${when}${p.multiplier !== 100 ? ` · ×${p.multiplier}` : ""}`;
 }
 
-export const PRICE_SOURCE_TEXT: Record<NonNullable<PortfolioPosition["price_source"]>, string> = {
+const PRICE_SOURCE_TEXT: Record<NonNullable<PortfolioPosition["price_source"]>, string> = {
   live: "Live quote", stored: "Last stored quote / chain", broker: "The broker's own price",
 };
+
+/** Where a position's price came from; a streamed quote that is delayed says so (live/store streamedWord). */
+export function priceSourceText(p: Pick<PortfolioPosition, "price_source" | "delayed">): string {
+  if (!p.price_source) return "No price";
+  return p.price_source === "live" && streamedWord(p.delayed) === "delayed" ? "Delayed quote" : PRICE_SOURCE_TEXT[p.price_source];
+}

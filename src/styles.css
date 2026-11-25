@@ -615,6 +615,10 @@ code.wrap { word-break: break-all; font-size: 11.5px; }
 .leg-origin { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; line-height: 1; color: var(--muted); white-space: nowrap; }
 .leg-origin.user { color: var(--accent); font-weight: 600; }
 .leg-origin.live { color: var(--up); }
+.leg-origin.delayed { color: var(--warn); }
+.leg-iv-used { margin-top: 2px; font-size: 10.5px; white-space: nowrap; }
+.calc-event { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 6px; }
+.vega-by-expiry { display: flex; flex-direction: column; gap: 1px; font-size: 12px; }
 .lock-icon { flex: none; }
 
 /* charts: text summary for screen readers */

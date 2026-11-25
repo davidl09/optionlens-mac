@@ -6,7 +6,7 @@ import { connection as apiConnection, engineFetch } from "../api/client";
 import { documentVisibility, LiveConnection } from "./connection";
 import { isFlowing, LiveStore, subscriptionKey, type Kind, type LiveFields, type LiveStatus, type LiveSubscription } from "./store";
 
-export { isFlowing } from "./store";
+export { isFlowing, streamedWord } from "./store";
 export type { ChainView, LiveFields, LiveStatus, LiveSubscription } from "./store";
 
 export const liveStore = new LiveStore();

@@ -249,6 +249,16 @@ dividend, …) cover Canadian listings too. Not available for them (no free sour
 (only Questrade's current dividend is shown), financial statements, insider trades and news. Pre-market / after-hours
 quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
 
+## Strategy calculator
+
+Symbol → Calculator prices a position of up to 8 option / stock legs on the stored chain (live mid / IV while quotes
+flow): P/L at expiry, at an evaluation date and today, breakevens, max profit / loss, probability of profit, expected
+value under IV and HV30, position greeks and vega per expiry. When the next earnings fall inside the position, the
+engine estimates the implied earnings move from the ATM term structure and values each leg through the IV crush: a
+leg's IV drops to its ex-earnings base after the reaction session (a note above the chart shows the move and the
+back month's IV after earnings, with a switch to turn the crush off; the legs table shows the IV used when it differs
+from yours). EV under HV30 is not shown when earnings fall before the first expiry (HV30 holds no earnings move).
+
 ## Portfolio (read-only)
 
 **My → Portfolio** shows your positions from Questrade and IBKR: totals (net liquidation, cash, buying power, market
@@ -274,7 +284,8 @@ While the market is open, what is on screen updates by itself: the symbol header
 strikes you are looking at), the calculator, watchlists, the dashboard and report rows (price, change, bid/ask/last,
 volume; reports also re-run every 45 s), and the chart's last candle. The header says where the data comes from:
 **LIVE · Questrade**, **DELAYED** (your data package is delayed), **MARKET CLOSED** (nothing is fetched; stored values
-are shown) or **NOT CONNECTED**. Changed values are briefly tinted. With Questrade connected the engine polls only
+are shown) or **NOT CONNECTED**. Values from a delayed feed are labelled "delayed", never "live" (the calculator's
+price / IV / spot tags, the portfolio's price source). Changed values are briefly tinted. With Questrade connected the engine polls only
 what is visible, every 2–10 s depending on how much is on screen, within 70% of Questrade's limits together with the
 background sweeps; without Questrade, IB Gateway snapshots the visible symbols. A hidden or minimized window stops
 live updates. Questrade's Level 1 streaming (tick-by-tick) can be turned on instead of polling in Settings → Data sources →

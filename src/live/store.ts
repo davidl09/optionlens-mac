@@ -152,3 +152,9 @@ export class LiveStore {
 
 /** Whether values are flowing now (patches are only shown as live in these states). */
 export const isFlowing = (s: LiveStatus) => s.state === "live" || s.state === "delayed";
+
+/** The one word for values that came over the live channel: "delayed" when they are (the value's own `delayed` flag,
+ * or the channel's delayed state), else "live". Every label that calls streamed values "live" goes through this. */
+export function streamedWord(delayed: boolean | null | undefined, status?: LiveStatus | null): "live" | "delayed" {
+  return delayed === true || status?.state === "delayed" ? "delayed" : "live";
+}

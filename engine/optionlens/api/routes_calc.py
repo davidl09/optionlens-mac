@@ -31,6 +31,7 @@ class CalcRequest(BaseModel):
     price_range: tuple[float, float] | None = None
     points: int | None = None
     spot: float | None = Field(default=None, gt=0)   # live underlying price (else the stored chain's)
+    earnings_crush: bool | None = None   # model the earnings IV crush when an event is estimated (default true)
 
 
 @router.post("/calc/strategy")

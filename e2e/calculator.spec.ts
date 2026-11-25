@@ -102,3 +102,45 @@ test("live re-pricing is throttled to ≤ 2 requests per second", async ({ page 
   for (let i = 1; i < burst.length; i++) expect(burst[i] - burst[i - 1]).toBeGreaterThanOrEqual(450);
   expect(burst.length).toBeLessThanOrEqual(4);
 });
+
+test("earnings inside the position: the IV-crush note and toggle, the IVs used, per-expiry vega, EV(HV30) withheld", async ({ page }) => {
+  const live = await setup(page);
+  live.serve(sse("status", STATUS.closed));
+  const sent = calcRequests(page);
+  await page.goto("/s/AAPL/calculator");
+  await page.getByLabel("Base expiry").selectOption("2027-01-15");
+  await page.getByLabel("Strategy template").selectOption("call-calendar");      // short Jan-15 / long Feb-19: earnings react Jan 29
+  await expect(page.locator(".legs-table tbody tr")).toHaveCount(2);
+  const note = page.getByTestId("earnings-note");
+  await expect(note).toContainText("Earnings 2027-01-28 (implied move ±5.1%): IV crush modelled — back-month IV after earnings");
+  await expect(page.locator(".legs-table tbody tr").nth(1).locator(".leg-iv-used")).toContainText("at 2027-01-15:");
+  await expect(page.locator(".legs-table tbody tr").nth(0).locator(".leg-iv-used")).toHaveCount(0);   // the front leg keeps its IV
+  await expect(stat(page, "Vega by expiry")).toContainText("2027-01-15");
+  await expect(stat(page, "Vega by expiry")).toContainText("2027-02-19");
+  await expect(stat(page, "EV (HV30)")).toHaveText(/\$/);                          // the front expiry is before the report
+  // the toggle: legs keep their IV through the report
+  await page.getByLabel("Model earnings IV crush").uncheck();
+  await expect(note).toContainText("IV crush off");
+  await expect.poll(() => sent.at(-1)?.earnings_crush).toBe(false);
+  await expect(page.locator(".leg-iv-used")).toHaveCount(0);
+  // only the Feb leg: the report falls before its expiry, so HV30 (no earnings move in it) gives no EV
+  await page.getByRole("button", { name: "Remove leg" }).nth(0).click();
+  await expect(stat(page, "EV (HV30)")).toContainText("Earnings react 2027-01-29, before 2027-02-19: HV30 holds no earnings move");
+  expect(live.errors).toEqual([]);
+});
+
+test("streamed values are labelled delayed when the feed is delayed", async ({ page }) => {
+  const live = await setup(page);
+  live.serve(sse("status", STATUS.delayed));
+  await twoLegs(page);
+  await page.locator(".legs-table tbody tr").nth(1).getByRole("button", { name: "Reset to live" }).click();
+  live.serve(sse("status", STATUS.delayed) + sse("patch", {
+    quotes: { AAPL: { price: 232.1, delayed: true, source: "questrade", ts: "2026-11-20T15:00:00Z" } },
+    options: { [OSI]: { bid: 9.8, ask: 10.2, iv: 0.31, delayed: true, source: "questrade", ts: "2026-11-20T15:00:00Z" } },
+  }));
+  await expect(priceOrigin(page, 1)).toHaveAttribute("data-origin", "live");
+  await expect(priceOrigin(page, 1)).toHaveText("delayed");
+  await expect(page.getByTestId("spot-origin")).toHaveText("delayed");
+  await expect(page.locator(".card-sub .asof")).toContainText("delayed as of");
+  expect(live.errors).toEqual([]);
+});

@@ -138,6 +138,7 @@ export function AboutPage() {
           <li><b>Net delta</b> is volume × delta summed across contracts. It does not know whether each trade was a buy or a sell, so it is not directional flow.</li>
           <li><b>Unusual option volume</b> compares today's total volume with the symbol's recent average; it is not trade-level detection.</li>
           <li>Earnings strategy and option backtests mix real and model prices; check the real/model counts on each result.</li>
+          <li>The calculator's <b>earnings IV crush</b> is a model: it splits the ATM term structure into a base IV and one earnings jump, and values each leg at its base IV after the reaction session. Skew changes and a crush larger or smaller than the term structure implies are not modelled; switch it off above the chart to compare.</li>
         </ul>
       </Card>
       <p className="muted small">See <Link to="/status">Data status</Link> for how much history has been collected so far.</p>

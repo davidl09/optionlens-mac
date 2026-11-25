@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PortfolioAggregate, PortfolioPosition } from "../api/types";
-import { calculatorLegs, money, shownSums, sumText } from "./portfolio";
+import { calculatorLegs, money, priceSourceText, shownSums, sumText } from "./portfolio";
 
 const agg = (by: Record<string, Record<string, number | null>>, converted: Record<string, number | null> | null): PortfolioAggregate => ({
   by_currency: Object.fromEntries(Object.entries(by).map(([c, v]) => [c, { ...v, unknown: {} }])) as PortfolioAggregate["by_currency"],
@@ -36,5 +36,14 @@ describe("calculator legs", () => {
     expect(calculatorLegs([pos({ qty: 2, multiplier: 10 })])![0].qty).toBeCloseTo(0.2);
     expect(calculatorLegs([pos({ avg_cost: null })])).toBeNull();
     expect(calculatorLegs(Array.from({ length: 9 }, (_, i) => pos({ osi: `X${i}`, strike: 200 + i })))).toBeNull();
+  });
+});
+
+describe("price source text", () => {
+  it("a streamed quote says delayed when it is", () => {
+    expect(priceSourceText({ price_source: "live", delayed: false })).toBe("Live quote");
+    expect(priceSourceText({ price_source: "live", delayed: true })).toBe("Delayed quote");
+    expect(priceSourceText({ price_source: "stored", delayed: true })).toBe("Last stored quote / chain");
+    expect(priceSourceText({ price_source: null, delayed: null })).toBe("No price");
   });
 });

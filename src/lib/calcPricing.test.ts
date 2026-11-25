@@ -27,6 +27,13 @@ describe("effective price rule: user ?? live ?? stored", () => {
     expect([p.priceFrom, p.ivFrom, p.liveTs]).toEqual(["live", "live", "2026-11-20T15:00:00Z"]);
   });
 
+  it("marks live values that are delayed (only when a live value is used)", () => {
+    const delayed = { [OSI]: { bid: 6, ask: 6.4, iv: 0.3, delayed: true } };
+    expect(priceLeg(CALL, market(delayed)).liveDelayed).toBe(true);
+    expect(priceLeg(CALL, market({ [OSI]: { bid: 6, ask: 6.4 } })).liveDelayed).toBe(false);
+    expect(priceLeg({ ...CALL, price: 4, iv: 0.2 }, market(delayed)).liveDelayed).toBe(false);   // all yours: none used
+  });
+
   it("keeps the user's pinned price / IV over live data (each on its own)", () => {
     const live = market({ [OSI]: { bid: 6, ask: 6.4, iv: 0.3 } });
     const price = priceLeg({ ...CALL, price: 4.5 }, live);
@@ -84,6 +91,8 @@ describe("pin / reset", () => {
       legs: [{ ...CALL, price: 5.2, iv: 0.27 }, { kind: "stock", qty: 100, price: 240, iv: null }],
     });
     expect(calcRequest("AAPL", [], { spot: 1, ivShift: 0, evalDate: "x", priceRange: null })).not.toHaveProperty("price_range");
+    expect(calcRequest("AAPL", [], { spot: 1, ivShift: 0, evalDate: "x", priceRange: null })).not.toHaveProperty("earnings_crush");
+    expect(calcRequest("AAPL", [], { spot: 1, ivShift: 0, evalDate: "x", priceRange: null, earningsCrush: false }).earnings_crush).toBe(false);
   });
 
   it("the structure key ignores prices", () => {

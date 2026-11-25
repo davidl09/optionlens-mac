@@ -29,6 +29,8 @@ export interface PricedLeg {
   osi: string | null;
   /** Time of the live values used (null: none used). */
   liveTs: string | null;
+  /** The live values used are delayed (their quote says so). */
+  liveDelayed: boolean;
 }
 
 const num = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
@@ -56,14 +58,14 @@ export const unpinned = (l: Leg): Leg => ({ ...l, price: null, iv: null });
 export function priceLeg(l: Leg, m: MarketInputs): PricedLeg {
   if (l.kind === "stock") {
     const [price, priceFrom] = first(l.price, m.liveSpot, m.storedSpot);
-    return { leg: { ...l, price, iv: null }, priceFrom, ivFrom: null, osi: null, liveTs: null };
+    return { leg: { ...l, price, iv: null }, priceFrom, ivFrom: null, osi: null, liveTs: null, liveDelayed: false };
   }
   const s = m.stored(l);
   const f = s?.osi ? m.live(s.osi) : null;
   const [price, priceFrom] = first(l.price, liveMid(f), s?.mid);
   const [iv, ivFrom] = first(l.iv, f?.iv, s?.iv);
-  const liveTs = priceFrom === "live" || ivFrom === "live" ? f?.ts ?? null : null;
-  return { leg: { ...l, price, iv }, priceFrom, ivFrom, osi: s?.osi ?? null, liveTs };
+  const usedLive = priceFrom === "live" || ivFrom === "live";
+  return { leg: { ...l, price, iv }, priceFrom, ivFrom, osi: s?.osi ?? null, liveTs: usedLive ? f?.ts ?? null : null, liveDelayed: usedLive && f?.delayed === true };
 }
 
 export function priceLegs(legs: Leg[], m: MarketInputs): PricedLeg[] {
@@ -109,9 +111,10 @@ export function stableRange(prev: Range | null, data: Range, headroom = 0.1): Ra
 }
 
 /** The calc request of priced legs (explicit per-leg price / iv and spot). */
-export function calcRequest(symbol: string, priced: PricedLeg[], o: { spot: number; ivShift: number; evalDate: string; priceRange: Range | null }): CalcRequest {
+export function calcRequest(symbol: string, priced: PricedLeg[], o: { spot: number; ivShift: number; evalDate: string; priceRange: Range | null; earningsCrush?: boolean }): CalcRequest {
   return {
     symbol, legs: priced.map((p) => p.leg), spot: o.spot, iv_shift: o.ivShift, eval_date: o.evalDate,
     ...(o.priceRange ? { price_range: o.priceRange } : {}),
+    ...(o.earningsCrush === false ? { earnings_crush: false } : {}),
   };
 }

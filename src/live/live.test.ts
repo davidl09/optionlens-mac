@@ -3,7 +3,7 @@ import type { Bar, OptionRow } from "../api/types";
 import { LiveConnection, type LiveTransport, type Visibility } from "./connection";
 import { liveKeyOf, rowKeys, withLiveBar, withLiveOption, withLiveQuote } from "./merge";
 import { SseParser } from "./sse";
-import { LiveStore, MAX_CHAINS, subscriptionKey, unionOf } from "./store";
+import { LiveStore, MAX_CHAINS, streamedWord, subscriptionKey, unionOf } from "./store";
 
 describe("SSE parser", () => {
   it("assembles events across chunks and drops comments", () => {
@@ -168,5 +168,14 @@ describe("connection", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("streamed word", () => {
+  it("says delayed when the value or the channel is delayed, else live", () => {
+    expect(streamedWord(false, { state: "live", source: "questrade" })).toBe("live");
+    expect(streamedWord(undefined)).toBe("live");
+    expect(streamedWord(true, { state: "live", source: "questrade" })).toBe("delayed");
+    expect(streamedWord(null, { state: "delayed", source: "questrade" })).toBe("delayed");
   });
 });

@@ -111,8 +111,28 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   the engine uses provided values as given (it falls back to the stored mid / IV only for fields left null). Edited
   legs are pinned (lock, "Reset to live"); the others follow live quotes. Recalculations run at most 2/s with one
   request in flight (the newest inputs are sent when it ends, so a slow engine never freezes the result);
-  `price_range` is pinned per position (legs, evaluation date, IV shift) while the spot stays inside it, and the P/L
-  axis keeps its range until a curve leaves it, so live ticks move the curves without rescaling the chart.
+  `price_range` is pinned per position (legs, evaluation date, IV shift, crush toggle) while the spot stays inside it,
+  and the P/L axis keeps its range until a curve leaves it, so live ticks move the curves without rescaling the chart.
+  Source labels: a value from the live channel is labelled "live", or "delayed" when its quote or the live channel is
+  delayed (`streamedWord`, `src/live/store.ts`: the one rule for every "live" label).
+- **Calculator earnings (IV crush)** (`analytics/event_vol.py`): when the chain's next earnings reaction session
+  (`next_reaction`, timing-aware; else the event date) opens after now and on or before the last option leg's expiry,
+  the engine estimates the event's total variance J from the ATM term structure — `pre_event`: the last expiry before
+  the reaction with ≥ 7 calendar days left gives the base σ0, J = (σ1² − σ0²)·T1 with σ1, T1 the first expiry on/after
+  it; else `post_event_pair`: that first post-event expiry and the next one ≥ 7 days later, b² = (σ2²T2 − σ1²T1)/(T2 −
+  T1), J = (σ1² − b²)·T1 (calendar-time year fractions to 16:00 ET). Each leg whose life contains the jump (09:30 ET
+  of the reaction session) gets its own base b² = σ² − J/T (T = now → expiry; floored at 0.5 × the chain's base, the
+  leg's jump then shrinks so it still prices at σ now) and is valued with σ(t) = sqrt(b² + J/τ) before the event and
+  b after it; legs expiring before the event are unchanged. `iv_shift` is added to σ(t) (vol points on every leg at
+  every date). `CalcRequest.earnings_crush` (default true) = false values every leg at its own IV (as before).
+  `CalcResult.event` (null when no earnings fall inside the position): `{earnings_date, reaction_date,
+  implied_move_pct (sqrt J), base_iv, method, expiries_used, applied, reason}` — `applied` false with `reason` when
+  switched off or not estimable (no post-event expiry, J ≤ 0, negative forward variance). Per leg: `iv_eval` /
+  `iv_expiry` (the vol used at the eval date / at `expiry_used`, incl. the shift; null when expired then or stock),
+  `iv_base` / `base_floored` (the leg's ex-event IV; calculator only) and `greeks` (the leg's position greeks);
+  `vega_by_expiry` `[{expiry, vega}]` sums to `greeks.vega`. `ev_hv` is null with `ev_hv_reason` when the reaction
+  falls in (now, `expiry_used`] (HV30 holds no earnings move) or there is no HV30. The PoP / EV(IV) distribution
+  stays the mean IV of the legs at `expiry_used` (+ shift), which includes the event. Theta is plain BSM at today's IV.
 - **Intraday bars**: `GET /api/symbol/{sym}/bars?interval=1m|5m|15m|1h&range=1d|5d|1m|3m&extended=0|1` →
   `IntradayBars` (types.ts); without `interval` the endpoint is the daily one, unchanged (`Bar[]`, ranges
   1m…10y|max). Offered combinations (else 422): 1d: 1m/5m/15m; 5d: 5m/15m/1h; 1m: 15m/1h; 3m: 1h. A range is 1 or

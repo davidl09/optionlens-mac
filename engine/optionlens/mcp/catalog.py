@@ -180,8 +180,15 @@ CURATED: dict[str, Curated] = {
                                        "(kind option|stock, right C|P, strike, expiry, qty: + long / - short, "
                                        "options in contracts of 100, stock in shares; price/iv optional overrides). "
                                        "Returns cost ($, + debit / - credit), P&L curves at expiry / eval date / today "
-                                       "($ per position), breakevens, max profit / loss (null = unlimited), pop and "
-                                       "position greeks ($ per 1 move/day/vol point).", idempotent=True),
+                                       "($ per position), breakevens, max profit / loss (null = unlimited), pop, "
+                                       "ev_iv / ev_hv ($; ev_hv null with ev_hv_reason when earnings fall before the "
+                                       "first expiry), position greeks ($ per 1 move/day/vol point), vega_by_expiry and "
+                                       "per-leg greeks. Earnings inside the position: the event variance is estimated "
+                                       "from the ATM term structure and legs are valued through the IV crush (each "
+                                       "leg's IV drops to its ex-earnings base after the reaction session); event = "
+                                       "{reaction_date, implied_move_pct, base_iv, method, applied, reason}, per leg "
+                                       "iv_eval / iv_expiry = the IV used. earnings_crush=false keeps every leg at its "
+                                       "own IV.", idempotent=True),
     "GET /api/strategy-templates": Curated("calc_strategy_templates", "Predefined strategy templates (legs relative "
                                            "to ATM) for calc_strategy."),
     "POST /api/backtest/stock": Curated("backtest_stock", "Backtest a stock entry/exit rule on daily bars: trades, "

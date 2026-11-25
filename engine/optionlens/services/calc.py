@@ -1,11 +1,16 @@
-"""Strategy calculator (CalcRequest -> CalcResult) and strategy templates."""
+"""Strategy calculator (CalcRequest -> CalcResult) and strategy templates.
+
+Earnings: when the chain's next earnings reaction session (ChainArrays.next_reaction, else the event date) falls
+inside the position's life, the event variance is estimated from the chain's ATM term structure
+(analytics.event_vol) and, unless the request sets earnings_crush=false, legs are valued through the IV crush
+(event_vol.CrushVol). CalcResult.event reports the estimate and whether it was applied."""
 from __future__ import annotations
 
 import math
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 
-from ..analytics import bs, payoff, strategies
+from ..analytics import bs, chainmetrics as cm, event_vol, payoff, strategies
 from ..analytics.calendar import now_ny
 from ..analytics.chain import ChainArrays
 from ..models import normalize_symbol
@@ -64,6 +69,26 @@ def _legs(ca: ChainArrays, raw: list[dict]) -> list[strategies.Leg]:
     return out
 
 
+def _earnings(ca: ChainArrays, legs: list[strategies.Leg], now: datetime
+              ) -> tuple[date | None, event_vol.EventVol | None, str | None]:
+    """(reaction session, estimate, why no estimate) of the next earnings when it falls inside the life of an option
+    leg (now < reaction open <= the last option expiry), else (None, None, None)."""
+    reaction = ca.next_reaction or ca.next_earnings
+    last = max((l.expiry for l in legs if l.kind == "option"), default=None)
+    if last is None or not event_vol.event_ahead(reaction, now, last):
+        return None, None, None
+    est, why = event_vol.estimate(ctx.derived(ca, "term_rows", cm.expiry_term_rows), reaction)
+    return reaction, est, why
+
+
+def _event_block(ca: ChainArrays, reaction: date, est: event_vol.EventVol | None, reason: str | None) -> dict:
+    """CalcResult.event: the earnings estimate and whether the crush was applied (reason when not)."""
+    return {"earnings_date": ca.next_earnings, "reaction_date": reaction,
+            "implied_move_pct": est.move if est else None, "base_iv": est.base_iv if est else None,
+            "method": est.method if est else None, "expiries_used": list(est.expiries) if est else None,
+            "applied": reason is None, "reason": reason}
+
+
 def calculate(req: dict) -> dict:
     """CalcResult for a CalcRequest dict (dates already parsed)."""
     sym = normalize_symbol(req["symbol"])
@@ -82,9 +107,22 @@ def calculate(req: dict) -> dict:
     rng = req.get("price_range")
     if rng is not None and not (0 < rng[0] < rng[1]):
         raise BadRequest("price_range must be [low, high] with 0 < low < high")
-    out = payoff.calculate(legs, ca.spot, now_ny(), ca.r, ca.q, hv30=ca.hv30, iv_shift=shift,
+    now = now_ny()
+    reaction, est, why = _earnings(ca, legs, now)
+    crush = req.get("earnings_crush") is not False
+    vol = event_vol.CrushVol(legs, est, now) if est is not None and crush else None
+    out = payoff.calculate(legs, ca.spot, now, ca.r, ca.q, hv30=ca.hv30, iv_shift=shift,
                            eval_date=req.get("eval_date"), price_range=tuple(rng) if rng else None,
-                           points=points, asof=ca.asof)
+                           points=points, asof=ca.asof, vol=vol, reaction=reaction)
+    if reaction is not None:
+        off = None if crush else "switched off (earnings_crush=false)"
+        out["event"] = _event_block(ca, reaction, est, why if est is None else off)
+    else:
+        out["event"] = None
+    for leg, d in zip(legs, out["legs"]):
+        sp = vol.split(leg) if vol is not None else None
+        d["iv_base"] = sp.base if sp else None
+        d["base_floored"] = bool(sp and sp.floored)
     index = ctx.derived(ca, "leg_index", _index)
     for raw, leg in zip(req["legs"], out["legs"]):     # the contract's OSI: live quotes of the leg (renderer)
         i = index.get((raw.get("expiry"), float(raw["strike"]), raw.get("right"))) if raw["kind"] == "option" else None

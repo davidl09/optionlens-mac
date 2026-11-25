@@ -12,7 +12,8 @@ import { addDays, daysBetween, todayNY } from "../../lib/dates";
 import { fmt, signClass } from "../../lib/format";
 import { calcRequest, isPinned, keepPriceRange, type Origin, type PricedLeg, priceLegs, type Range, type StoredQuote, structureKey, unpinned } from "../../lib/calcPricing";
 import { nearest } from "../../lib/indicators";
-import { isFlowing, liveStore, useLive, useLiveStatus, useThrottled } from "../../live";
+import { isFlowing, liveStore, streamedWord, useLive, useLiveStatus, useThrottled } from "../../live";
+import { earningsNote, legIvNotes } from "../../lib/calcEvent";
 import { useLegs } from "../../state/legs";
 import { useSym } from "./shared";
 import { moneyStyleOf } from "../../lib/markets";
@@ -58,16 +59,20 @@ export function instantiateTemplate(t: StrategyTemplate, spot: number, expiries:
   });
 }
 
-const ORIGIN_TEXT = {
-  price: { user: "your price", live: "live", stored: "stored" },
-  iv: { user: "your IV", live: "live", stored: "stored" },
-} as const;
+type Streamed = "live" | "delayed";
 
-function originTitle(what: "price" | "iv", from: Origin, stock: boolean): string {
+/** The tag text: your price / IV, the streamed word ("live" or "delayed": streamedWord), or "stored". */
+function originText(what: "price" | "iv", from: Origin, word: Streamed): string {
+  if (from === "user") return what === "iv" ? "your IV" : "your price";
+  return from === "live" ? word : "stored";
+}
+
+function originTitle(what: "price" | "iv", from: Origin, stock: boolean, word: Streamed): string {
   if (from === "user") return `Your ${what === "iv" ? "IV" : "price"}: pinned, live updates leave it alone (Reset to live to follow the market again)`;
-  if (what === "iv") return from === "live" ? "The contract's live IV" : "The contract's IV in the stored chain";
-  if (stock) return from === "live" ? "The live underlying price" : "The stored underlying price";
-  return from === "live" ? "The contract's live mid (bid/ask midpoint)" : "The contract's mid in the stored chain";
+  const feed = word === "delayed" ? " (the quote feed is delayed)" : "";
+  if (what === "iv") return from === "live" ? `The contract's ${word} IV${feed}` : "The contract's IV in the stored chain";
+  if (stock) return from === "live" ? `The ${word} underlying price${feed}` : "The stored underlying price";
+  return from === "live" ? `The contract's ${word} mid (bid/ask midpoint)${feed}` : "The contract's mid in the stored chain";
 }
 
 function LockIcon() {
@@ -79,19 +84,26 @@ function LockIcon() {
   );
 }
 
-/** Where a leg's price / IV comes from: your pinned value (lock), live, or the stored chain. */
-function OriginTag({ what, from, stock = false }: { what: "price" | "iv"; from: Origin | null; stock?: boolean }) {
+/** Where a leg's price / IV comes from: your pinned value (lock), live / delayed, or the stored chain. */
+function OriginTag({ what, from, word, stock = false }: { what: "price" | "iv"; from: Origin | null; word: Streamed; stock?: boolean }) {
   if (!from) return null;
+  const cls = from === "live" ? word : from;
   return (
-    <span className={`leg-origin ${from}`} data-origin={from} title={originTitle(what, from, stock)}>
-      {from === "user" && <LockIcon />}{ORIGIN_TEXT[what][from]}
+    <span className={`leg-origin ${cls}`} data-origin={from} title={originTitle(what, from, stock, word)}>
+      {from === "user" && <LockIcon />}{originText(what, from, word)}
     </span>
   );
 }
 
-function LegEditor({ leg, priced, listed, expiries, spot, flowing, onChange, onRemove }: {
-  leg: Leg; priced: PricedLeg; listed: number[] | null; expiries: ExpiryInfo[]; spot: number; flowing: boolean;
-  onChange: (l: Leg) => void; onRemove: () => void;
+/** The IVs the engine valued the leg with when they differ from the entered one (the earnings IV crush). */
+function UsedIv({ notes }: { notes: string[] }) {
+  if (!notes.length) return null;
+  return <div className="leg-iv-used muted small" title="The IV this leg is valued with on these dates (earnings IV crush)">{notes.join(" · ")}</div>;
+}
+
+function LegEditor({ leg, priced, listed, expiries, spot, flowing, word, ivNotes, onChange, onRemove }: {
+  leg: Leg; priced: PricedLeg; listed: number[] | null; expiries: ExpiryInfo[]; spot: number; flowing: boolean; word: Streamed;
+  ivNotes: string[]; onChange: (l: Leg) => void; onRemove: () => void;
 }) {
   const strikes = listed ?? (leg.strike !== undefined ? [leg.strike] : []);
   // the strike to keep when the expiry/type changes (the select then snaps to the nearest strike listed there)
@@ -150,7 +162,7 @@ function LegEditor({ leg, priced, listed, expiries, spot, flowing, onChange, onR
           <input type="number" step="0.01" className={`w-num ${priced.priceFrom === "user" ? "pinned" : ""}`} aria-label="Entry price"
             placeholder={p.price != null ? fmt(p.price, "num2") : "mid"}
             value={leg.price ?? ""} onChange={(e) => onChange({ ...leg, price: e.target.value === "" ? null : Number(e.target.value) })} />
-          <OriginTag what="price" from={priced.priceFrom} stock={stock} />
+          <OriginTag what="price" from={priced.priceFrom} word={word} stock={stock} />
         </div>
       </td>
       <td>
@@ -159,9 +171,10 @@ function LegEditor({ leg, priced, listed, expiries, spot, flowing, onChange, onR
             <input type="number" step="0.1" className={`w-num ${priced.ivFrom === "user" ? "pinned" : ""}`} aria-label="IV in vol points"
               placeholder={p.iv != null ? fmt(p.iv, "vol") : "IV"}
               value={leg.iv != null ? +(leg.iv * 100).toFixed(2) : ""} onChange={(e) => onChange({ ...leg, iv: e.target.value === "" ? null : Number(e.target.value) / 100 })} />
-            <OriginTag what="iv" from={priced.ivFrom} />
+            <OriginTag what="iv" from={priced.ivFrom} word={word} />
           </div>
         )}
+        <UsedIv notes={ivNotes} />
       </td>
       <td>
         {isPinned(leg) && (
@@ -184,8 +197,17 @@ const PL_COLUMNS: ColumnDef[] = [
 ];
 const plCell = (c: ColumnDef, r: ReportRow) => (c.key.startsWith("pnl") ? <span className={signClass(r[c.key])}><MoneyText value={r[c.key]} /></span> : undefined);
 
+function VegaByExpiry({ rows }: { rows: CalcResult["vega_by_expiry"] }) {
+  return (
+    <span className="vega-by-expiry">
+      {rows.map((b) => <span key={b.expiry} className="nowrap">{b.expiry} <span className={signClass(b.vega)}>{fmt(b.vega, "num2")}</span></span>)}
+    </span>
+  );
+}
+
 function Metrics({ r }: { r: CalcResult }) {
   const unlimited = <span className="muted">Unlimited</span>;
+  const byExpiry = r.vega_by_expiry ?? [];
   return (
     <StatGrid cols={4} items={[
       { label: r.cost >= 0 ? "Net debit" : "Net credit", value: Math.abs(r.cost), fmt: "money" },
@@ -194,12 +216,15 @@ function Metrics({ r }: { r: CalcResult }) {
       { label: "Breakevens", node: r.breakevens.length ? <span>{r.breakevens.map((b) => fmt(b, "num2")).join(" · ")}</span> : <span className="muted">none</span> },
       { label: "Prob. of profit", value: r.pop, fmt: "pct" },
       { label: "EV (IV)", value: r.ev_iv, fmt: "money", signed: true },
-      { label: "EV (HV30)", value: r.ev_hv, fmt: "money", signed: true, hint: "Needs 30 days of price history." },
+      r.ev_hv === null && r.ev_hv_reason
+        ? { label: "EV (HV30)", node: <span className="muted small">{r.ev_hv_reason}</span> }
+        : { label: "EV (HV30)", value: r.ev_hv, fmt: "money", signed: true, hint: "Needs 30 days of price history." },
       { label: "Expiry used", value: r.expiry_used, fmt: "date" },
       { label: "Delta ($/1)", value: r.greeks.delta, fmt: "num2", signed: true },
       { label: "Gamma", value: r.greeks.gamma, fmt: "num2" },
       { label: "Theta ($/day)", value: r.greeks.theta, fmt: "num2", signed: true },
       { label: "Vega ($/vol pt)", value: r.greeks.vega, fmt: "num2", signed: true },
+      ...(byExpiry.length > 1 ? [{ label: "Vega by expiry", node: <VegaByExpiry rows={byExpiry} /> }] : []),
     ]} />
   );
 }
@@ -247,6 +272,7 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   const [templateId, setTemplateId] = useState("");
   const [evalDays, setEvalDays] = useState(0);
   const [ivShift, setIvShift] = useState(0);
+  const [crush, setCrush] = useState(true);
   const today = todayNY();
   const storedSpot = chain.underlying.price;
 
@@ -259,26 +285,29 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   // the live mid / IV (while quotes flow), else the stored chain's; the spot likewise. Live ticks re-price ≤ 2/s.
   const legChains = useLegChains(sym, legs);
   const osis = useMemo(() => [...new Set(legs.map((l) => legChains.stored(l)?.osi).filter((o): o is string => !!o))], [legs, legChains]);
-  const flowing = isFlowing(useLiveStatus());
+  const liveStatus = useLiveStatus();
+  const flowing = isFlowing(liveStatus);
   const tick = useLiveTicks(sym, osis, flowing, RECALC_MS);
   const market = useMemo(() => {
     const q = flowing ? liveStore.get("q", sym.toUpperCase()) : null;
     const liveSpot = q?.price ?? q?.last ?? null;
     const priced = priceLegs(legs, { stored: legChains.stored, live: (o) => (flowing ? liveStore.get("o", o) : null), liveSpot, storedSpot });
     const liveTs = priced.reduce<string | null>((a, p) => latest(a, p.liveTs), liveSpot !== null ? q?.ts ?? null : null);
-    return { priced, liveSpot, liveTs };
+    const delayed = (liveSpot !== null && q?.delayed === true) || priced.some((p) => p.liveDelayed);
+    return { priced, liveSpot, liveTs, delayed };
     // `tick` is the trigger for re-reading the live store
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [legs, legChains, flowing, sym, storedSpot, tick]);
   const spot = market.liveSpot ?? storedSpot;
+  const word = streamedWord(market.delayed, liveStatus);   // streamed values are "live" or "delayed"
 
   // Stable chart: the x range (and table rows) is pinned per position / eval date / IV shift while the spot stays in it.
-  const scaleKey = JSON.stringify([structureKey(legs), evalDate, ivShift]);
+  const scaleKey = JSON.stringify([structureKey(legs), evalDate, ivShift, crush]);
   const [pin, setPin] = useState<{ key: string; range: Range } | null>(null);
   const priceRange = keepPriceRange(pin?.key === scaleKey ? pin.range : null, spot);
   // price only a complete position (every option leg has a strike) once its chains are known
   const ready = legs.length > 0 && !legChains.loading && legs.every((l) => l.kind === "stock" || l.strike !== undefined);
-  const reqKey = ready ? JSON.stringify({ scaleKey, req: calcRequest(sym, market.priced, { spot, ivShift: ivShift / 100, evalDate, priceRange }) }) : null;
+  const reqKey = ready ? JSON.stringify({ scaleKey, req: calcRequest(sym, market.priced, { spot, ivShift: ivShift / 100, evalDate, priceRange, earningsCrush: crush }) }) : null;
   const calc = useLatest(reqKey, (k) => api.calcStrategy((JSON.parse(k) as { req: CalcRequest }).req), RECALC_MS);
   const answered = useMemo(() => (calc.dataKey ? JSON.parse(calc.dataKey) as { scaleKey: string; req: CalcRequest } : null), [calc.dataKey]);
   useEffect(() => {
@@ -312,8 +341,8 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
   return (
     <div className="stack">
       <Card title="Legs" subtitle={<>
-        Spot <MoneyText value={spot} /> <span className={`leg-origin ${market.liveSpot !== null ? "live" : "stored"}`}>{market.liveSpot !== null ? "live" : "stored"}</span>
-        {" · "}{market.liveTs ? <AsOf ts={market.liveTs} label="live as of" /> : <AsOf ts={chain.asof} />}
+        Spot <MoneyText value={spot} /> <span className={`leg-origin ${market.liveSpot !== null ? word : "stored"}`} data-testid="spot-origin">{market.liveSpot !== null ? word : "stored"}</span>
+        {" · "}{market.liveTs ? <AsOf ts={market.liveTs} label={`${word} as of`} /> : <AsOf ts={chain.asof} />}
       </>} actions={
         <div className="toolbar">
           <label className="field-inline">Base expiry
@@ -337,7 +366,8 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
               <tbody>
                 {legs.map((l, i) => (
                   <LegEditor key={i} leg={l} priced={market.priced[i]} listed={l.expiry ? legChains.strikes.get(l.expiry) ?? null : null}
-                    expiries={chain.expiries} spot={spot} flowing={flowing}
+                    expiries={chain.expiries} spot={spot} flowing={flowing} word={word}
+                    ivNotes={result && !stale && result.legs[i] ? legIvNotes(result.legs[i], ivShift / 100, evalDate, result.expiry_used) : []}
                     onChange={(nl) => setLegs(legs.map((x, j) => (j === i ? nl : x)))} onRemove={() => setLegs(legs.filter((_, j) => j !== i))} />
                 ))}
               </tbody>
@@ -372,7 +402,17 @@ function CalculatorBody({ sym, chain, base, setBase }: { sym: string; chain: Cha
           {result && (
             <div className={stale && calc.busy ? "refetching" : undefined}>
               <div className="grid-main-side">
-                <Card title="Profit / loss"><Payoff result={result} evalLabel={`At ${evalDate}`} scaleKey={answered?.scaleKey} /></Card>
+                <Card title="Profit / loss">
+                  {result.event && (
+                    <div className="calc-event muted small" data-testid="earnings-note">
+                      <span>{earningsNote(result.event, result.legs)}</span>
+                      {(result.event.applied || result.event.implied_move_pct != null) && (
+                        <label className="field-inline"><input type="checkbox" checked={crush} onChange={(e) => setCrush(e.target.checked)} aria-label="Model earnings IV crush" /> model IV crush</label>
+                      )}
+                    </div>
+                  )}
+                  <Payoff result={result} evalLabel={`At ${evalDate}`} scaleKey={answered?.scaleKey} />
+                </Card>
                 <Card title="Position metrics"><Metrics r={result} /></Card>
               </div>
               <Card title="P/L by underlying price" className="top-gap">

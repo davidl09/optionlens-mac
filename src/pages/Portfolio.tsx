@@ -15,7 +15,7 @@ import { StatGrid } from "../components/StatGrid";
 import { AsOf, Async, Card, Empty, ErrorBox, InfoBox, Segmented, Spinner } from "../components/ui";
 import { fmt, signClass } from "../lib/format";
 import { currencyOf } from "../lib/markets";
-import { anySourceUsable, calculatorLegs, instrumentText, MAX_CALC_LEGS, money, PRICE_SOURCE_TEXT, SOURCE_TONE, sourceStateText, sumText, sumValue, unknownCount } from "../lib/portfolio";
+import { anySourceUsable, calculatorLegs, instrumentText, MAX_CALC_LEGS, money, priceSourceText, SOURCE_TONE, sourceStateText, sumText, sumValue, unknownCount } from "../lib/portfolio";
 import { Flash, isFlowing, useLive, useLiveStatus } from "../live";
 import type { SymbolNavState } from "./symbol/SymbolLayout";
 
@@ -91,7 +91,7 @@ function LegRow({ r, flowing }: { r: PortfolioPosition; flowing: boolean }) {
       <td>{instrumentText(r)}{r.delayed && <span className="badge warn" title="Delayed data"> delayed</span>}</td>
       <td className="num">{fmt(r.qty, "num")}</td>
       <td className="num">{money(r.avg_cost, r.currency)}</td>
-      <td className="num" title={r.price_source ? PRICE_SOURCE_TEXT[r.price_source] : "No price"}>
+      <td className="num" title={priceSourceText(r)}>
         <Flash value={r.price} active={flowing && r.price_source === "live"}>{money(r.price, r.currency)}</Flash>
         {r.price_source && r.price_source !== "live" && <small className="muted"> {r.price_source}</small>}
       </td>

@@ -413,9 +413,26 @@ export interface CalcRequest {
   price_range?: [number, number];  // default spot ±(3σ to last expiry, min 20%)
   points?: number;                 // default 121
   spot?: number;                   // the live underlying price (default: the stored chain's)
+  earnings_crush?: boolean;        // model the earnings IV crush when an event is estimated (default true)
+}
+export interface CalcGreeks { delta: number; gamma: number; theta: number; vega: number }  // $ per 1 move / day / vol pt
+/** The next earnings inside the position's life, as the calculator modelled it (null: none before the last expiry). */
+export interface CalcEvent {
+  earnings_date: ISODate | null; reaction_date: ISODate;   // reaction: the session that trades the report
+  implied_move_pct: number | null;   // sqrt(event variance) from the ATM term structure, e.g. 0.128 = ±12.8%
+  base_iv: number | null;            // the chain's ex-event ATM IV
+  method: "pre_event" | "post_event_pair" | null; expiries_used: ISODate[] | null;
+  applied: boolean;                  // legs were valued through the IV crush
+  reason: string | null;             // why not applied (no estimate, or switched off)
+}
+export interface CalcLeg extends Leg {
+  price: number; iv: number | null; mid: number | null; osi?: string | null;   // osi: the contract (live quotes)
+  iv_eval: number | null; iv_expiry: number | null;   // vol used at the eval date / at expiry_used (incl. iv_shift); null: expired or stock
+  iv_base?: number | null; base_floored?: boolean;    // calculator: the leg's ex-event IV when the crush applies to it; floored: hit the floor
+  greeks: CalcGreeks;                                 // this leg's position greeks
 }
 export interface CalcResult {
-  spot: number; asof: ISODateTime | null; legs: (Leg & { price: number; iv: number | null; mid: number | null; osi?: string | null })[];  // osi: the contract (live quotes)
+  spot: number; asof: ISODateTime | null; legs: CalcLeg[];
   cost: number;                    // net debit (+) / credit (−) in dollars
   prices: number[];
   pnl_expiry: number[];            // at first (nearest) expiry among option legs; later legs valued by BSM
@@ -424,7 +441,10 @@ export interface CalcResult {
   breakevens: number[];            // at expiry curve
   max_profit: number | null; max_loss: number | null;  // null = unlimited
   pop: number | null; ev_iv: number | null; ev_hv: number | null;
-  greeks: { delta: number; gamma: number; theta: number; vega: number };  // position totals ($ per 1 move/day/vol pt)
+  ev_hv_reason: string | null;     // why ev_hv is null (earnings before expiry_used: HV30 has no earnings move; no HV30)
+  greeks: CalcGreeks;              // position totals
+  vega_by_expiry: { expiry: ISODate; vega: number }[];   // Σ leg vega per option expiry (sums to greeks.vega)
+  event: CalcEvent | null;
   table: { price: number; change_pct: number; pnl_expiry: number; pnl_eval: number }[];  // ~15 rows
   expiry_used: ISODate | null;
 }

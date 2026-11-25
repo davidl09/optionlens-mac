@@ -100,14 +100,39 @@ export const TEMPLATES: StrategyTemplate[] = [
   { id: "covered-call", label: "Covered call", family: "Stock", description: "Long 100 shares, short 5% OTM call", legs: [{ kind: "stock", qty: 100 }, { kind: "option", right: "C", qty: -1, strike_offset_pct: 0.05 }] },
 ];
 
+/** The mock's next earnings (symbol.ts overview: 2027-01-28 after the close) react on this session. */
+const EARNINGS = { date: "2027-01-28", reaction: "2027-01-29", move: 0.051, base_iv: 0.22 };
+
 /** Like the engine: the legs' given prices / IVs (else mid 5.20, IV 27%), the given spot (else SPOT) and price range;
- * PoP / EV weigh the expiry P/L by a normal around the spot, so prices and spot move them. */
+ * PoP / EV weigh the expiry P/L by a normal around the spot, so prices and spot move them. A leg expiring on or after
+ * the earnings reaction is "crushed" to 80% of its IV after it (unless earnings_crush is false); EV(HV30) is withheld
+ * when the reaction falls before the first expiry. */
 export function calc(req: CalcRequest): CalcResult {
   const n = 61;
   const spot = req.spot ?? SPOT;
   const [lo, hi] = req.price_range ?? [spot * 0.8, spot * 1.2];
   const prices = Array.from({ length: n }, (_, i) => round(lo + ((hi - lo) * i) / (n - 1)));
-  const legs = req.legs.map((l) => ({ ...l, price: l.price ?? (l.kind === "stock" ? spot : 5.2), iv: l.iv ?? (l.kind === "stock" ? null : 0.27), mid: l.kind === "stock" ? spot : 5.2 }));
+  const shiftIv = req.iv_shift ?? 0;
+  const firstExp = req.legs.map((l) => l.expiry).filter((e): e is string => !!e).sort()[0] ?? null;
+  const inEvent = (l: { kind: string; expiry?: string }) => l.kind === "option" && !!l.expiry && l.expiry >= EARNINGS.reaction;
+  const event = req.legs.some(inEvent) ? {
+    earnings_date: EARNINGS.date, reaction_date: EARNINGS.reaction, implied_move_pct: EARNINGS.move, base_iv: EARNINGS.base_iv,
+    method: "pre_event" as const, expiries_used: ["2027-01-15", "2027-02-19"], applied: req.earnings_crush !== false,
+    reason: req.earnings_crush === false ? "switched off (earnings_crush=false)" : null,
+  } : null;
+  const crushed = (l: { kind: string; expiry?: string }) => !!event?.applied && inEvent(l);
+  const legs = req.legs.map((l) => {
+    const iv = l.iv ?? (l.kind === "stock" ? null : 0.27);
+    const base = iv !== null && crushed(l) ? round(iv * 0.8, 4) : null;
+    const alive = (at: string | null) => l.kind === "option" && iv !== null && !!l.expiry && (!at || l.expiry > at);
+    const vega = l.kind === "option" ? round((22.5 / req.legs.filter((m) => m.kind === "option").length) * Math.sign(l.qty), 4) : 0;
+    return {
+      ...l, price: l.price ?? (l.kind === "stock" ? spot : 5.2), iv, mid: l.kind === "stock" ? spot : 5.2,
+      iv_eval: alive(null) ? round((iv ?? 0) + shiftIv, 4) : null,
+      iv_expiry: alive(firstExp) ? round((base ?? iv ?? 0) + shiftIv, 4) : null,
+      iv_base: base, base_floored: false, greeks: { delta: 0, gamma: 0, theta: 0, vega },
+    };
+  });
   const payoff = (s: number) => legs.reduce((acc, l) => {
     const intr = l.kind === "stock" ? s : Math.max(0, l.right === "C" ? s - (l.strike ?? SPOT) : (l.strike ?? SPOT) - s);
     return acc + l.qty * (intr - l.price) * (l.kind === "stock" ? 1 : 100);
@@ -125,7 +150,13 @@ export function calc(req: CalcRequest): CalcResult {
   return {
     spot, asof: NOW, legs, cost: round(legs.reduce((a, l) => a + l.qty * l.price * (l.kind === "stock" ? 1 : 100), 0)), prices, pnl_expiry, pnl_eval, pnl_today, breakevens: be,
     max_profit: legs.some((l) => l.kind === "option" && l.right === "C" && l.qty > 0 && !legs.some((m) => m.right === "C" && m.qty < 0)) ? null : Math.max(...pnl_expiry),
-    max_loss: Math.min(...pnl_expiry), pop: round(pop, 4), ev_iv: round(ev), ev_hv: round(ev + 31.3), greeks: { delta: 41.2, gamma: 2.1, theta: -9.8, vega: 22.5 },
+    max_loss: Math.min(...pnl_expiry), pop: round(pop, 4), ev_iv: round(ev),
+    ev_hv: firstExp && firstExp >= EARNINGS.reaction ? null : round(ev + 31.3),
+    ev_hv_reason: firstExp && firstExp >= EARNINGS.reaction ? `Earnings react ${EARNINGS.reaction}, before ${firstExp}: HV30 holds no earnings move` : null,
+    greeks: { delta: 41.2, gamma: 2.1, theta: -9.8, vega: round(legs.reduce((a, l) => a + l.greeks.vega, 0), 4) },
+    vega_by_expiry: [...new Set(legs.filter((l) => l.kind === "option" && l.expiry).map((l) => l.expiry as string))].sort()
+      .map((e) => ({ expiry: e, vega: round(legs.filter((l) => l.expiry === e).reduce((a, l) => a + l.greeks.vega, 0), 4) })),
+    event,
     table: prices.filter((_, i) => i % 4 === 0).map((p, i) => ({ price: p, change_pct: round(p / spot - 1, 4), pnl_expiry: pnl_expiry[i * 4], pnl_eval: pnl_eval[i * 4] })),
     expiry_used: req.legs.find((l) => l.expiry)?.expiry ?? null,
   };
