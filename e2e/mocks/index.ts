@@ -1,5 +1,5 @@
 // Routes a mocked /api request to its fixture. Returns null for unknown endpoints (test fails loudly).
-import type { CalcRequest, IntradayInterval, IntradayRange, PortfolioSettings, Watchlist } from "../../src/api/types";
+import type { CalcRequest, IntradayInterval, IntradayRange, PortfolioSettings, SurfaceMode, SurfaceRows, Watchlist } from "../../src/api/types";
 import * as live from "./live";
 import * as mcp from "./mcp";
 import * as portfolio from "./portfolio";
@@ -13,7 +13,7 @@ export interface MockResponse { status: number; body: unknown; text?: string; co
 
 const ok = (body: unknown): MockResponse => ({ status: 200, body });
 /** Endpoints that need a stored chain (404 + code for the NO_CHAIN symbols). */
-const CHAIN_ENDPOINTS = new Set(["chain", "activity", "open-interest", "contract", "skew", "implied-moves", "straddle", "ideas"]);
+const CHAIN_ENDPOINTS = new Set(["chain", "activity", "open-interest", "contract", "skew", "iv-surface", "implied-moves", "straddle", "ideas"]);
 
 export function handle(method: string, url: URL, body: unknown): MockResponse | null {
   const p = url.pathname;
@@ -103,6 +103,7 @@ export function handle(method: string, url: URL, body: unknown): MockResponse | 
       case "contract": return ok(s.contract(sym, decodeURIComponent(parts[4] ?? "")));
       case "volatility": return ok(s.volatility(sym));
       case "skew": return ok(s.skew(sym, exp));
+      case "iv-surface": return ok(s.ivSurface(sym, (q.get("rows") ?? "delta") as SurfaceRows, (q.get("mode") ?? "iv") as SurfaceMode));
       case "implied-moves": return ok(s.impliedMoves(sym));
       case "vol-seasonality": return ok(s.volSeasonality(sym));
       case "earnings":

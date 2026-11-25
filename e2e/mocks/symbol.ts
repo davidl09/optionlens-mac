@@ -1,7 +1,7 @@
 // Per-symbol fixtures conforming to src/api/types.ts.
 import type {
   Activity, BacktestResult, BacktestTrade, Bar, Chain, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, ExpiryInfo,
-  Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, NewsItem, OpenInterest, OptionRow, PriceAction, Profile, Quote, ReportResult, Seasonality, Skew,
+  Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, NewsItem, OpenInterest, OptionRow, PriceAction, Profile, Quote, ReportResult, Seasonality, Skew, IvSurface, SurfaceCell, SurfaceMode, SurfaceRows,
   KeyStats, StraddleInfo, SymbolSummary, TradeIdea, TradeIdeas, VolSeasonality, Volatility,
 } from "../../src/api/types";
 import { addDays, between, NOW, pick, reseed, rnd, round, rowsFor, SYMBOLS, TODAY, tradingDays, walk } from "./gen";
@@ -237,6 +237,39 @@ export function skew(sym: string, expiry: string | null): Skew {
     points: STRIKES.map((k, i) => ({ strike: k, moneyness: round(k / SPOT - 1, 4), call_iv: c.calls[i].iv, put_iv: c.puts[i].iv, call_delta: c.calls[i].delta, put_delta: c.puts[i].delta })),
     by_delta: [-0.05, -0.1, -0.25, -0.4, -0.5, 0.5, 0.4, 0.25, 0.1, 0.05].map((d) => ({ delta: d, iv: round(0.27 + (d < 0 ? 0.08 : 0.03) * (0.5 - Math.abs(d)), 4) })),
     history: tradingDays(12).map((d) => ({ date: d, skew25_30: round(0.04 + rnd() * 0.01, 4), put_skew_30: round(0.025 + rnd() * 0.01, 4) })),
+  };
+}
+
+const SURFACE_ROWS: Record<Exclude<SurfaceRows, "strike">, number[]> = {
+  delta: [-0.1, -0.15, -0.2, -0.25, -0.3, -0.35, -0.4, -0.45, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15, 0.1],
+  moneyness: Array.from({ length: 17 }, (_, i) => round(-0.2 + 0.025 * i, 4)),
+};
+
+/** Like the engine's /iv-surface: each cell the OTM contract nearest the row (no interpolation); the front expiry's
+ *  10Δ wings and contracts without a bid / OI are unreliable. Earnings 2027-01-28: 2027-02-19 is the earnings expiry. */
+export function ivSurface(sym: string, rowsBy: SurfaceRows, mode: SurfaceMode): IvSurface {
+  const exps = expiries();
+  const rows = rowsBy === "strike" ? STRIKES.filter((k) => Math.abs(k / SPOT - 1) <= 0.2) : SURFACE_ROWS[rowsBy];
+  const chains = exps.map((e) => chain(sym, e.expiry));
+  const cells: SurfaceCell[][] = rows.map((v) => chains.map((c, x): SurfaceCell => {
+    const atm = exps[x].atm_iv;
+    const otm = [...c.puts.filter((r) => r.strike < SPOT), ...c.calls.filter((r) => r.strike >= SPOT)];
+    const byDelta = rowsBy === "delta" && v !== 0.5;
+    const target = byDelta ? v : rowsBy === "strike" ? v : SPOT * (1 + (rowsBy === "moneyness" ? v : 0));
+    const cands = byDelta ? otm.filter((r) => (v < 0) === (r.right === "P")) : otm;
+    const dist = (r: OptionRow) => Math.abs((byDelta ? r.delta ?? 9 : r.strike) - target);
+    const pick = cands.reduce((a, b) => (dist(b) < dist(a) ? b : a));
+    const iv = rowsBy === "delta" && v === 0.5 ? atm : pick.iv;
+    const wing = x === 0 && rowsBy === "delta" && Math.abs(v) === 0.1;
+    const reason = iv === null ? "no IV" : wing || !(pick.bid! > 0) ? "no bid" : !pick.oi ? "no open interest" : null;
+    const value = iv === null ? null : mode === "iv" ? iv : mode === "vs_atm" ? (atm === null ? null : round(iv - atm, 4)) : round(0.004 * Math.sin(x + v * 10), 4);
+    return { iv, value, osi: pick.osi, strike: pick.strike, right: pick.right, bid: pick.bid, ask: pick.ask, oi: pick.oi, reliable: reason === null, reason };
+  }));
+  return {
+    symbol: sym, spot: SPOT, asof: NOW, rows_by: rowsBy, mode, rows, cells,
+    expiries: exps.map((e) => ({ expiry: e.expiry, dte: e.dte, atm_iv: e.atm_iv, iv_computed: false, earnings_expiry: e.expiry === "2027-02-19" })),
+    prior_date: mode === "chg_1d" ? "2026-11-18" : null, earnings: { date: "2027-01-28", reaction_date: "2027-01-29" },
+    thresholds: { max_spread_of_mid: 0.4, min_oi: 1, min_dte: 1, max_dte: 366 }, source: "ibkr", delayed: true,
   };
 }
 

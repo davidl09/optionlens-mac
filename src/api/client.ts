@@ -3,7 +3,7 @@
 // mutations invalidate the affected URL prefixes.
 // In the desktop app the engine's base URL and per-launch token come from the preload (memory only,
 // never persisted); in a plain browser requests are same-origin without a token.
-import type { Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain, CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, Fundamentals, ImpliedMoves, Insiders, IntradayBars, IntradayInterval, IntradayRange, KeyStats, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, McpStatus, NewsItem, Notification, OpenInterest, OptionsBacktestRequest, Preset, PresetPayload, Portfolio, PortfolioRisk, PortfolioSettings, PriceAction, Profile, QuestradeStatus, RefreshStatus, ReportDef, ReportResult, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SymbolRef, SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist } from "./types";
+import type { Activity, Alert, AlertKind, BacktestResult, BacktestTrade, Bar, CalcRequest, CalcResult, Chain, CompareVolatility, ContractHistory, Dividends, Earnings, EarningsStrategyResult, Events, Fundamentals, ImpliedMoves, Insiders, IvSurface, IntradayBars, IntradayInterval, IntradayRange, KeyStats, LiveMode, LiveModeSetting, LiveStatusReport, MarketOverview, McpStatus, NewsItem, Notification, OpenInterest, OptionsBacktestRequest, Preset, PresetPayload, Portfolio, PortfolioRisk, PortfolioSettings, PriceAction, Profile, QuestradeStatus, RefreshStatus, ReportDef, ReportResult, Seasonality, Skew, Status, StockBacktestRequest, StraddleInfo, StrategyTemplate, SurfaceMode, SurfaceRows, SymbolRef, SymbolSummary, TradeIdeas, VolSeasonality, Volatility, Watchlist } from "./types";
 import type { CurrentView, DataRequest } from "../state/view";
 
 export class ApiError extends Error {
@@ -224,6 +224,7 @@ export const api = {
   contract: (s: string, osi: string) => get<ContractHistory>(`${sym(s)}/contract/${enc(osi)}`),
   volatility: (s: string) => get<Volatility>(`${sym(s)}/volatility`),
   skew: (s: string, expiry?: string | null) => get<Skew>(`${sym(s)}/skew${qs({ expiry })}`),
+  ivSurface: (s: string, rows: SurfaceRows, mode: SurfaceMode) => get<IvSurface>(`${sym(s)}/iv-surface${qs({ rows, mode })}`),
   impliedMoves: (s: string) => get<ImpliedMoves>(`${sym(s)}/implied-moves`),
   volSeasonality: (s: string) => get<VolSeasonality>(`${sym(s)}/vol-seasonality`),
   earnings: (s: string) => get<Earnings>(`${sym(s)}/earnings`),

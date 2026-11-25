@@ -387,6 +387,7 @@ th:hover .th-filter { opacity: 1; }
 .swatch { display: inline-block; width: 12px; height: 10px; border-radius: 2px; border: 1px solid var(--border-strong); }
 .swatch.itm { background: var(--itm); }
 .swatch.hot { background: var(--hot); }
+.swatch.outlined { background: transparent; border: 2px solid var(--fg); }
 .swatch.hatch { background: repeating-linear-gradient(135deg, var(--heat-na) 0 3px, var(--muted) 3px 4px); }
 .heat-legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .heat-bar { display: inline-block; width: 140px; height: 8px; border-radius: 4px; }

@@ -104,7 +104,7 @@ export function AboutPage() {
             <li><b>Nasdaq public endpoints</b> — daily price history, earnings and dividend calendars, dividend history, company profile, financial statements, insider filings, headlines and extended-hours quotes.</li>
             <li><b>U.S. Treasury</b> — the 13-week bill rate, used as the risk-free rate in option models of US listings.</li>
             <li><b>Canadian markets (with Questrade)</b> — about 200 of the largest TSX / TSX Venture stocks with Montréal Exchange options plus optionable Canadian ETFs (symbols like <b>RY.TO</b>; <b>RY</b> is the NYSE listing): chains, quotes, daily and intraday history from Questrade, prices in CAD (<b>C$</b>), sessions on the TSX holiday calendar, and the <b>Bank of Canada</b> 3-month T-bill as their risk-free rate. Reports have a Market filter (US by default).</li>
-            <li>Everything else (IV rank, term structure, skew, expected moves, backtests…) is computed locally from those inputs.</li>
+            <li>Everything else (IV rank, term structure, skew, the IV surface, expected moves, backtests…) is computed locally from those inputs.</li>
           </ul>
         </Card>
         <Card title="How to read the numbers">
@@ -114,6 +114,7 @@ export function AboutPage() {
             <li>Historical option prices are only available from stored end-of-day chains. Where a result needs a price from before that, it is estimated with a Black-Scholes model and the row is labelled <span className="badge warn">model</span>; rows from stored prices count as real.</li>
             <li>The model's volatility input falls back from stored at-the-money IV, to stored 30-day IV, to recent historical volatility scaled by the symbol's typical implied/realized ratio.</li>
             <li>Full option chains are collected for the whole universe with Questrade connected, otherwise for the <b>chain universe</b> (watchlists, the most liquid symbols, recently opened symbols) from IBKR; chain-based screeners say so in their coverage note. Universe-wide reports use per-underlying IBKR statistics.</li>
+            <li>The <b>IV surface</b> (Skew page) interpolates only between reliable contracts: a bid, a spread of at most 40% of the mid and open interest. Greyed, hatched cells come from contracts that fail one of these (the tooltip says which) and are not extrapolated.</li>
             <li>Rows labelled <span className="badge warn">reconstructed</span> were rebuilt from historical daily bars of individual contracts (no bid/ask/OI). Pages show an “as of” time.</li>
           </ul>
         </Card>

@@ -1,4 +1,4 @@
-// Volatility group: volatility, skew, implied moves, vol seasonality.
+// Volatility group: volatility, skew (smile, IV surface), implied moves, vol seasonality.
 import { useMemo, useState } from "react";
 import { api } from "../../api/client";
 import type { ColumnDef, ReportRow, Skew, TermPoint, Volatility } from "../../api/types";
@@ -12,6 +12,7 @@ import { MONTHS } from "../../lib/format";
 import { NoChainNotice } from "./ChainRefresh";
 import { ExpiryPills, ivAsOf, shortDate, useQueryValue, useSym } from "./shared";
 import { ivHistoryHint } from "./SummaryTab";
+import { IvSurfacePanel } from "./IvSurfacePanel";
 import { MoneyText } from "../../components/Money";
 
 const CM_COLUMNS: ColumnDef[] = [
@@ -123,6 +124,7 @@ function SkewBody({ s, setExpiry }: { s: Skew; setExpiry: (e: string) => void })
       } subtitle={mode === "delta" ? "x = call delta; puts shown as 1 + Δ (put −0.25 → 0.75)" : undefined}>
         <Smile xFmt={mode === "strike" ? "num" : "num2"} series={smile} spot={mode === "strike" ? s.spot : null} />
       </Card>
+      <IvSurfacePanel sym={s.symbol} />
       <Card title="30-day skew history" subtitle="vol points">
         {s.history.length ? <LineChart series={hist} yFmt="vol" height={240} /> : <InfoBox>Skew history starts when collection started.</InfoBox>}
       </Card>

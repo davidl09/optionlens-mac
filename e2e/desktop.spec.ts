@@ -9,7 +9,7 @@ import * as mcp from "./mocks/mcp";
 import { resetRefresh } from "./mocks/refresh";
 import { resetPortfolio, settings as portfolioSettings } from "./mocks/portfolio";
 import { questradeStatus } from "./mocks/market";
-import { skew } from "./mocks/symbol";
+import { ivSurface, skew } from "./mocks/symbol";
 
 const BASE = "http://127.0.0.1:59999";
 const TOKEN = "per-launch-token-abcdefghijklmnop";
@@ -172,6 +172,8 @@ test("no stored chain: options tabs say the chain is being fetched, then reload 
   let hasChain = false;
   await page.route("**/api/symbol/DELL/skew**", (route) => (hasChain
     ? route.fulfill({ json: skew("DELL", null), headers: { "Access-Control-Allow-Origin": "*" } }) : route.fallback()));
+  await page.route("**/api/symbol/DELL/iv-surface**", (route) => (hasChain
+    ? route.fulfill({ json: ivSurface("DELL", "delta", "iv"), headers: { "Access-Control-Allow-Origin": "*" } }) : route.fallback()));
   await page.goto("/s/DELL/skew");
   await expect(page.locator(".chain-notice")).toHaveText("Fetching DELL’s option chain (IBKR)… (usually 30–90 s)");
   await expect(page.locator(".error-box")).toHaveCount(0);

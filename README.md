@@ -249,6 +249,15 @@ dividend, …) cover Canadian listings too. Not available for them (no free sour
 (only Questrade's current dividend is shown), financial statements, insider trades and news. Pre-market / after-hours
 quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
 
+## IV surface
+
+Symbol → Skew shows, under the smile, the implied volatility of every expiry up to a year out as a heatmap: rows by
+delta (10Δ puts … ATM … 10Δ calls), by moneyness (−20% … +20% of spot) or by strike, coloured by IV, by IV minus the
+expiry's ATM IV, or by the change since the previous session's stored closing chain. Only contracts with a bid, a
+spread of at most 40% of the mid and open interest feed the surface; cells they cannot give are greyed with the reason
+in the tooltip. The first expiry after the next earnings is marked **E**. Clicking a cell adds its contract to the
+calculator (at the live mid); contracts already there are outlined.
+
 ## Strategy calculator
 
 Symbol → Calculator prices a position of up to 8 option / stock legs on the stored chain (live mid / IV while quotes

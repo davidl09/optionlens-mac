@@ -208,15 +208,14 @@ export function Heatmap({ xLabels, yLabels, cells, scale: kind = "diverging", va
       }],
     };
   }, [p, xLabels, yLabels, cells, valueFmt, cellText, tooltip, onCellClick, xMarks, scale]);
-  const ends = kind === "diverging" ? [scale.min, 0, scale.max] : [scale.min, scale.max];
   return (
     <>
       <EChart option={option} height={height} ariaLabel={ariaLabel}
         onClick={onCellClick ? (e) => { const i = (e.value as number[] | undefined)?.[2]; if (i !== undefined) onCellClick(cells[i]); } : undefined} />
       <div className="heat-legend small muted" data-testid="heat-legend">
-        <span>{fmt(ends[0], valueFmt)}</span>
+        <span>{fmt(scale.min, valueFmt)}</span>
         <span className="heat-bar" style={{ background: gradientCss(scale) }} />
-        <span>{fmt(ends[ends.length - 1], valueFmt)}</span>
+        <span>{fmt(scale.max, valueFmt)}</span>
         {legend}
       </div>
     </>
