@@ -39,7 +39,7 @@ export function nyParts(ms: number): { weekday: string; month: string; day: stri
   return { weekday: p.weekday, month: p.month, day: p.day, hour: Number(p.hour), minute: Number(p.minute) };
 }
 
-const hhmm = (p: ReturnType<typeof nyParts>) => `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+export const hhmm = (p: ReturnType<typeof nyParts>) => `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
 
 /** Axis label of a bar start (New York time): the time on 1D, with the weekday on 5D, with the date beyond. */
 export function barLabel(ts: string, range: IntradayRange): string {

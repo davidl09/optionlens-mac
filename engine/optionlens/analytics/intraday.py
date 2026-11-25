@@ -109,12 +109,14 @@ def missing(covered: Iterable[Span], want: Span) -> list[Span]:
     return out
 
 
-def session_windows(span: Span, cal: TradingCalendar = NYSE) -> list[Span]:
-    """The trading days' 04:00-20:00 ET windows inside `span` (nights, weekends and holidays have no bars)."""
+def session_windows(span: Span, cal: TradingCalendar = NYSE, extended: bool = True) -> list[Span]:
+    """The trading days' 04:00-20:00 ET windows inside `span` (nights, weekends and holidays have no bars); with
+    `extended` False the regular sessions' (09:30 to the close)."""
     s, e = span
     out = []
     for d in cal.trading_days(s.astimezone(NY).date(), e.astimezone(NY).date()):
-        a, b = max(s, _at(d, EXTENDED_OPEN)), min(e, _at(d, EXTENDED_CLOSE))
+        lo, hi = (_at(d, EXTENDED_OPEN), _at(d, EXTENDED_CLOSE)) if extended else (_at(d, OPEN), _at(d, cal.close_time(d)))
+        a, b = max(s, lo), min(e, hi)
         if a < b:
             out.append((a, b))
     return out
