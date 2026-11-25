@@ -98,9 +98,26 @@ def close_dt(d: date) -> datetime:
     return datetime.combine(d, REGULAR_CLOSE, NY)
 
 
-def value_at(legs: Sequence[Leg], prices, at: datetime, r: float, q: float, iv_shift: float = 0.0) -> np.ndarray:
+LegVol = Callable[[Leg, datetime], float]
+"""An option leg's IV (before iv_shift) at a time: the calculator's vol model. Default: the leg's own IV."""
+
+
+def _own_iv(l: Leg, at: datetime) -> float:
+    return l.iv  # type: ignore[return-value]
+
+
+def leg_sigma(l: Leg, at: datetime, iv_shift: float = 0.0, vol: LegVol | None = None) -> float:
+    """The volatility an unexpired option leg is valued with at ``at``: vol(leg, at) (default its own IV) plus
+    iv_shift (vol points added to every leg at every date), floored at 1e-4."""
+    if l.iv is None:
+        raise ValueError(f"leg {l.right} {l.strike} {l.expiry} needs an IV")
+    return max((vol or _own_iv)(l, at) + iv_shift, 1e-4)
+
+
+def value_at(legs: Sequence[Leg], prices, at: datetime, r: float, q: float, iv_shift: float = 0.0,
+             vol: LegVol | None = None) -> np.ndarray:
     """Position market value ($) at time ``at`` for each underlying price. Options expiring at or
-    before ``at`` take intrinsic value; others BSM with the leg's own IV (+ iv_shift)."""
+    before ``at`` take intrinsic value; others BSM at leg_sigma (the leg's own IV + iv_shift by default)."""
     S = np.asarray(prices, dtype=float)
     total = np.zeros_like(S)
     for l in legs:
@@ -111,30 +128,38 @@ def value_at(legs: Sequence[Leg], prices, at: datetime, r: float, q: float, iv_s
         if expired:
             v = np.maximum(S - l.strike, 0.0) if l.right == "C" else np.maximum(l.strike - S, 0.0)
         else:
-            if l.iv is None:
-                raise ValueError(f"leg {l.right} {l.strike} {l.expiry} needs an IV")
             T = year_fraction_to_expiry(l.expiry, at)
-            v = bs.price(S, l.strike, T, r, q, max(l.iv + iv_shift, 1e-4), l.right)
+            v = bs.price(S, l.strike, T, r, q, leg_sigma(l, at, iv_shift, vol), l.right)
         total = total + l.qty * OPTION_MULT * v
     return total
 
 
+GREEKS = ("delta", "gamma", "theta", "vega")
+
+
+def leg_greeks(legs: Sequence[Leg], spot: float, at: datetime, r: float, q: float, iv_shift: float = 0.0,
+               vol: LegVol | None = None) -> list[dict]:
+    """Per leg position greeks (qty-scaled, units as position_greeks); zeros for an option leg that has expired or
+    has no IV."""
+    out = []
+    for l in legs:
+        g = dict.fromkeys(GREEKS, 0.0)
+        if l.kind == "stock":
+            g["delta"] = l.qty
+        elif close_dt(l.expiry) > at and l.iv is not None:
+            bg = bs.greeks(spot, l.strike, year_fraction_to_expiry(l.expiry, at), r, q,
+                           leg_sigma(l, at, iv_shift, vol), l.right)
+            g = {k: float(l.qty * OPTION_MULT * bg[k]) for k in GREEKS}
+        out.append(g)
+    return out
+
+
 def position_greeks(legs: Sequence[Leg], spot: float, at: datetime, r: float, q: float,
-                    iv_shift: float = 0.0) -> dict:
+                    iv_shift: float = 0.0, vol: LegVol | None = None) -> dict:
     """Position totals: delta ($ per $1 = share-equivalents), gamma (per $1), theta ($/day),
     vega ($ per vol pt)."""
-    out = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
-    for l in legs:
-        if l.kind == "stock":
-            out["delta"] += l.qty
-            continue
-        if close_dt(l.expiry) <= at or l.iv is None:
-            continue
-        g = bs.greeks(spot, l.strike, year_fraction_to_expiry(l.expiry, at), r, q,
-                      max(l.iv + iv_shift, 1e-4), l.right)
-        for k in out:
-            out[k] += l.qty * OPTION_MULT * g[k]
-    return out
+    per = leg_greeks(legs, spot, at, r, q, iv_shift, vol)
+    return {k: float(sum(g[k] for g in per)) for k in GREEKS}
 
 
 # ============================================================================ linear payoff kernel
