@@ -1,4 +1,5 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConnectionBanner, EngineGate, NavigationListener } from "./components/Desktop";
 import { Footer, Header } from "./components/Header";
 import Alerts from "./pages/Alerts";
@@ -16,16 +17,18 @@ import { ViewReporter } from "./components/ViewReporter";
 import { ViewScope } from "./state/view";
 
 export default function App() {
+  const { pathname } = useLocation();
   return (
     <>
       <NavigationListener />
       <EngineGate>
         <div className="app">
-          <Header />
+          <ErrorBoundary label="header" resetKey={pathname}><Header /></ErrorBoundary>
           <ConnectionBanner />
           <main className="app-main">
             <ViewReporter />
             <ViewScope>
+              <ErrorBoundary label="page" resetKey={pathname}>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/reports" element={<ReportsIndex />} />
@@ -44,6 +47,7 @@ export default function App() {
                 <Route path="/about" element={<AboutPage />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
+              </ErrorBoundary>
             </ViewScope>
           </main>
           <Footer />

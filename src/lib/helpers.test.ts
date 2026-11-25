@@ -29,7 +29,7 @@ describe("humanize", () => {
 });
 
 describe("rankSymbols", () => {
-  const s = (symbol: string, name: string): SymbolRef => ({ symbol, name, kind: "stock", market: "US", exchange: null, currency: "USD" });
+  const s = (symbol: string, name: string | null): SymbolRef => ({ symbol, name, kind: "stock", market: "US", exchange: null, currency: "USD" });
   it("ranks exact symbol, then symbol prefix (shorter first), then name matches", () => {
     const items = [s("KOLD", "ProShares UltraShort Bloomberg Natural Gas"), s("KODK", "Eastman Kodak"), s("COKE", "Coca-Cola Consolidated"),
       s("KO", "Coca-Cola Co"), s("KOS", "Kosmos Energy"), s("XYZ", "Ko Holdings")];
@@ -38,6 +38,10 @@ describe("rankSymbols", () => {
   it("keeps the engine's order without a query", () => {
     const items = [s("B", "b"), s("A", "a")];
     expect(rankSymbols(" ", items)).toEqual(items);
+  });
+  it("ranks symbols the engine sent without a name (SPLG) instead of throwing", () => {
+    const items = [s("SPLG", null), s("SPGI", "S&P Global"), s("SP", null)];
+    expect(rankSymbols("sp", items).map((x) => x.symbol)).toEqual(["SP", "SPLG", "SPGI"]);
   });
 });
 

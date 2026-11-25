@@ -181,6 +181,8 @@ test("earnings strategy drill-down", async ({ page }) => {
 test("search, theme, bell", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/");
+  await page.getByLabel("Search symbols").fill("sp");   // SPLG comes without a name: the list must still render
+  await expect(page.locator(".search-list li", { hasText: "SPLG" })).toBeVisible();
   await page.getByLabel("Search symbols").fill("ms");
   await expect(page.locator(".search-list li").first()).toContainText("MSFT");
   await page.getByLabel("Search symbols").press("ArrowDown");

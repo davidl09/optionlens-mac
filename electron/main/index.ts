@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   const send = (channel: string, payload: unknown) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
   const showWindow = (): BrowserWindow => {
     // Without a tray, closing the window quits (there would be no way back to a hidden window).
-    if (!win || win.isDestroyed()) win = createMainWindow(join(appRoot, "dist-electron", "preload.cjs"), () => quitting || tray === null);
+    if (!win || win.isDestroyed()) win = createMainWindow(join(appRoot, "dist-electron", "preload.cjs"), () => quitting || tray === null, log);
     else { win.show(); win.focus(); }
     return win;
   };

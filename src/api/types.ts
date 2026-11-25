@@ -19,7 +19,7 @@ export interface MarketFields {
   exchange: "TSX" | "TSXV" | null;   // Canadian listing venue; null for US listings (venue not tracked)
   currency: Currency;
 }
-export interface SymbolRef extends MarketFields { symbol: string; name: string; kind: SymbolKind }
+export interface SymbolRef extends MarketFields { symbol: string; name: string | null; kind: SymbolKind }
 
 export interface Quote {
   symbol: string; ts: ISODateTime; price: number; change: number; change_pct: number;

@@ -3,7 +3,7 @@ import type { SymbolRef } from "../api/types";
 
 function rank(q: string, it: SymbolRef): number {
   const sym = it.symbol.toUpperCase();
-  const name = it.name.toUpperCase();
+  const name = (it.name ?? "").toUpperCase();
   if (sym === q) return 0;
   if (sym.startsWith(q)) return 1;
   if (name.startsWith(q) || name.includes(` ${q}`)) return 2;

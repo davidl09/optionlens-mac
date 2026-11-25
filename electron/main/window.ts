@@ -1,10 +1,12 @@
 // The main window: locked-down renderer (context isolation, no Node, sandbox), app:// only navigation,
 // external links in the default browser, and hide-on-close (while `shouldReallyClose` is false) so the app
 // keeps running in the tray. Hidden or minimized, the renderer stops its live quotes (background throttling).
+// Renderer errors and crashes go to main.log: a blank window otherwise leaves no trace.
 import { BrowserWindow, shell } from "electron";
+import type { Logger } from "./log";
 import { APP_ORIGIN } from "./protocol";
 
-export function createMainWindow(preload: string, shouldReallyClose: () => boolean): BrowserWindow {
+export function createMainWindow(preload: string, shouldReallyClose: () => boolean, log: Logger): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440, height: 920, minWidth: 900, minHeight: 600, show: false, title: "OptionLens",
     backgroundColor: "#0f1115",
@@ -16,6 +18,10 @@ export function createMainWindow(preload: string, shouldReallyClose: () => boole
     },
   });
   win.webContents.on("will-navigate", (e, url) => { if (!url.startsWith(`${APP_ORIGIN}/`)) e.preventDefault(); });
+  win.webContents.on("console-message", ({ level, message, sourceId, lineNumber }) => {
+    if (level === "error") log.error(`renderer: ${message} (${sourceId}:${lineNumber})`);
+  });
+  win.webContents.on("render-process-gone", (_e, { reason, exitCode }) => log.error(`renderer gone: ${reason} (exit ${exitCode})`));
   win.webContents.on("will-attach-webview", (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url);

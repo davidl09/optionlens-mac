@@ -619,3 +619,6 @@ code.wrap { word-break: break-all; font-size: 11.5px; }
 
 /* charts: text summary for screen readers */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+.error-boundary { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--down); border-radius: var(--radius-sm); background: var(--down-soft); }
+.error-boundary button { margin-left: 8px; }

@@ -34,8 +34,8 @@ export function status(): Status {
 export function search(q: string): SymbolRef[] {
   const u = q.toUpperCase();
   const us = { market: "US", exchange: null, currency: "USD" } as const;
-  const all: SymbolRef[] = [...SYMBOLS.map(([symbol, name]) => ({ symbol, name, kind: "stock" as const, ...us })), { symbol: "SPY", name: "SPDR S&P 500 ETF", kind: "etf", ...us }, { symbol: "SPX", name: "S&P 500 Index", kind: "index", ...us }];
-  return [...all.filter((s) => s.symbol.startsWith(u)), ...all.filter((s) => !s.symbol.startsWith(u) && s.name.toUpperCase().includes(u))].slice(0, 20);
+  const all: SymbolRef[] = [...SYMBOLS.map(([symbol, name]) => ({ symbol, name, kind: "stock" as const, ...us })), { symbol: "SPY", name: "SPDR S&P 500 ETF", kind: "etf", ...us }, { symbol: "SPLG", name: null, kind: "etf", ...us }, { symbol: "SPX", name: "S&P 500 Index", kind: "index", ...us }];
+  return [...all.filter((s) => s.symbol.startsWith(u)), ...all.filter((s) => !s.symbol.startsWith(u) && (s.name ?? "").toUpperCase().includes(u))].slice(0, 20);
 }
 
 const def = (id: string) => REPORT_DEFS.find((d) => d.id === id)!;
