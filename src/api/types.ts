@@ -134,6 +134,9 @@ export interface LiveStatusReport {
   state: "live" | "delayed" | "connecting" | "stale" | "market_closed" | "not_connected" | "idle";
   source: "questrade" | "ibkr" | null; session: "regular" | "extended" | "closed"; mode: "poll" | "stream" | "snapshots" | null;
   interval_s: number | null; fallback: string | null; symbols: number; contracts: number; detail: string | null;
+  /** Followed symbols (portfolio, watchlists, recently opened) no window shows, kept live for their 1-minute bars
+   * (INTEGRATION.md §9 "Background symbols"). Absent from older engines. */
+  background?: number;
   questrade: QuestradeLiveDiagnostics | null;
 }
 

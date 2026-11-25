@@ -287,7 +287,9 @@ volume; reports also re-run every 45 s), and the chart's last candle. The header
 are shown) or **NOT CONNECTED**. Values from a delayed feed are labelled "delayed", never "live" (the calculator's
 price / IV / spot tags, the portfolio's price source). Changed values are briefly tinted. With Questrade connected the engine polls only
 what is visible, every 2–10 s depending on how much is on screen, within 70% of Questrade's limits together with the
-background sweeps; without Questrade, IB Gateway snapshots the visible symbols. A hidden or minimized window stops
+background sweeps; without Questrade, IB Gateway snapshots the visible symbols. The symbols you follow (portfolio
+holdings, watchlists, recently opened; at most 40) are also kept live in the background during their sessions, so
+their 1-minute chart is already up to date when you open it (Questrade's own candles arrive ~15 minutes late). A hidden or minimized window stops
 live updates. Questrade's Level 1 streaming (tick-by-tick) can be turned on instead of polling in Settings → Data sources →
 Questrade ("Stream live quotes"; it falls back to polling on its own when streaming fails), but Questrade says it freezes the market data of any other Questrade platform you have open at the same time.
 

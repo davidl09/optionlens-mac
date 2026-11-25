@@ -11,7 +11,12 @@
 - the latest live values are kept in memory and persisted every PERSIST_S (quotes_latest field-wise, the served
   option_latest rows' market fields) by the injected `persist`, so non-live views stay consistent; never archives;
 - the symbols' quotes are aggregated into 1-minute bars (live/bars.py): closed ones are handed to the injected
-  `store_bars` every PERSIST_S, the rest are served by `pending_bars` (the intraday charts' latest minutes).
+  `store_bars` every PERSIST_S, the rest are served by `pending_bars` (the intraday charts' latest minutes);
+- background symbols (live/background.py, read from the injected `background` every background.REFRESH_S): while
+  Questrade is usable the driver also keeps the followed symbols live that no window shows (equity quotes only, in
+  their market's session, on the same one stream), so their 1-minute bars exist before a chart opens. They never
+  reach a window (patches go to the windows that subscribed), never start the driver alone outside their sessions,
+  and are not asked of the IBKR bridge; their values are kept and persisted like the windows'.
 
 No I/O here: the drivers, the bridge check, the clock, the session calendar and persistence are injected.
 """
@@ -23,9 +28,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Awaitable, Callable, Literal, Mapping, Protocol
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Literal, Mapping, Protocol
 
 from ..models import IntradayBar
+from . import background as bg
 from .bars import MinuteBars
 from ..analytics.markets import MARKETS, market_of
 from ..sources.chain_source import bridge_serves
@@ -111,10 +117,13 @@ class LiveHub:
     def __init__(self, questrade: Callable[[], Driver | None], bridge_connected: Callable[[], bool],
                  persist: Callable[[list[Fields], list[Fields]], Awaitable[None]] | None = None,
                  clock: Callable[[], float] = time.time, session: Callable[[datetime, str], Session] = session_at,
-                 store_bars: Callable[[dict[str, list[IntradayBar]]], Awaitable[None]] | None = None):
+                 store_bars: Callable[[dict[str, list[IntradayBar]]], Awaitable[None]] | None = None,
+                 background: Callable[[], Iterable[str]] | None = None):
         self._questrade_factory, self._bridge_connected = questrade, bridge_connected
         self._persist, self.clock, self._session_at = persist, clock, session
         self._store_bars = store_bars
+        self._read_background = background
+        self._background: frozenset[str] = frozenset()   # the followed symbols (background.compose)
         self.bars = MinuteBars()
         self._questrade: Driver | None = None
         self._qtask: asyncio.Task | None = None
@@ -146,6 +155,8 @@ class LiveHub:
         self._tasks = [asyncio.create_task(self._control(), name="live:control"),
                        asyncio.create_task(self._ticker(), name="live:tick"),
                        asyncio.create_task(self._persister(), name="live:persist")]
+        if self._read_background is not None:
+            self._tasks.append(asyncio.create_task(self._backgrounder(), name="live:background"))
 
     def close_streams(self) -> None:
         """End every open stream (engine shutdown: uvicorn waits for open responses before it stops)."""
@@ -219,7 +230,8 @@ class LiveHub:
 
     def snapshot(self, symbols: list[str] | None = None, contracts: list[str] | None = None) -> dict:
         """The latest live values in memory ({status, quotes: {SYM: fields}, options: {OSI: fields}}, each with its
-        `ts`): of the given keys, or of every key that has one. Only what some window kept live has values."""
+        `ts`): of the given keys, or of every key that has one. Only what some window (or the background set) kept
+        live has values."""
         def pick(latest: dict[str, Fields], keys: list[str] | None) -> dict[str, Fields]:
             ks = latest.keys() if keys is None else [k for k in keys if k in latest]
             return {k: self._public(latest[k]) for k in ks}
@@ -339,11 +351,33 @@ class LiveHub:
         if active != self.active:
             log.info("live: source %s -> %s", self.active, active)
         self.active = active
-        self._set_status(self._compute_status(now, want, q, q_reason))
+        self._set_status(self._compute_status(now, want, q, q_reason)
+                         | {"background": len(kept.symbols - want.symbols) if run_q else 0})
+
+    def set_background(self, symbols: Iterable[str]) -> None:
+        """The followed symbols to keep live in the background (background.compose: capped, in priority order)."""
+        new = frozenset(list(symbols)[:bg.BACKGROUND_MAX])
+        if new != self._background:
+            self._background = new
+            self._wake.set()
+
+    async def _backgrounder(self) -> None:
+        while True:
+            try:
+                self.set_background(await asyncio.to_thread(self._read_background))  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001 - e.g. no database yet: the previous set stays, read again later
+                log.exception("live: reading the background symbols failed")
+            await asyncio.sleep(bg.REFRESH_S)
+
+    def _background_live(self) -> frozenset[str]:
+        """The background symbols in their market's session that no window shows."""
+        return for_sessions(Wanted(self._background - self.registry.union().symbols), self.sessions).symbols
 
     def _kept_live(self, want: Wanted) -> Wanted:
-        """What the Questrade driver keeps live: the windows' set in its sessions (`want`)."""
-        return want
+        """What the Questrade driver keeps live: the windows' set in its sessions (`want`) plus the background
+        symbols in theirs (equity quotes only)."""
+        extra = self._background_live()
+        return Wanted(want.symbols | extra, want.contracts) if extra else want
 
     async def _run_driver(self, d: Driver) -> None:
         try:

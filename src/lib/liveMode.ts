@@ -14,7 +14,9 @@ export function liveModeStatusText(mode: LiveMode, r: LiveStatusReport | null): 
   const q = r.questrade;
   if (!q) return "Questrade is not available in this engine.";
   if (r.state === "market_closed") return `Market closed: ${mode === "stream" ? "streams open" : "polling starts"} when it opens.`;
-  if (r.state === "idle") return "No quotes on screen: nothing to update.";
+  const bg = r.background ?? 0;
+  const followed = `${bg} followed symbol${bg === 1 ? "" : "s"} kept live in the background for their 1-minute bars`;
+  if (r.state === "idle") return bg ? `No quotes on screen: ${followed}.` : "No quotes on screen: nothing to update.";
   if (r.state === "not_connected" || r.source === "ibkr") return r.detail ?? "Questrade is not in use for live quotes now.";
   if (mode === "stream" && q.fallback) {
     const retry = time(q.retry_at);

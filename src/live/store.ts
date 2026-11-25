@@ -17,6 +17,8 @@ export interface LiveStatus {
   detail?: string | null;
   symbols?: number;
   contracts?: number;
+  /** Followed symbols kept live in the background (no window shows them). */
+  background?: number;
 }
 
 /** Fields of one live key as the engine patches them (only those it has), plus where / when they came from. */

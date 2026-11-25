@@ -207,6 +207,16 @@ def _held() -> tuple[list[Holding], list, list]:
     return holdings, accounts, fx
 
 
+def held_underlyings() -> list[str]:
+    """Underlyings of the held stocks and options (enabled brokers' last snapshots, memory only), the largest position
+    by cost first (live/background.py keeps them live)."""
+    size: dict[str, float] = {}
+    for h in _held()[0]:
+        if h.kind in ("stock", "option") and h.underlying:
+            size[h.underlying] = size.get(h.underlying, 0.0) + abs(h.qty * (h.avg_cost or 0.0) * h.multiplier)
+    return sorted(size, key=lambda u: (-size[u], u))
+
+
 def _is_listed_us(h: Holding) -> bool:
     return h.currency == "USD" and h.kind in ("stock", "option")
 

@@ -25,6 +25,7 @@ describe("live mode status line", () => {
     expect(liveModeStatusText("poll", R({ mode: "poll", interval_s: 2 }, { setting: "poll", streaming: false }))).toBe("Polling: snapshots every 2.0 s.");
     expect(liveModeStatusText("stream", R({ state: "market_closed" }))).toBe("Market closed: streams open when it opens.");
     expect(liveModeStatusText("stream", R({ state: "idle" }))).toBe("No quotes on screen: nothing to update.");
+    expect(liveModeStatusText("poll", R({ state: "idle", background: 12 }))).toBe("No quotes on screen: 12 followed symbols kept live in the background for their 1-minute bars.");
     expect(liveModeStatusText("stream", R({}, null))).toBe("Questrade is not available in this engine.");
     expect(liveModeStatusText("stream", null)).toBe("Live status unavailable.");
   });

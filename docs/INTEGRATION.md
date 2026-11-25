@@ -158,7 +158,7 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   account's last seen quote delay; IBKR historical bars: null, unknown). Live-built bars (source `live`): the
   candle source answers the latest minutes late (Questrade's candles end ~15 minutes before now, even on a real-time
   account; each fetch is logged with its window end, count, newest candle and lag), so while a symbol is live (§9,
-  streamed or polled, any window) the engine aggregates its real-time quotes into 1m bars (a minute holds a bar only
+  streamed or polled, any window, or as a background symbol: holdings, watchlists, recently opened) the engine aggregates its real-time quotes into 1m bars (a minute holds a bar only
   when the day volume rose, or without day volumes the price changed; volume = day-volume deltas; delayed quotes
   build none), stores them in `intraday_bars` as source `live` (1m only, no span, kept 3 days) and serves them,
   aggregated to the interval shown, after the source's newest bar. A source's bar always replaces them (same start:
@@ -746,7 +746,8 @@ when it is connected (§7).
   strike_max}]}` replaces that window's set (≤ 500 symbols, 1,000 contracts, 8 chain views; chain views resolve to the
   served contracts of that expiry in the band). → `{client_id, symbols, contracts, status}`.
 - `GET /api/live/stream?client_id=` (text/event-stream, same Bearer token; the renderer reads it with fetch streaming,
-  so no token in a URL): `event: status` `{state, source, session, mode, interval_s, symbols, contracts, detail}` and
+  so no token in a URL): `event: status` `{state, source, session, mode, interval_s, symbols, contracts, background,
+  detail}` (`symbols` / `contracts`: the windows' set live now; `background`: the background symbols live now) and
   `event: patch` `{quotes: {SYM: {price, change, change_pct, bid, ask, open, high, low, prev_close, volume, delayed,
   source, ts}}, options: {OSI: {bid, ask, mid, last, volume, oi, iv, delta, gamma, theta, vega, delayed, source, ts}}}`
   with only changed fields; a `: keep-alive` comment every 15 s. A window without an open stream for 30 s is dropped.
@@ -760,7 +761,17 @@ when it is connected (§7).
 - Source: Questrade while it is usable (connected, not needing attention); when it is unavailable, or failing for 30 s,
   and the IBKR bridge is connected, the bridge snapshots the visible symbols (`live-wants`, §6; option cells keep the
   stored chain) — the Questrade driver keeps retrying and takes over again on its first success.
-- The hub keeps exactly the union of all windows' sets live (Registry/diff), coalesces to at most one update per key per
+- **Background symbols** (`live/background.py`): the 1-minute bars a chart shows after the lagging candles (§5
+  "Intraday bars") exist only for symbols kept live, so while Questrade is usable the driver also keeps the symbols the
+  user follows live although no window shows them: the underlyings of the portfolio's holdings (when positions are in
+  the engine, §11; largest position by cost first), then the watchlist symbols, then the 15 symbols opened most
+  recently in the last 3 days (`symbol_views`), each once, **at most 40** (`BACKGROUND_MAX`), re-read every 60 s.
+  Equity Level 1 quotes only (no option contracts), each symbol in its own market's session (closed: not kept), on
+  the same one stream / poll round as the windows' keys (still one streaming connection). They change nothing a window
+  receives (patches go only to the windows that subscribed a key), never ask the IBKR bridge, do not keep the driver
+  running while Questrade is unusable, and alone do not change `state` (`idle` with nothing on screen); their values
+  are kept in memory (a window opening one gets its fresh value at once) and persisted like the windows'.
+- The hub keeps the union of all windows' sets live (Registry/diff) plus the background symbols, coalesces to at most one update per key per
   250 ms per window, keeps the latest values in memory and persists the changed ones every 60 s: `quotes_latest`
   field-wise (`source` the live source) and the served `option_latest` rows' market fields (`iv_source` /
   `greeks_source` relabelled when an IV / greeks arrive; the chain's fetch time, source and `delayed` unchanged, so

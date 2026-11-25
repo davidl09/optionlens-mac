@@ -5,6 +5,7 @@ the windows as coalesced patches over Server-Sent Events.
 - subscriptions: Wanted / Registry / union / diff (pure);
 - session: regular / extended / closed (pure);
 - hub: LiveHub, the subsystem's contract (subscribe, events, publish, bridge_wants, status);
+- background: the followed symbols kept live while no window shows them (pure; read here by `_followed`);
 - questrade: the Questrade driver (polling cadence from the rate gate, or streams);
 - stream: the Questrade Level 1 WebSocket client;
 - mode: the user's choice of streaming or polling (saved in DATA_DIR);
@@ -15,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ..models import IntradayBar
+from . import background
 from .hub import LiveHub
 from .mode import FILE_NAME as MODE_FILE
 from .mode import Mode, ModeSetting
@@ -64,6 +66,16 @@ def _questrade_driver():
     return QuestradeLive(chain_source.REGISTRY["questrade"](), instance().publish, mode=_mode_setting().get())
 
 
+def _followed() -> tuple[str, ...]:
+    """Blocking. The background set (live/background.py) from the portfolio holdings in memory, the watchlists and the
+    symbols opened recently."""
+    from ..repo import user as user_repo
+    from ..repo import views as views_repo
+    from ..services import portfolio
+    recent = views_repo.viewed_since(datetime.now(timezone.utc) - background.RECENT_WINDOW)
+    return background.compose(portfolio.held_underlyings(), user_repo.watchlist_symbols(), recent)
+
+
 class _BridgeCheck:
     """Whether the IBKR bridge is connected (its heartbeat, services.system.bridge), re-read every BRIDGE_CHECK_S."""
 
@@ -88,7 +100,7 @@ def instance() -> LiveHub:
     global _hub
     if _hub is None:
         from .persist import persist, store_bars
-        _hub = LiveHub(_questrade_driver, _BridgeCheck(), persist, store_bars=store_bars)
+        _hub = LiveHub(_questrade_driver, _BridgeCheck(), persist, store_bars=store_bars, background=_followed)
     return _hub
 
 

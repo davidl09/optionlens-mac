@@ -91,10 +91,11 @@ CURATED: dict[str, Curated] = {
     "GET /api/sources/questrade": Curated("source_questrade_status", "Questrade connection state (never the token): "
                                           "state, real-time vs delayed, calls this hour, last sweep, top failures."),
     "GET /api/live/status": Curated("live_status", "Live-quote status: state (live/delayed/stale/market_closed/...), "
-                                    "source, session, mode (stream/poll), what is kept live."),
+                                    "source, session, mode (stream/poll), what is kept live (symbols / contracts on "
+                                    "screen, background: followed symbols kept live off screen)."),
     "GET /api/live/mode": Curated("live_mode", "Questrade live mode setting: {mode: stream|poll, default, saved}."),
-    "GET /api/live/quotes": Curated("live_quotes", "Snapshot of the latest live values in memory (only what is on the "
-                                    "user's screen is kept live): quotes {SYM: price, change, change_pct, bid, ask, "
+    "GET /api/live/quotes": Curated("live_quotes", "Snapshot of the latest live values in memory (what is on the "
+                                    "user's screen, plus up to 40 followed symbols' quotes, is kept live): quotes {SYM: price, change, change_pct, bid, ask, "
                                     "volume, ts, source, delayed} and options {OSI: bid, ask, mid, last, iv, greeks}. "
                                     f"{U_PRICE} {U_FRAC} Missing keys are not live: use symbol_summary / symbol_chain."),
     # ---- the current view (screen context)
