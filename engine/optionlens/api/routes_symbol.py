@@ -5,6 +5,7 @@ from typing import Literal, get_args
 
 from fastapi import APIRouter, Depends, Query
 
+from ..analytics.surface import Mode, RowKind
 from ..services import intraday, refresh, symbol, symbol_company, symbol_earnings, symbol_options, symbol_vol
 from ..services.errors import BadRequest
 from .deps import respond, symbol_param
@@ -89,6 +90,13 @@ async def volatility(sym: str = Sym):
 @router.get("/skew")
 async def skew(sym: str = Sym, expiry: str | None = None):
     return await respond(symbol_vol.skew, sym, expiry)
+
+
+@router.get("/iv-surface")
+async def iv_surface(sym: str = Sym, rows: RowKind = "delta", mode: Mode = "iv"):
+    """IvSurface: IV per expiry × delta / moneyness / strike from the stored chain, reliable contracts only
+    (docs/INTEGRATION.md "IV surface")."""
+    return await respond(symbol_vol.iv_surface, sym, rows, mode)
 
 
 @router.get("/implied-moves")

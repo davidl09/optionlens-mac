@@ -143,6 +143,14 @@ CURATED: dict[str, Curated] = {
                                                 f"ago), HV windows, Parkinson, IV/HV history. {U_FRAC} {PAGING}"),
     "GET /api/symbol/{sym}/skew": Curated("symbol_skew", f"IV skew of one expiry by strike and by delta, skew history. "
                                           f"{U_FRAC}"),
+    "GET /api/symbol/{sym}/iv-surface": Curated(
+        "symbol_iv_surface", "IV surface of the stored chain: expiries[] (columns, 1-366 DTE: dte, atm_iv, "
+        "earnings_expiry = first expiry after the next earnings reaction) × rows[] (rows=delta: signed OTM-side delta, "
+        "puts < 0, ATM = 0.5; moneyness: K/S - 1 from -0.20 to 0.20; strike: listed strikes near spot); "
+        "cells[row][column]: iv, value (mode=iv: IV; vs_atm: IV - the expiry's ATM IV; chg_1d: IV - the same cell on "
+        "the previous stored EOD chain, `prior_date`), the nearest contract (osi, strike, right, bid, ask, oi), "
+        "reliable + reason (no bid, spread > thresholds.max_spread_of_mid of mid, OI < thresholds.min_oi, no / "
+        f"engine-computed IV, not bracketed). Only reliable contracts are interpolated. {U_PRICE} {U_FRAC}"),
     "GET /api/symbol/{sym}/implied-moves": Curated("symbol_implied_moves", "Implied move per expiry from the ATM "
                                                    f"straddle and from IV, with the price range. {U_PRICE} {U_FRAC}"),
     "GET /api/symbol/{sym}/vol-seasonality": Curated("symbol_vol_seasonality", f"Average IV30 / HV20 by calendar month. "
@@ -285,6 +293,8 @@ PARAM_DOCS: dict[str, str] = {
     "entry": "Entry day relative to the earnings reaction day (negative = before)",
     "exit": "Exit day relative to the earnings reaction day",
     "contracts": "Comma-separated OSI codes",
+    "rows": "IV surface rows: delta | moneyness | strike",
+    "mode": "IV surface values: iv | vs_atm (minus the expiry ATM IV) | chg_1d (change since the prior session)",
 }
 
 PAGE_ARGS: dict[str, dict] = {

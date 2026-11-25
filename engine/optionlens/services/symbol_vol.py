@@ -1,14 +1,14 @@
-"""Per-symbol volatility payloads (types.ts): Volatility, Skew, VolSeasonality."""
+"""Per-symbol volatility payloads (types.ts): Volatility, Skew, IvSurface, VolSeasonality."""
 from __future__ import annotations
 
 from datetime import date, timedelta
 
 from ..analytics import chainmetrics as cm
-from ..analytics import stats, vol
+from ..analytics import stats, surface, vol
 from ..repo import metrics as metrics_repo
 from ..repo import options as options_repo
 from . import context as ctx
-from .symbol_options import expiry_infos, parse_expiry, require_chain
+from .symbol_options import expiry_infos, parse_expiry, require_chain, source_info
 
 TENORS = vol.CM_TENORS
 WEEK, MONTH = 7, 30
@@ -93,6 +93,31 @@ def skew(symbol: str, expiry: str | None = None) -> dict:
         "by_delta": vol.iv_by_delta(ca, i),
         "history": [{"date": ctx.as_date(d), "skew25_30": ctx.num(h["skew25_30"][j]),
                      "put_skew_30": ctx.num(h["put_skew_30"][j])} for j, d in enumerate(h["date"])],
+    }
+
+
+def _prior_surface(ca, rows: str, today: dict) -> tuple[date | None, dict | None]:
+    """(date, surface) of the symbol's previous stored EOD chain (the one the OI change compares to), on today's rows
+    and columns; (None, None) without one."""
+    day = options_repo.prior_eod_date(ca.asof_date, ca.symbol)
+    prior = ctx.eod_chain_arrays(ca.symbol, day) if day else None
+    if prior is None:
+        return None, None
+    return day, surface.build(prior, rows, strikes=today["rows"] if rows == "strike" else None,
+                              expiries=[e["expiry"] for e in today["expiries"]])
+
+
+def iv_surface(symbol: str, rows: str = "delta", mode: str = "iv") -> dict:
+    ca = require_chain(symbol)
+    surf = ctx.derived(ca, f"iv_surface:{rows}", lambda c: surface.build(c, rows))
+    prior_date, prior = _prior_surface(ca, rows, surf) if mode == "chg_1d" else (None, None)
+    return {
+        "symbol": ca.symbol, "spot": ca.spot, "asof": ca.asof, "rows_by": rows, "mode": mode,
+        "rows": surf["rows"], "expiries": surf["expiries"], "cells": surface.with_mode(surf, mode, prior),
+        "prior_date": prior_date,
+        "earnings": {"date": ca.next_earnings, "reaction_date": ca.next_reaction} if ca.next_earnings else None,
+        "thresholds": surface.thresholds(),
+        "delayed": options_repo.latest_delayed(ca.symbol), **source_info(ca.symbol),
     }
 
 

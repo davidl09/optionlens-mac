@@ -15,7 +15,7 @@ from .test_engine_api import _chain
 
 SYM = "HPQ"
 QSYM = "HPQV"
-CHAIN_PATHS = ("chain", "activity", "open-interest", "skew", "implied-moves", "straddle", "ideas",
+CHAIN_PATHS = ("chain", "activity", "open-interest", "skew", "iv-surface", "implied-moves", "straddle", "ideas",
                f"contract/{SYM}261218C00120000")
 
 

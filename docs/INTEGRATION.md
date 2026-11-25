@@ -92,7 +92,7 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   saved earlier (IBKR's contract server was unavailable, §7), listed at that time; quotes are current, expiries listed
   since then are missing. The UI notes "contract list from <date> (IBKR contract server unavailable)".
 - Errors are `{"detail": "<message>"}`; where the UI acts on an error the body adds a machine-readable `code`.
-  Every endpoint that needs a stored chain (chain, activity, open-interest, contract, skew, implied-moves,
+  Every endpoint that needs a stored chain (chain, activity, open-interest, contract, skew, iv-surface, implied-moves,
   straddle, ideas, `POST /api/calc/strategy`) answers a known symbol without one with
   `404 {"detail": "...", "code": "no_chain"}` (not fetched yet), or `"code": "no_options"` when a chain source
   confirmed the symbol lists no options. The app shows "fetching" / "connect IB Gateway" / "no options" for these
@@ -133,6 +133,28 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   `vega_by_expiry` `[{expiry, vega}]` sums to `greeks.vega`. `ev_hv` is null with `ev_hv_reason` when the reaction
   falls in (now, `expiry_used`] (HV30 holds no earnings move) or there is no HV30. The PoP / EV(IV) distribution
   stays the mean IV of the legs at `expiry_used` (+ shift), which includes the event. Theta is plain BSM at today's IV.
+- **IV surface** (`GET /api/symbol/{sym}/iv-surface?rows=delta|moneyness|strike&mode=iv|vs_atm|chg_1d` → `IvSurface`,
+  `analytics/surface.py`; Skew page "IV surface" panel): IV per expiry (columns: 1 ≤ DTE ≤ 366) × row from the stored
+  chain, `cells[row][column]`, rows ascending in strike. Rows: `delta` (default) — 10…45Δ puts, ATM, 45…10Δ calls,
+  each the OTM side's feed delta with the IV interpolated linearly in delta as the Skew page's by-delta smile, ATM =
+  the expiry's ATM IV (`ExpiryInfo.atm_iv` rule); `moneyness` — K/S − 1 from −20% to +20% in 2.5% steps, IV
+  interpolated linearly in ln(K/S) over the OTM contracts (puts below spot, calls at/above); `strike` — the strikes
+  the columns list within ±20% of spot (the 41 nearest spot), the OTM contract's own IV (null where the expiry does
+  not list the strike). Each cell carries the nearest real contract (`osi`, `strike`, `right`, `bid`, `ask`, `oi`).
+  **Reliability** (`thresholds` in the answer): a contract feeds the surface only with an IV of the expiry's IV
+  layer (source IVs; engine-computed ones only for an expiry the source gives none, `expiries[].iv_computed`), bid
+  > 0, ask ≥ bid, (ask − bid) / mid ≤ 40% (`max_spread_of_mid`: wider, the mid's IV is mostly quote noise; the
+  trade screeners' 20–25% would grey most 10Δ wings and long-dated contracts of mid-caps) and open interest ≥ 1
+  (`min_oi`: a quote nobody holds). Unreliable contracts never feed a reliable cell; a cell the reliable contracts
+  do not bracket is interpolated from all contracts with an IV instead and comes back `reliable: false` with
+  `reason` (the nearest input's failing check, or "not bracketed by reliable contracts"); nothing is extrapolated
+  (`iv` null: "outside the quoted range"). `value` by `mode`: `iv`; `vs_atm` = IV − the column's ATM IV (vol points,
+  0 on the ATM row); `chg_1d` = IV − the same cell (same row value, same expiry) built from the symbol's previous
+  stored EOD chain (`prior_date`: the real archive before the chain's session that the OI change uses, §6), null
+  without one; a cell is reliable then only when both days' cells are. `earnings` = the next event and its reaction
+  session; `expiries[].earnings_expiry` flags the first column on/after the reaction session. The panel greys
+  (hatches) unreliable cells, adds a reliable cell's contract to the calculator on click (qty +1, no price: it
+  follows live data) and outlines cells whose contract is in the calculator; it reloads with the stored chain.
 - **Intraday bars**: `GET /api/symbol/{sym}/bars?interval=1m|5m|15m|1h&range=1d|5d|1m|3m&extended=0|1` →
   `IntradayBars` (types.ts); without `interval` the endpoint is the daily one, unchanged (`Bar[]`, ranges
   1m…10y|max). Offered combinations (else 422): 1d: 1m/5m/15m; 5d: 5m/15m/1h; 1m: 15m/1h; 3m: 1h. A range is 1 or

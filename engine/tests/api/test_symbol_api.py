@@ -85,6 +85,30 @@ def test_volatility_skew_moves(client, monkeypatch):
     assert row["earnings_in_window"] and row["iv_move"] == pytest.approx(im["spot"] * row["iv_move_pct"])
 
 
+def test_iv_surface(client):
+    s = get(client, f"{S}/iv-surface")
+    assert s["rows_by"] == "delta" and s["mode"] == "iv" and s["rows"][8] == 0.5 and s["prior_date"] is None
+    assert len(s["cells"]) == len(s["rows"]) and {len(r) for r in s["cells"]} == {len(s["expiries"])}
+    assert all(1 <= e["dte"] <= 366 for e in s["expiries"]) and s["thresholds"]["max_spread_of_mid"] == 0.4
+    reliable = [c for r in s["cells"] for c in r if c["reliable"]]
+    assert len(reliable) > 200 and all(c["osi"].startswith("AAPL") and c["bid"] > 0 for c in reliable)
+    put25, call25 = s["cells"][s["rows"].index(-0.25)][5], s["cells"][s["rows"].index(0.25)][5]
+    assert put25["right"] == "P" and call25["right"] == "C" and put25["iv"] > call25["iv"]   # equity skew
+    flagged = [e for e in s["expiries"] if e["earnings_expiry"]]
+    assert s["earnings"] == {"date": "2027-01-28", "reaction_date": "2027-01-29"}
+    assert len(flagged) == 1 and flagged[0]["expiry"] == min(e["expiry"] for e in s["expiries"] if e["expiry"] >= "2027-01-29")
+    vs = get(client, f"{S}/iv-surface?mode=vs_atm")
+    assert {c["value"] for c in vs["cells"][8] if c["reliable"]} == {0.0}      # the ATM row: zero
+    m = get(client, f"{S}/iv-surface?rows=moneyness&mode=chg_1d")             # the prior EOD archive holds the same chain
+    assert m["prior_date"] == "2026-11-18" and m["rows"][0] == -0.2
+    assert {c["value"] for r in m["cells"] for c in r if c["reliable"]} == {0.0}
+    k = get(client, f"{S}/iv-surface?rows=strike")
+    assert k["rows"] == sorted(k["rows"]) and all(abs(x / k["spot"] - 1) <= 0.2 for x in k["rows"])
+    assert all(c["right"] == ("C" if c["strike"] >= k["spot"] else "P") for r in k["cells"] for c in r if c["osi"])
+    get(client, f"{S}/iv-surface?rows=bogus", 422)
+    get(client, f"{S}/iv-surface?mode=bogus", 422)
+
+
 def test_earnings_moves_match_bars(client):
     e = get(client, f"{S}/earnings")
     assert len(e["events"]) == 3 and e["next"]["date"] == "2027-01-28"

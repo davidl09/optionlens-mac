@@ -312,6 +312,29 @@ export interface Skew {
   by_delta: { delta: number; iv: number | null }[];   // put deltas -0.05..-0.5 then call 0.5..0.05 mapped to x in [-0.95..0.95]? -> x = signed delta
   history: { date: ISODate; skew25_30: number | null; put_skew_30: number | null }[];
 }
+export type SurfaceRows = "delta" | "moneyness" | "strike";
+export type SurfaceMode = "iv" | "vs_atm" | "chg_1d";
+/** One IV-surface cell: its IV, the mode's value and the nearest real contract (null fields: no contract). */
+export interface SurfaceCell {
+  iv: number | null;
+  value: number | null;               // iv: IV; vs_atm: IV − the expiry's ATM IV; chg_1d: IV − the prior session's (fractions)
+  osi: string | null; strike: number | null; right: Right | null;
+  bid: number | null; ask: number | null; oi: number | null;
+  reliable: boolean;                  // from reliable contracts only (see thresholds); false = greyed
+  reason: string | null;              // why not reliable
+}
+/** IV per expiry × row from the stored chain (docs/INTEGRATION.md "IV surface"). */
+export interface IvSurface {
+  symbol: string; spot: number; asof: ISODateTime | null;
+  rows_by: SurfaceRows; mode: SurfaceMode;
+  rows: number[];                     // delta: signed OTM-side delta (puts < 0, ATM = 0.5); moneyness: K/S − 1; strike
+  expiries: { expiry: ISODate; dte: number; atm_iv: number | null; iv_computed: boolean; earnings_expiry: boolean }[];
+  cells: SurfaceCell[][];             // cells[row][expiry], rows ascending in strike
+  prior_date: ISODate | null;         // chg_1d: the stored EOD chain compared to (null: none, or another mode)
+  earnings: { date: ISODate; reaction_date: ISODate | null } | null;
+  thresholds: { max_spread_of_mid: number; min_oi: number; min_dte: number; max_dte: number };
+  source?: DataSource; delayed: boolean;
+}
 export interface ImpliedMoves {
   symbol: string; spot: number; asof: ISODateTime | null;
   rows: { expiry: ISODate; dte: number; straddle: number | null; straddle_pct: number | null; iv: number | null; iv_move: number | null; iv_move_pct: number | null; low: number | null; high: number | null; earnings_in_window: boolean }[];
