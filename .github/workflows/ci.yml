@@ -28,7 +28,7 @@ jobs:
       - run: npm run build:renderer
       - run: npm run build:electron
       # Mocked Playwright suite against `vite preview` (uses the runner's Google Chrome; see playwright.config.ts).
-      - run: npx playwright test e2e/smoke.spec.ts e2e/desktop.spec.ts e2e/realtime.spec.ts e2e/intraday.spec.ts e2e/calculator.spec.ts e2e/portfolio.spec.ts --trace off
+      - run: npx playwright test e2e/smoke.spec.ts e2e/desktop.spec.ts e2e/realtime.spec.ts e2e/intraday.spec.ts e2e/calculator.spec.ts e2e/portfolio.spec.ts e2e/ivsurface.spec.ts --trace off
 
   engine:
     name: Engine — pytest (${{ matrix.os }})
