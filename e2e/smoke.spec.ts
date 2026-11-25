@@ -138,8 +138,17 @@ test("chain → calculator flow", async ({ page }) => {
   await page.locator("button.quote-btn.ask").nth(12).click();
   await page.locator("button.quote-btn.bid").nth(16).click();
   await expect(page.getByText("2 legs in calculator")).toBeVisible();
+  // the calculator's legs stay marked in the chain: the bought ask green, the sold bid red
+  await expect(page.locator("button.quote-btn.ask").nth(12)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("button.quote-btn.bid").nth(16)).toHaveClass(/selected/);
+  await expect(page.locator("button.quote-btn.selected")).toHaveCount(2);
   await page.getByRole("link", { name: "Open calculator →" }).click();
   await expect(page.locator(".legs-table tbody tr")).toHaveCount(2);
+  await page.locator(".legs-table tbody tr").first().getByRole("button", { name: "Remove leg" }).click();
+  await page.getByRole("link", { name: "Chain", exact: true }).click();      // a removed leg loses its mark
+  await expect(page.locator("button.quote-btn.selected")).toHaveCount(1);
+  await expect(page.locator("button.quote-btn.bid").nth(16)).toHaveClass(/selected/);
+  await page.getByRole("link", { name: "Calculator", exact: true }).click();
   await expect(page.getByText("Position metrics")).toBeVisible();
   await expect(page.getByText("Prob. of profit")).toBeVisible();
   await page.waitForLoadState("networkidle");

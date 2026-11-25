@@ -400,6 +400,8 @@ td.hot { background: var(--hot); font-weight: 600; }
 }
 .quote-btn.bid:hover { border-color: var(--down); background: var(--down-soft); }
 .quote-btn.ask:hover { border-color: var(--up); background: var(--up-soft); }
+.quote-btn.bid.selected { border-color: var(--down); background: var(--down-soft); font-weight: 600; }
+.quote-btn.ask.selected { border-color: var(--up); background: var(--up-soft); font-weight: 600; }
 .spot-row td { padding: 0 !important; border-bottom: 0; height: 18px; }
 .spot-row td.spot-line { background: linear-gradient(var(--accent), var(--accent)) center / 100% 2px no-repeat; }
 .spot-row td.spot-label { background: var(--panel-3) linear-gradient(var(--accent), var(--accent)) center / 100% 2px no-repeat !important; }

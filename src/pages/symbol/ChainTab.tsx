@@ -11,7 +11,7 @@ import { fmt, fmtDateTime, isMissing, signClass } from "../../lib/format";
 import { nearest } from "../../lib/indicators";
 import { Flash, isFlowing, useLive, useLiveOption, useLiveQuote, useLiveStatus } from "../../live";
 import { withLiveOption } from "../../live/merge";
-import { describeLeg, useLegs } from "../../state/legs";
+import { contractKey, describeLeg, heldQty, useLegs } from "../../state/legs";
 import { ExpiryPills, useQueryValue, useSym } from "./shared";
 import { moneyStyleOf } from "../../lib/markets";
 import { MoneyText } from "../../components/Money";
@@ -39,7 +39,9 @@ const SIDE_COLS: Col[] = [
 
 type OnLeg = (row: OptionRow, qty: number, price: number) => void;
 
-function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side: Side; range: RangeOpt; greeks: boolean; onLeg: OnLeg }) {
+function ChainTable({ chain, side, range, greeks, onLeg, held }: {
+  chain: Chain; side: Side; range: RangeOpt; greeks: boolean; onLeg: OnLeg; held: Map<string, number>;
+}) {
   const stored = chain.underlying.price;
   const liveSpot = useLiveQuote(chain.symbol)?.price;
   const spot = liveSpot ?? stored;
@@ -87,7 +89,9 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
             return (
               <FragmentRow key={k} spotLine={i === spotAfter} spot={spot} left={showC ? cols.length : 0} right={showP ? cols.length : 0}>
                 <ChainRow chain={chain} strike={k} call={showC ? r.c : undefined} put={showP ? r.p : undefined} showC={showC} showP={showP}
-                  callCols={callCols} cols={cols} spot={liveSpot ?? null} flowing={flowing} onLeg={onLeg} />
+                  callCols={callCols} cols={cols} spot={liveSpot ?? null} flowing={flowing} onLeg={onLeg}
+                  callHeld={r.c ? held.get(contractKey(r.c.expiry, r.c.strike, "C")) ?? 0 : 0}
+                  putHeld={r.p ? held.get(contractKey(r.p.expiry, r.p.strike, "P")) ?? 0 : 0} />
               </FragmentRow>
             );
           })}
@@ -99,31 +103,35 @@ function ChainTable({ chain, side, range, greeks, onLeg }: { chain: Chain; side:
 }
 
 /** One strike: its call and put with their live fields merged in (each row re-renders only for its own contracts). */
-function ChainRow({ chain, strike, call, put, showC, showP, callCols, cols, spot, flowing, onLeg }: {
+function ChainRow({ chain, strike, call, put, showC, showP, callCols, cols, spot, flowing, onLeg, callHeld, putHeld }: {
   chain: Chain; strike: number; call?: OptionRow; put?: OptionRow; showC: boolean; showP: boolean; callCols: Col[]; cols: Col[];
-  spot: number | null; flowing: boolean; onLeg: OnLeg;
+  spot: number | null; flowing: boolean; onLeg: OnLeg; callHeld: number; putHeld: number;
 }) {
   const pc = useLiveOption(call?.osi), pp = useLiveOption(put?.osi);
   const c = call && withLiveOption(call, pc, spot), p = put && withLiveOption(put, pp, spot);
   return (
     <tr>
-      {showC && callCols.map((col) => chainCell(chain, c, col, flowing && pc !== null, onLeg))}
+      {showC && callCols.map((col) => chainCell(chain, c, col, flowing && pc !== null, onLeg, callHeld))}
       <td className="strike-col">{fmt(strike, "num")}<RowSource chain={chain} rows={[call, put]} /></td>
-      {showP && cols.map((col) => chainCell(chain, p, col, flowing && pp !== null, onLeg))}
+      {showP && cols.map((col) => chainCell(chain, p, col, flowing && pp !== null, onLeg, putHeld))}
     </tr>
   );
 }
 
-function chainCell(chain: Chain, row: OptionRow | undefined, c: Col, live: boolean, onLeg: OnLeg): ReactNode {
+/** `held`: the contract's net quantity in the calculator; its side's quote (bid when short, ask when long) stays marked. */
+function chainCell(chain: Chain, row: OptionRow | undefined, c: Col, live: boolean, onLeg: OnLeg, held: number): ReactNode {
     if (!row) return <td key={c.key} className="num muted">·</td>;
     const v = row[c.key];
     const fl = (node: ReactNode) => <Flash value={v} active={live}>{node}</Flash>;
     const base = `num ${row.itm ? "itm" : ""}`;
     if ((c.key === "bid" || c.key === "ask") && !isMissing(v) && (v as number) > 0) {
       const qty = c.key === "bid" ? -1 : 1;
+      const selected = qty * held > 0;
+      const inCalc = selected ? ` (in calculator: ${held > 0 ? "+" : ""}${held})` : "";
       return (
         <td key={c.key} className={`${base} quote-cell`}>
-          <button className={`quote-btn ${c.key}`} title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money", moneyStyleOf(chain.symbol))} → calculator`}
+          <button className={`quote-btn ${c.key}${selected ? " selected" : ""}`} aria-pressed={selected}
+            title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money", moneyStyleOf(chain.symbol))} → calculator${inCalc}`}
             onClick={() => onLeg(row, qty, v as number)}>{fl(fmt(v, "num2"))}</button>
         </td>
       );
@@ -181,6 +189,7 @@ export default function ChainTab() {
   const [range, setRange] = useState<RangeOpt>("10");
   const [greeks, setGreeks] = useState(false);
   const { legs, addLeg } = useLegs();
+  const held = useMemo(() => heldQty(legs), [legs]);
   const [lastAdded, setLastAdded] = useState<Leg | null>(null);
   const st = useApi(() => api.chain(sym, expiry), [sym, expiry]);
   // For agents (current view): the expiry shown and what part of the chain is on screen.
@@ -228,7 +237,7 @@ export default function ChainTab() {
             </div>
           )}
           <Card className="flush">
-            <ChainTable chain={chain} side={side} range={range} greeks={greeks} onLeg={onLeg} />
+            <ChainTable chain={chain} side={side} range={range} greeks={greeks} onLeg={onLeg} held={held} />
           </Card>
         </div>
       );
