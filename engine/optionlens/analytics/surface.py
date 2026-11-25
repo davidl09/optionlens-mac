@@ -130,10 +130,10 @@ def _resolve(ca: ChainArrays, coord: np.ndarray, target: float, side: np.ndarray
     return _cell(ca, j, iv_any, False, reasons[j] if j is not None and reasons[j] is not None else NOT_BRACKETED)
 
 
-def _expiry_cells(ca: ChainArrays, i: int, kind: str, rows: Sequence[float], reasons: np.ndarray,
+def _expiry_cells(ca: ChainArrays, i: int, kind: str, rows: Sequence[float], reasons: np.ndarray, ok: np.ndarray,
                   atm_ok: float | None, atm_any: float | None, used: ChainArrays) -> list[dict]:
     sel = ca.exp_idx == i
-    ok, has_iv = _is_ok(reasons), np.isfinite(ca.iv)
+    has_iv = np.isfinite(ca.iv)
     otm = sel & np.where(ca.is_call, ca.strike >= ca.spot, ca.strike < ca.spot)
     out = []
     if kind == "delta":
@@ -178,7 +178,8 @@ def build(ca: ChainArrays, kind: str, *, strikes: Sequence[float] | None = None,
     atm_any = vol.atm_iv_layered(ca)[0]
     earn = ca.earnings_before_expiry()
     first_earn = next((i for i in cols if earn[i]), None)
-    by_col = [_expiry_cells(ca, i, kind, rows, reasons, _num(atm[i]), _num(atm_any[i]), used) for i in cols]
+    ok = _is_ok(reasons)
+    by_col = [_expiry_cells(ca, i, kind, rows, reasons, ok, _num(atm[i]), _num(atm_any[i]), used) for i in cols]
     return {
         "rows": rows,
         "expiries": [{"expiry": ca.expiries[i], "dte": int(ca.exp_dte[i]), "atm_iv": _num(atm[i]),
