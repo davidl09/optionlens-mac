@@ -1,5 +1,5 @@
 // Global header: brand, nav menus (report entries come from GET /api/reports), search, bell, theme.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import type { ReportDef } from "../api/types";
@@ -57,10 +57,18 @@ export function buildMenus(defs: ReportDef[]): Menu[] {
   ].map((m) => ({ ...m, sections: m.sections.filter((s) => s.items.length) }));
 }
 
-function MenuPanel({ menu, onPick }: { menu: Menu; onPick: () => void }) {
+const WIDE_ITEMS = 12;
+const isWide = (m: Menu) => m.sections.reduce((n, s) => n + s.items.length, 0) > WIDE_ITEMS;
+
+/** Where a menu opens: under its button, kept inside the window (the nav scrolls sideways, so the panel is fixed). */
+export function menuPosition(btn: { left: number; bottom: number }, panelWidth: number, windowWidth: number): { left: number; top: number } {
+  return { left: Math.max(8, Math.min(btn.left, windowWidth - panelWidth - 8)), top: btn.bottom + 6 };
+}
+
+function MenuPanel({ menu, onPick, at }: { menu: Menu; onPick: () => void; at: { left: number; top: number } }) {
   const count = menu.sections.reduce((n, s) => n + s.items.length, 0);
   return (
-    <div className={`menu-panel ${count > 12 ? "wide" : ""}`}>
+    <div className={`menu-panel ${isWide(menu) ? "wide" : ""}`} style={{ "--menu-left": `${at.left}px`, "--menu-top": `${at.top}px` } as CSSProperties}>
       {menu.sections.map((s, i) => (
         <div className="menu-section" key={i}>
           {s.title && <div className="menu-section-title">{s.title}</div>}
@@ -77,12 +85,26 @@ export function Header() {
   const menus = useMemo(() => buildMenus(defs.data ?? []), [defs.data]);
   const { theme, toggle } = useTheme();
   const [open, setOpen] = useState<string | null>(null);
+  const [at, setAt] = useState({ left: 0, top: 0 });
   const [drawer, setDrawer] = useState(false);
   const navRef = useRef<HTMLElement>(null);
   const loc = useLocation();
   const closeAll = useCallback(() => { setOpen(null); setDrawer(false); }, []);
   useClickOutside(navRef, () => setOpen(null), open !== null);
   useEffect(() => closeAll(), [loc.pathname, loc.search, closeAll]);
+  const toggleMenu = (m: Menu, btn: HTMLElement) => {
+    if (open === m.label) { setOpen(null); return; }
+    setAt(menuPosition(btn.getBoundingClientRect(), isWide(m) ? 520 : 240, window.innerWidth));
+    setOpen(m.label);
+  };
+  useEffect(() => {   // an open panel is fixed to where its button was: scrolling the nav or resizing closes it
+    if (open === null || drawer) return;
+    const close = () => setOpen(null);
+    const nav = navRef.current;
+    nav?.addEventListener("scroll", close);
+    window.addEventListener("resize", close);
+    return () => { nav?.removeEventListener("scroll", close); window.removeEventListener("resize", close); };
+  }, [open, drawer]);
 
   return (
     <header className="app-header">
@@ -97,10 +119,10 @@ export function Header() {
         <nav ref={navRef} className={`main-nav ${drawer ? "open" : ""}`} aria-label="Main">
           {menus.map((m) => (
             <div key={m.label} className={`nav-item ${open === m.label ? "open" : ""}`}>
-              <button className="nav-btn" aria-expanded={open === m.label} onClick={() => setOpen(open === m.label ? null : m.label)}>
+              <button className="nav-btn" aria-expanded={open === m.label} onClick={(e) => toggleMenu(m, e.currentTarget)}>
                 {m.label}<span className="caret" aria-hidden="true">▾</span>
               </button>
-              {open === m.label && <MenuPanel menu={m} onPick={closeAll} />}
+              {open === m.label && <MenuPanel menu={m} onPick={closeAll} at={at} />}
             </div>
           ))}
         </nav>

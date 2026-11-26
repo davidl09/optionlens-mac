@@ -586,3 +586,23 @@ test("the current view is reported for agents: route, report, table state, visib
   expect(paths.some((p) => p.startsWith("/api/notifications"))).toBe(false);  // the header bell is not the page
   expect(seen.unmocked).toEqual([]);
 });
+
+test("header: the status area never covers the menus; the nav scrolls and its menus still open", async ({ page }) => {
+  await page.setViewportSize({ width: 1150, height: 800 });
+  await fakeDesktop(page);
+  await mockEngine(page);
+  await page.goto("/");
+  await expect(page.getByText("VIX term structure")).toBeVisible();
+  const nav = page.locator(".main-nav"), tools = page.locator(".header-tools");
+  const [n, t] = [await nav.boundingBox(), await tools.boundingBox()];
+  expect(n!.x + n!.width).toBeLessThanOrEqual(t!.x + 1);                      // side by side, never overlapping
+  await expect(page.locator(".sources-pill .source-mark")).not.toHaveCount(0);   // collapsed to the sources' marks
+  await expect(page.locator(".sources-pill .source-text").first()).toBeHidden();
+  const last = page.locator(".main-nav .nav-btn").last();
+  await last.scrollIntoViewIfNeeded();                                         // a menu scrolled into view opens under its button
+  await last.click();
+  const [b, m] = [await last.boundingBox(), await page.locator(".menu-panel").boundingBox()];
+  expect(m!.y).toBeGreaterThanOrEqual(b!.y + b!.height);
+  expect(m!.x + m!.width).toBeLessThanOrEqual(1150);
+  await page.screenshot({ path: "e2e/screenshots/header-narrow.png", clip: { x: 0, y: 0, width: 1150, height: 330 } });
+});

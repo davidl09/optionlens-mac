@@ -107,6 +107,20 @@ export function useQuestradeStatus(): QuestradeStatus | null {
  * The header's data-source pill: every chain source that is set up, side by side with its state (IBKR via the
  * bridge, Questrade via the engine); "No data source" when neither is. Links to Settings → Data sources.
  */
+/** A data source's mark (a monogram in its colour, not the broker's logo artwork) with the state dot on its corner. */
+function SourceMark({ source }: { source: string }) {
+  const ibkr = source === "ibkr";
+  return (
+    <span className={`source-mark ${source}`} aria-hidden="true">
+      <svg viewBox="0 0 20 20" width="18" height="18">
+        <rect width="20" height="20" rx="5" fill={ibkr ? "#d81222" : "#62a744"} />
+        <text x="10" y="14.2" textAnchor="middle" fontSize={ibkr ? 10 : 12} fontWeight="700" fontFamily="system-ui, sans-serif" fill="#fff">{ibkr ? "IB" : "Q"}</text>
+      </svg>
+      <span className="dot" />
+    </span>
+  );
+}
+
 export function SourcesIndicator() {
   const b = useBridgeStatus();
   const q = useQuestradeStatus();
@@ -122,7 +136,7 @@ export function SourcesIndicator() {
     <Link to="/settings" className="bridge-pill sources-pill" title={title} aria-label={`Data sources: ${parts.length ? parts.map((p) => p.label).join("; ") : "none connected"}`}>
       {parts.length ? parts.map((p) => (
         <span key={p.key} className={`source-seg ${p.tone}`}>
-          <span className="dot" aria-hidden="true" />{p.label}{p.busy ? <span className="bridge-busy" aria-hidden="true" title={p.busy}>…</span> : null}
+          <SourceMark source={p.key} /><span className="source-text">{p.label}</span>{p.busy ? <span className="bridge-busy" aria-hidden="true" title={p.busy}>…</span> : null}
         </span>
       )) : <span className="source-seg neutral"><span className="dot" aria-hidden="true" />No data source</span>}
     </Link>

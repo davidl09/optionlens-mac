@@ -142,15 +142,15 @@ export function liveLabel(s: LiveStatus): string {
   const base = LABEL[s.state];
   const withSource = s.source && (s.state === "live" || s.state === "delayed" || s.state === "stale");
   if (!withSource) return base;
-  const fallback = s.source === "questrade" && s.fallback ? ` (polling fallback: ${s.fallback})` : "";
-  return `${base} · ${SOURCE[s.source!] ?? s.source}${fallback}`;
+  return `${base} · ${SOURCE[s.source!] ?? s.source}`;
 }
 
 export function liveTitle(s: LiveStatus): string {
   const cadence = s.mode === "poll" && s.interval_s ? `Questrade snapshots every ${s.interval_s.toFixed(1)} s` : s.mode === "stream" ? "Questrade Level 1 stream"
     : s.mode === "snapshots" ? `IBKR snapshots every ${s.interval_s ?? 5} s` : null;
   const scope = s.symbols || s.contracts ? `${s.symbols ?? 0} symbols, ${s.contracts ?? 0} contracts on screen` : null;
-  return ["Live quotes", s.detail, cadence, scope].filter(Boolean).join(" · ");
+  const fallback = s.source === "questrade" && s.fallback ? `polling fallback: ${s.fallback}` : null;
+  return ["Live quotes", fallback, s.detail, cadence, scope].filter(Boolean).join(" · ");
 }
 
 /** Header indicator: LIVE · Questrade / DELAYED / MARKET CLOSED / NOT CONNECTED … (nothing while idle). */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LiveStatusReport, QuestradeLiveDiagnostics } from "../api/types";
-import { liveLabel } from "../live";
+import { liveLabel, liveTitle } from "../live";
 import { liveModeStatusText } from "./liveMode";
 
 const Q: QuestradeLiveDiagnostics = {
@@ -30,8 +30,10 @@ describe("live mode status line", () => {
     expect(liveModeStatusText("stream", null)).toBe("Live status unavailable.");
   });
 
-  it("the header names a polling fallback", () => {
-    expect(liveLabel({ state: "live", source: "questrade", mode: "poll", fallback: "3 drops in 5 min" })).toBe("LIVE · Questrade (polling fallback: 3 drops in 5 min)");
+  it("the header pill stays short; a polling fallback is named in its tooltip", () => {
+    const s = { state: "live", source: "questrade", mode: "poll", fallback: "3 drops in 5 min" } as const;
+    expect(liveLabel(s)).toBe("LIVE · Questrade");
+    expect(liveTitle(s)).toContain("polling fallback: 3 drops in 5 min");
     expect(liveLabel({ state: "live", source: "questrade", mode: "stream", fallback: null })).toBe("LIVE · Questrade");
     expect(liveLabel({ state: "market_closed", source: null, fallback: "handshake failed" })).toBe("MARKET CLOSED");
   });
