@@ -121,11 +121,26 @@ function SourceMark({ source }: { source: string }) {
   );
 }
 
+const BUSY_LINGER_MS = 5000;
+
+/** The last truthy `value`, kept for `ms` after it went away: the bridge's short tasks would otherwise blink the
+ *  pill's busy mark on and off every second. */
+function useLingering<T>(value: T | null | undefined, ms: number): T | null {
+  const [shown, setShown] = useState<T | null>(value ?? null);
+  useEffect(() => {
+    if (value) { setShown(value); return; }
+    const t = setTimeout(() => setShown(null), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return value || shown;
+}
+
 export function SourcesIndicator() {
   const b = useBridgeStatus();
   const q = useQuestradeStatus();
+  const busy = useLingering(b?.current?.label, BUSY_LINGER_MS);
   const parts: { key: string; tone: string; label: string; title: string; busy?: string }[] = [];
-  if (b && b.enabled) parts.push({ key: "ibkr", tone: bridgeTone(b), label: bridgePillLabel(b), title: `IBKR bridge: ${bridgeSummary(b)}`, busy: b.current?.label });
+  if (b && b.enabled) parts.push({ key: "ibkr", tone: bridgeTone(b), label: bridgePillLabel(b), title: `IBKR bridge: ${bridgeSummary(b)}`, busy: busy ?? undefined });
   if (q && q.state !== "disconnected") {
     const v = questradeView(q);
     parts.push({ key: "questrade", tone: v.tone, label: `Questrade ${v.state}`, title: `Questrade: ${[v.state, v.problem, v.dataQuality].filter(Boolean).join(" · ")}` });
@@ -136,7 +151,7 @@ export function SourcesIndicator() {
     <Link to="/settings" className="bridge-pill sources-pill" title={title} aria-label={`Data sources: ${parts.length ? parts.map((p) => p.label).join("; ") : "none connected"}`}>
       {parts.length ? parts.map((p) => (
         <span key={p.key} className={`source-seg ${p.tone}`}>
-          <SourceMark source={p.key} /><span className="source-text">{p.label}</span>{p.busy ? <span className="bridge-busy" aria-hidden="true" title={p.busy}>…</span> : null}
+          <SourceMark source={p.key} /><span className="source-text">{p.label}</span>{p.key === "ibkr" && <span className={`bridge-busy${p.busy ? "" : " idle"}`} aria-hidden="true" title={p.busy}>…</span>}
         </span>
       )) : <span className="source-seg neutral"><span className="dot" aria-hidden="true" />No data source</span>}
     </Link>
