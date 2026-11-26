@@ -8,6 +8,7 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from optionlens.analytics.calendar import NY
@@ -236,3 +237,104 @@ async def test_reference_data_is_cached_with_the_chains_and_extended_quotes_use_
     got = await src.fetch_extended(["XYZ", "NOPE", "SPY"])                       # NOPE / SPY: no cached id
     assert [(x.symbol, x.price, x.regular_price, x.halted) for x in got] == [("XYZ", 101.5, 100.0, True)]
     assert len(fake.requests) - n == 1 and fake.path_count("/v1/symbols/search") == 1       # no searches
+
+
+# ----------------------------------------------------------------------------- listings: resolution and the probe
+def _hit(symbol, sid, kind="Stock", currency="USD", exchange="NYSE", description=None):
+    return {"symbol": symbol, "symbolId": sid, "securityType": kind, "currency": currency, "listingExchange": exchange,
+            "description": description or f"{symbol} listing"}
+
+
+def test_listings_put_the_type_that_fits_the_symbol_first():
+    search = {"symbols": [_hit("XSP", 501), _hit("XSP.IN", 502, "Index", exchange="CBOE"),
+                          _hit("XSP.TO", 503, currency="CAD", exchange="TSX")]}
+    assert [x.symbol_id for x in mapping.listings(search, "XSP")] == [502, 501]       # an index: the Index first
+    assert mapping.pick_symbol_id(search, "XSP") == 502
+    assert [x.symbol_id for x in mapping.listings(search, "XSP.TO")] == [503]         # the Toronto ETF stays apart
+    stock = {"symbols": [_hit("ABC.IN", 1, "Index"), _hit("ABC", 2)]}
+    assert [x.symbol_id for x in mapping.listings(stock, "ABC")] == [2, 1]            # a stock: the non-Index first
+    x = mapping.listings(search, "XSP")[0]
+    assert x.describe() == "XSP.IN (symbolId 502, Index, XSP.IN listing, USD CBOE)"
+
+
+def _write_ids(fake, src, **entries):
+    """A source started on an ids cache holding `entries`."""
+    src.ids.path.write_text(json.dumps(entries))
+    return QuestradeSource(src.ids.path.parent, expiries=2, moneyness=0.25, http=fake.http)
+
+
+def _options_of(root: str) -> httpx.Response:
+    from .questrade_fake import _chain
+    return httpx.Response(200, json=json.loads(json.dumps(_chain()).replace('"XYZ"', f'"{root}"')))
+
+
+async def test_a_listing_without_options_gives_way_to_another_listing_with_options(qt, caplog):
+    """Any symbol (here the stock XYZ): the cached listing (2000) has hasOptions false, another listing of XYZ has
+    options: it is adopted and cached, and one log line names every listing tried."""
+    fake, src = qt
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    src = _write_ids(fake, src, XYZ={"id": 2000, "checked_at": now, "v": source_mod.ID_VERSION})
+    await src.tokens.connect("pasted-token")
+    fake.queue["/v1/symbols/2000"] = [httpx.Response(200, json={"symbols": [
+        {"symbol": "XYZ", "symbolId": 2000, "hasOptions": False, "securityType": "Stock", "description": "XYZ OLD"}]})]
+    fake.queue["/v1/symbols/search"] = [httpx.Response(200, json={"symbols": [_hit("XYZ", 2000), _hit("XYZ", 1000)]})]
+    with caplog.at_level("INFO", logger=source_mod.__name__):
+        got = await src.fetch_chain("XYZ")
+    assert len(got.contracts) == 20 and json.loads(src.ids.path.read_text())["XYZ"]["id"] == 1000
+    line = next(r.getMessage() for r in caplog.records if "adopted" in r.getMessage())
+    assert line.startswith("questrade XYZ: adopted symbolId 1000 (it lists options); tried symbolId 2000 (Stock, XYZ OLD")
+    assert "hasOptions=False, 0 standard contracts" in line and "XYZ (symbolId 1000, Stock" in line
+    n = fake.path_count("/v1/symbols/search")
+    await src.fetch_chain("XYZ")                                        # adopted: no more probing
+    assert fake.path_count("/v1/symbols/search") == n
+
+
+async def test_an_index_resolves_to_its_index_listing_and_tries_the_others_once_a_day(qt, caplog):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    search = {"symbols": [_hit("XSP", 501, description="SOME XSP STOCK"),
+                          _hit("XSP.IN", 502, "Index", exchange="CBOE", description="MINI SPX INDEX")]}
+    fake.queue["/v1/symbols/search"] = [httpx.Response(200, json=search), httpx.Response(200, json=search)]
+    fake.queue["/v1/symbols/502"] = [httpx.Response(200, json={"symbols": [
+        {"symbol": "XSP.IN", "symbolId": 502, "hasOptions": False, "securityType": "Index"}]})]
+    fake.queue["/v1/symbols/501"] = [httpx.Response(200, json={"symbols": [
+        {"symbol": "XSP", "symbolId": 501, "hasOptions": False, "securityType": "Stock"}]})]
+    fake.queue["/v1/markets/quotes"] = [httpx.Response(200, json={"quotes": [{**fake.equity_quote(), "symbolId": 502}]})]
+    with caplog.at_level("INFO", logger=source_mod.__name__):
+        got = await src.fetch_chain("XSP")
+    assert got.contracts == () and got.quote.price == 100.2            # no listing lists options
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("questrade XSP: resolved to XSP.IN (symbolId 502, Index, MINI SPX INDEX, USD CBOE); "
+                            "other listings: XSP (symbolId 501") for m in msgs)
+    none = next(m for m in msgs if "lists no options" in m)
+    assert "symbolId 502 (Index" in none and "XSP (symbolId 501, Stock, SOME XSP STOCK, USD NYSE) hasOptions=False" in none
+    n = len(fake.requests)
+    fake.queue["/v1/markets/quotes"] = [httpx.Response(200, json={"quotes": [{**fake.equity_quote(), "symbolId": 502}]})]
+    await src.fetch_chain("XSP")                                        # tried today already: one quote call only
+    assert len(fake.requests) - n == 1
+
+
+async def test_an_index_with_options_on_its_index_listing(qt):
+    fake, src = qt
+    await src.tokens.connect("pasted-token")
+    fake.queue["/v1/symbols/search"] = [httpx.Response(200, json={"symbols": [
+        _hit("XSP", 501), _hit("XSP.IN", 502, "Index", exchange="CBOE")]})]
+    fake.queue["/v1/symbols/502"] = [httpx.Response(200, json={"symbols": [
+        {"symbol": "XSP.IN", "symbolId": 502, "hasOptions": True, "prevDayClosePrice": 98.0}]})]
+    fake.queue["/v1/symbols/502/options"] = [_options_of("XSP")]
+    fake.queue["/v1/markets/quotes"] = [httpx.Response(200, json={"quotes": [{**fake.equity_quote(), "symbolId": 502}]})]
+    got = await src.fetch_chain("XSP")
+    assert got.contracts and {c.osi[:3] for c in got.contracts} == {"XSP"}
+    assert fake.path_count("/v1/symbols/501") == 0                     # the index listing had options: no probe
+
+
+async def test_cached_ids_of_an_older_resolution_are_resolved_again(qt):
+    fake, src = qt
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    src = _write_ids(fake, src, XYZ={"id": 2000, "checked_at": now}, SPY={"id": 1001, "checked_at": now, "v": source_mod.ID_VERSION})
+    assert src.ids.get("XYZ", datetime.now(timezone.utc)) is False      # dropped: searched again
+    assert src.ids.get("SPY", datetime.now(timezone.utc)) == 1001
+    await src.tokens.connect("pasted-token")
+    await src.fetch_chain("XYZ")
+    assert json.loads(src.ids.path.read_text())["XYZ"] == {**json.loads(src.ids.path.read_text())["XYZ"], "id": 1000,
+                                                            "v": source_mod.ID_VERSION}

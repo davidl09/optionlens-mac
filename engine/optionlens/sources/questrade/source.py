@@ -2,11 +2,16 @@
 
 One chain = (cached) symbol id + (daily) symbol info + 3 market-data calls:
   GET v1/symbols/search?prefix=SYM  once per symbol, cached in DATA_DIR/questrade_symbols.json (not-found answers
-                                    are asked again after NEGATIVE_TTL)
+                                    are asked again after NEGATIVE_TTL; entries of an older ID_VERSION once more):
+                                    the best of its listings (mapping.listings: the type that fits the symbol first)
   GET v1/symbols/:id                once per New York day: hasOptions, prevDayClosePrice and the reference data
                                     (fundamentals, current dividend: cached_reference, stored by services.reference)
   GET v1/markets/quotes?ids=:id     the underlying quote (strike band centre)
-  GET v1/symbols/:id/options        the chain structure (expiries, strikes, option symbol ids)
+  GET v1/symbols/:id/options        the chain structure (expiries, strikes, option symbol ids), of the same id as the
+                                    quote (an index's options too: SPX.IN's chain is asked for by SPX.IN's id)
+When the cached listing lists no options (hasOptions false, or no standard contracts), the symbol's other listings in
+symbols/search are tried once per New York day (symbols/:id, and symbols/:id/options where hasOptions): the first with
+options is adopted and cached. One log line per symbol says what was tried and chosen.
   POST v1/markets/quotes/options    quotes + greeks of the first `expiries` expiries within ±`moneyness` (one
                                     filter per expiry, all in one request)
 Extended-hours quotes of many symbols (fetch_extended):
@@ -43,13 +48,14 @@ from .client import QuestradeClient
 from .errors import QuestradeError
 from .mapping import (CANDLE_INTERVAL, DAILY_INTERVAL, Listed, SymbolInfo, candle_time, candles, current_dividend,
                       daily_bars, extended_quote, fundamentals, listed_contracts, option_filters, option_quotes,
-                      parse_quote, pick_expiries, pick_symbol_id, snapshot, symbol_info)
+                      listings, parse_quote, pick_expiries, snapshot, symbol_info)
 from .ratelimit import RateGate
 
 log = logging.getLogger(__name__)
 
 NAME = "questrade"
 NEGATIVE_TTL = timedelta(days=7)
+ID_VERSION = 2   # how listings are chosen (mapping.listings); cached ids of an older version are resolved again
 VERIFY_SYMBOL = "SPY"   # a liquid symbol every market-data permission can search
 MAX_CANDLES = 2000   # documented per-response limit of markets/candles
 MAX_IDS = 100        # ids per markets/quotes call (the docs give no maximum; 100 keeps URLs small)
@@ -68,12 +74,15 @@ def _log_fetch(symbol: str, interval: str, end: datetime, got: list[IntradayBar]
 
 
 class SymbolIds:
-    """OptionLens symbol -> Questrade symbolId (None: not listed, checked at), persisted as JSON."""
+    """OptionLens symbol -> Questrade symbolId (None: not listed, checked at), persisted as JSON. Entries resolved by
+    an older ID_VERSION (before listings preferred the type that fits the symbol) are dropped on load, so every symbol
+    is resolved once more."""
 
     def __init__(self, path: Path):
         self.path = path
         raw = read_json(path)
-        self._ids: dict[str, dict] = raw if isinstance(raw, dict) else {}
+        self._ids: dict[str, dict] = {s: e for s, e in (raw if isinstance(raw, dict) else {}).items()
+                                      if isinstance(e, dict) and e.get("v") == ID_VERSION}
 
     def get(self, symbol: str, now: datetime) -> int | None | bool:
         """The id, None (not listed, checked recently) or False (unknown / due for another look)."""
@@ -86,7 +95,7 @@ class SymbolIds:
         return None if now - checked < NEGATIVE_TTL else False
 
     def put(self, symbol: str, sid: int | None, now: datetime) -> None:
-        self._ids[symbol] = {"id": sid, "checked_at": now.isoformat(timespec="seconds")}
+        self._ids[symbol] = {"id": sid, "checked_at": now.isoformat(timespec="seconds"), "v": ID_VERSION}
         try:
             write_json_atomic(self.path, self._ids)
         except OSError as e:
@@ -105,6 +114,7 @@ class QuestradeSource:
         self.ids = SymbolIds(data_dir / "questrade_symbols.json")
         self._info: dict[str, tuple[date, SymbolInfo]] = {}
         self._option_ids: dict[str, tuple[date, dict[str, tuple[int, Listed]]]] = {}
+        self._probed: dict[str, date] = {}   # symbol -> the New York day its other listings were last tried
         self.last_delayed: bool | None = None
         self.verification: dict | None = None   # result of the check after a token was saved (verify)
 
@@ -147,8 +157,11 @@ class QuestradeSource:
         now = datetime.now(timezone.utc)
         sid = self.ids.get(symbol, now)
         if sid is False:
-            sid = pick_symbol_id(await self.api.get("symbols/search", {"prefix": symbol}), symbol)
+            found = listings(await self.api.get("symbols/search", {"prefix": symbol}), symbol)
+            sid = found[0].symbol_id if found else None
             self.ids.put(symbol, sid, now)
+            log.info("questrade %s: resolved to %s%s", symbol, found[0].describe() if found else "nothing (not listed)",
+                     f"; other listings: {', '.join(x.describe() for x in found[1:])}" if len(found) > 1 else "")
         if sid is None:
             raise NotListed(symbol)
         return int(sid)
@@ -201,19 +214,59 @@ class QuestradeSource:
         self._option_ids[symbol] = (today, ids)
         return ids
 
-    async def fetch_chain(self, symbol: str, final: bool = False) -> ChainSnapshot:
-        """The chain of `symbol` (no contracts: Questrade lists no options for it). Raises NotListed, FetchError."""
-        sid = await self.symbol_id(symbol)
-        today = now_ny().date()
+    async def _listed(self, symbol: str, sid: int, info: SymbolInfo) -> tuple[dict[date, str], dict[int, Listed]]:
+        """The standard contracts listing `sid` has ({}, {} without hasOptions: not asked)."""
+        if not info.has_options:
+            return {}, {}
+        return listed_contracts(await self.api.get(f"symbols/{sid}/options"), symbol)
+
+    async def _optioned_listing(self, symbol: str, sid: int, today: date) -> tuple[int, SymbolInfo, tuple]:
+        """(symbolId, info, (expiries, listed)) of the listing of `symbol` the chain comes from: the cached one, or,
+        when it lists no options, the first of the symbol's other listings that does (tried once per New York day;
+        adopted and cached). One log line says what was tried. Raises QuestradeError."""
         info = await self._symbol_info(symbol, sid, today)
+        chain = await self._listed(symbol, sid, info)
+        if chain[1] or self._probed.get(symbol) == today:
+            return sid, info, chain
+        self._probed[symbol] = today
+        tried = [f"symbolId {sid} ({info.security_type or '?'}, {info.name or 'no description'}, "
+                 f"{info.currency or '?'} {info.listing_exchange or '?'}) hasOptions={info.has_options}, "
+                 f"{len(chain[1])} standard contracts"]
+        found = None
+        for c in listings(await self.api.get("symbols/search", {"prefix": symbol}), symbol):
+            if c.symbol_id == sid:
+                continue
+            try:
+                c_info = symbol_info(await self.api.get(f"symbols/{c.symbol_id}"))
+                c_chain = await self._listed(symbol, c.symbol_id, c_info)
+            except QuestradeError as e:
+                if e.kind != "other":
+                    raise
+                tried.append(f"{c.describe()} refused: {e.reason}")
+                continue
+            tried.append(f"{c.describe()} hasOptions={c_info.has_options}, {len(c_chain[1])} standard contracts")
+            if c_chain[1]:
+                found = (c.symbol_id, c_info, c_chain)
+                break
+        if found is None:
+            log.info("questrade %s: lists no options; tried %s", symbol, "; ".join(tried))
+            return sid, info, chain
+        self.ids.put(symbol, found[0], datetime.now(timezone.utc))
+        self._info[symbol] = (today, found[1])
+        self._option_ids.pop(symbol, None)
+        log.info("questrade %s: adopted symbolId %d (it lists options); tried %s", symbol, found[0], "; ".join(tried))
+        return found
+
+    async def fetch_chain(self, symbol: str, final: bool = False) -> ChainSnapshot:
+        """The chain of `symbol` (no contracts: no listing of it at Questrade lists options). Raises NotListed,
+        FetchError."""
+        today = now_ny().date()
+        sid, info, (expiries, listed) = await self._optioned_listing(symbol, await self.symbol_id(symbol), today)
         quotes = (await self.api.get("markets/quotes", {"ids": str(sid)})).get("quotes") or []
         fetched = datetime.now(timezone.utc)
         if not quotes:
             raise FetchError(f"questrade:markets/quotes/{sid}", None, f"no quote for {symbol}")
         quote = parse_quote(quotes[0], symbol, info.prev_close, fetched, final)
-        if not info.has_options:
-            return ChainSnapshot(quote, (), fetched, quote.delayed)
-        expiries, listed = listed_contracts(await self.api.get(f"symbols/{sid}/options"), symbol)
         if not listed:
             return ChainSnapshot(quote, (), fetched, quote.delayed)
         spot = quote.price or info.prev_close

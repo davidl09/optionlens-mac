@@ -91,20 +91,46 @@ def _is_listing_of(r: Mapping, market: markets.Market) -> bool:
     return market is not markets.CA or r.get("listingExchange") in (None, *markets.CA_SUFFIXES.values())
 
 
-def pick_symbol_id(payload: Mapping, symbol: str) -> int | None:
-    """The symbolId of `symbol` (canonical, e.g. BRK.B, RY.TO) in a symbols/search answer: a listing of exactly that
-    symbol in its market (USD for US symbols; CAD on the TSX / TSX Venture for Canadian ones, so RY and RY.TO never
-    resolve to each other); for an index (securityType "Index") the part before any '.' suffix. None when Questrade
-    has none."""
+@dataclass(frozen=True)
+class Listing:
+    """One symbols/search result: what resolution chose and the log says."""
+    symbol_id: int
+    symbol: str                       # as Questrade writes it, e.g. SPX.IN, RY.TO
+    security_type: str | None         # "Stock" | "Index" | ... (ETFs are "Stock")
+    description: str | None
+    currency: str | None
+    listing_exchange: str | None
+
+    def describe(self) -> str:
+        return (f"{self.symbol} (symbolId {self.symbol_id}, {self.security_type or '?'}, "
+                f"{self.description or 'no description'}, {self.currency or '?'} {self.listing_exchange or '?'})")
+
+
+def listings(payload: Mapping, symbol: str) -> list[Listing]:
+    """The listings of `symbol` (canonical, e.g. BRK.B, RY.TO, SPX) in a symbols/search answer, best first: listings
+    of exactly that symbol in its market (USD for US symbols; CAD on the TSX / TSX Venture for Canadian ones, so RY and
+    RY.TO never resolve to each other); an index result (securityType "Index") matches by the part before any '.'
+    suffix (SPX.IN). Listings of the type that fits the symbol come first — an index for the cash indices
+    (markets.is_index), another type for everything else — then Questrade's order."""
     market = markets.market_of(symbol)
+    out = []
     for r in first_of(payload, "symbols", "symbol") or []:
-        if not _is_listing_of(r, market):
+        if not _is_listing_of(r, market) or r.get("symbolId") is None:
             continue
         name = normalize_symbol(str(r.get("symbol", "")))
         base = name.split(".")[0] if r.get("securityType") == "Index" else name
-        if base == symbol and r.get("symbolId") is not None:
-            return int(r["symbolId"])
-    return None
+        if base == symbol:
+            out.append(Listing(int(r["symbolId"]), str(r.get("symbol")), _text(r.get("securityType")),
+                               _text(r.get("description")), _text(r.get("currency")), _text(r.get("listingExchange"))))
+    index = markets.is_index(symbol)
+    return sorted(out, key=lambda x: (x.security_type == "Index") != index)
+
+
+def pick_symbol_id(payload: Mapping, symbol: str) -> int | None:
+    """The symbolId of the best listing of `symbol` in a symbols/search answer (listings), None when Questrade has
+    none."""
+    found = listings(payload, symbol)
+    return found[0].symbol_id if found else None
 
 
 @dataclass(frozen=True)
