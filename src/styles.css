@@ -511,6 +511,7 @@ table.chain td a:hover { color: var(--accent); }
 }
 @media (max-width: 1020px) {
   .hamburger { display: inline-flex; }
+  .header-tools { flex-shrink: 1; min-width: 0; }   /* the nav is a drawer here: nothing to protect, and the row must fit a phone */
   .main-nav {
     display: none; position: fixed; top: var(--header-h); left: 0; right: 0; bottom: 0; z-index: 55; overflow: auto;
     flex-direction: column; align-items: stretch; gap: 0; padding: 8px; background: var(--panel); border-top: 1px solid var(--border);
