@@ -425,22 +425,46 @@ export function peers(sym: string): ReportResult {
   return { id: "peers", title: `${sym} peers`, asof: NOW, params: {}, columns, rows: rowsFor(columns, 8, 2), truncated: false, notes: [] };
 }
 
+const CANADIAN = (sym: string) => /\.(TO|VN)$/.test(sym);
+
 export function insiders(sym: string): Insiders {
   reseed(37);
+  if (CANADIAN(sym)) {          // SEDI reports (TMX Money): signed shares, the report's own wording
+    return {
+      symbol: sym, source: "tmx",
+      summary: [{ label: "Buy trades", m3: "10", m12: "45" }, { label: "Sell trades", m3: "14", m12: "40" }, { label: "Net activity (shares)", m3: "-1,586", m12: "5,481" }],
+      trades: [
+        { insider: "Douvas, Maria Elena", relation: "Senior Officer of Issuer", date: addDays(TODAY, -40), transaction: "Disposition in the public market · Common Shares", shares: -9604, price: 275.2, value: -2643021, shares_held: 0 },
+        { insider: "Douvas, Maria Elena", relation: "Senior Officer of Issuer", date: addDays(TODAY, -40), transaction: "Exercise of options · Common Shares", shares: 9604, price: 105.99, value: 1017928, shares_held: 9604 },
+        { insider: "McKay, David Ian", relation: "Director of Issuer", date: addDays(TODAY, -70), transaction: "Stock dividend · Rights Deferred Share Units", shares: 152, price: null, value: null, shares_held: 23520 },
+      ],
+    };
+  }
   return {
-    symbol: sym,
+    symbol: sym, source: "nasdaq",
     summary: [{ label: "Buys", m3: "2", m12: "5" }, { label: "Sells", m3: "11", m12: "38" }, { label: "Net shares", m3: "-1,204,000", m12: null }],
     trades: Array.from({ length: 12 }, (_, i) => ({ insider: pick(["Doe Jane", "Smith John", "Lee Ann", "Park Min"]), relation: pick(["CEO", "CFO", "Director", null]), date: addDays(TODAY, -i * 9), transaction: pick(["Sell", "Automatic Sell", "Automatic Sell", "Buy", "Option Execute"]), shares: Math.round(between(1e3, 1e5)), price: round(between(200, 240)), value: round(between(2e5, 2e7), 0), shares_held: Math.round(between(1e5, 4e6)) })),
   };
 }
 
 export function news(sym: string): NewsItem[] {
+  if (CANADIAN(sym)) {          // press releases (TMX Money): story links on money.tmx.com, no summaries
+    const ticker = sym.replace(/\.(TO|VN)$/, "");
+    return Array.from({ length: 5 }, (_, i) => ({ title: `${ticker} press release ${i + 1}: quarterly results announced`, url: `https://money.tmx.com/quote/${ticker}/news/${8848269543440233 - i}`, source: "Canada Newswire via QuoteMedia", published: `2026-11-${String(18 - i).padStart(2, "0")}T06:11:00-05:00`, summary: null }));
+  }
   return Array.from({ length: 6 }, (_, i) => ({ title: `${sym} headline number ${i + 1}: market reacts to sector update`, url: `https://example.com/news/${i}`, source: pick(["Newswire", "MarketDesk", null]), published: i % 2 ? "2026-11-18T14:00:00Z" : "Nov 17, 2026", summary: i % 3 ? "A short summary of the article text." : null }));
 }
 
 export function profile(sym: string): Profile {
+  const name = SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`;
+  if (CANADIAN(sym)) {          // TMX Money's company block
+    return {
+      symbol: sym, name, description: "A global financial institution with a diversified business model, serving clients in Canada, the U.S. and other countries.",
+      website: "https://www.example.ca", sector: "Finance", industry: "Banking", exchange: "TSX", peers: [],
+    };
+  }
   return {
-    symbol: sym, name: SYMBOLS.find((s) => s[0] === sym)?.[1] ?? `${sym} Holdings`, description: "Designs, manufactures and sells consumer electronics, software and services worldwide.",
+    symbol: sym, name, description: "Designs, manufactures and sells consumer electronics, software and services worldwide.",
     website: "https://example.com", sector: "Technology", industry: "Consumer Electronics", exchange: "NASDAQ",
     peers: SYMBOLS.slice(1, 7).map(([symbol, name]) => ({ symbol, name, kind: "stock" as const, market: "US" as const, exchange: null, currency: "USD" as const })),
   };

@@ -1,5 +1,6 @@
-"""Company payloads from cached Nasdaq data (types.ts): Fundamentals, Insiders, NewsItem[], Profile,
-and the peer-comparison ReportResult. Indices have no company data (empty payloads)."""
+"""Company payloads from cached source data (types.ts): Fundamentals, Insiders, NewsItem[], Profile, and the
+peer-comparison ReportResult. The source is the one of the symbol's market (jobs.ondemand: Nasdaq for US listings;
+TMX Money's profile, news and insider reports for Canadian ones). Indices have no company data (empty payloads)."""
 from __future__ import annotations
 
 import re
@@ -13,7 +14,8 @@ from ..repo import symbols as symbols_repo
 from ..analytics import markets
 from . import context as ctx
 from . import fundamentals as fundamentals_svc
-from .errors import BadRequest
+from ..net import FetchError
+from .errors import BadRequest, Unavailable
 
 FIN_TITLES = {"income": "Income statement", "balance": "Balance sheet", "cashflow": "Cash flow",
               "ratios": "Financial ratios"}
@@ -48,9 +50,19 @@ def _num(v: Any) -> float | None:
     return -x if neg else x
 
 
+# Tabs whose source failure is told in a plain sentence (kind -> how the sentence names the data).
+PLAIN_FAILURE = {"insiders": "Insider data", "news": "News", "profile": "The company profile"}
+
+
 def _cached(kind: str, symbol: str, **params: Any) -> tuple[Any, datetime | None]:
-    """(normalized Nasdaq payload, fetched_at) via the on-demand TTL cache."""
-    payload = ctx.run_async(ondemand.fetch_cached, kind, symbol, **params)
+    """(normalized source payload, fetched_at) via the on-demand TTL cache. Unavailable for a PLAIN_FAILURE kind
+    whose source failed with nothing stored."""
+    try:
+        payload = ctx.run_async(ondemand.fetch_cached, kind, symbol, **params)
+    except FetchError as e:
+        if kind not in PLAIN_FAILURE:
+            raise
+        raise Unavailable(f"{PLAIN_FAILURE[kind]} could not be loaded right now. Try again in a few minutes.") from e
     hit = ondemand.peek_cached(kind, symbol, **params)
     return payload, (hit[1] if hit else None)
 
@@ -122,8 +134,9 @@ def _fmt_count(v: float | None) -> str | None:
 def insiders(symbol: str) -> dict:
     row = _company(symbol)
     sym = row["symbol"]
+    source = ondemand.source_of("insiders", sym)
     if row["kind"] != "stock":
-        return {"symbol": sym, "summary": [], "trades": []}
+        return {"symbol": sym, "source": source, "summary": [], "trades": []}
     data, _ = _cached("insiders", sym)
     data = data or {}
     summary = [{"label": r["label"], "m3": _fmt_count(r.get("months3")), "m12": _fmt_count(r.get("months12"))}
@@ -132,7 +145,7 @@ def insiders(symbol: str) -> dict:
                "transaction": t.get("transaction"), "shares": t.get("shares"), "price": t.get("price"),
                "value": t["shares"] * t["price"] if t.get("shares") is not None and t.get("price") is not None else None,
                "shares_held": t.get("shares_held")} for t in data.get("trades") or []]
-    return {"symbol": sym, "summary": summary, "trades": trades}
+    return {"symbol": sym, "source": source, "summary": summary, "trades": trades}
 
 
 def news(symbol: str) -> list[dict]:
@@ -164,7 +177,7 @@ def profile(symbol: str) -> dict:
         prof, _ = _cached("profile", sym)
         prof = prof or {}
     summ = ondemand.peek_cached("summary", sym)
-    exchange = (summ[0] or {}).get("Exchange") if summ else None
+    exchange = prof.get("Exchange") or ((summ[0] or {}).get("Exchange") if summ else None)
     return {"symbol": sym, "name": prof.get("CompanyName") or row["name"] or sym,
             "description": prof.get("CompanyDescription"), "website": prof.get("CompanyUrl"),
             "sector": row["sector"] or prof.get("Sector"), "industry": row["industry"] or prof.get("Industry"),

@@ -249,8 +249,12 @@ dividend, …) cover Canadian listings too. Their earnings come from **TMX Money
 EPS, 3 years back, and each company's next date), else **Yahoo Finance** (next date) — both unofficial endpoints that
 may change or stop answering; each event shows its source, Status → Data sources shows how each did, and a listing
 without a date says why (e.g. "TMX Money and Yahoo Finance were unavailable"). OptionLens asks them as itself, once a
-second, once a day (docs/INTEGRATION.md §12). Not available for Canadian listings (no free source): dividend histories
-(only Questrade's current dividend is shown), financial statements, insider trades and news. Pre-market / after-hours
+second, once a day (docs/INTEGRATION.md §12). TMX Money also fills their **About** (company or fund description, sector,
+industry, exchange, website), **News** (press releases, linked to the story on money.tmx.com) and **Insiders** tabs
+(TMX's 3- and 12-month totals and the SEDI insider reports of the last 12 months: shares are signed, negative =
+disposed; the company's own buybacks are left out), fetched when a tab is opened and cached like the Nasdaq data of US
+listings (§12.1). Not available for Canadian listings (no free source): dividend histories (only Questrade's current
+dividend is shown) and financial statements. Pre-market / after-hours
 quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
 
 ## IV surface

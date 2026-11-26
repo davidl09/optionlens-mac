@@ -1,0 +1,20 @@
+{
+ "errors": [
+  {
+   "message": "Sorry, we couldn't find any results for \"ZZZZQ\". Please try again.",
+   "code": "404",
+   "locations": [
+    {
+     "line": 2,
+     "column": 3
+    }
+   ],
+   "path": [
+    "getQuoteBySymbol"
+   ]
+  }
+ ],
+ "data": {
+  "getQuoteBySymbol": null
+ }
+}

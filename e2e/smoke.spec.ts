@@ -193,6 +193,44 @@ test("earnings strategy drill-down", async ({ page }) => {
   clean(p);
 });
 
+test("Canadian listings: About, News and Insiders show TMX Money's data, and a plain sentence when it cannot be loaded", async ({ page }) => {
+  const p = await setup(page, [/502/]);
+  await page.goto("/s/RY.TO/about");
+  const about = page.locator("section.card").first();
+  await expect(about).toContainText("A global financial institution");
+  await expect(about).toContainText("Banking");
+  await expect(about).toContainText("TSX");
+  await expect(about.getByRole("link", { name: "www.example.ca" })).toHaveAttribute("href", "https://www.example.ca");
+  await expect(page.getByText("No peers found.")).toBeVisible();
+  await page.goto("/s/RY.TO/news");
+  const links = page.locator(".news-list a");
+  await expect(links).toHaveCount(5);
+  await expect(links.first()).toHaveText(/RY press release 1/);
+  for (const href of await links.evaluateAll((as) => as.map((a) => a.getAttribute("href") ?? ""))) expect(href).toMatch(/^https:\/\/money\.tmx\.com\/quote\/RY\/news\/\d+$/);
+  await expect(page.locator(".news-meta").first()).toContainText("Canada Newswire via QuoteMedia");
+  await page.goto("/s/RY.TO/insiders");
+  await expect(page.getByText("TMX Money's totals of insider trading")).toBeVisible();
+  await expect(page.getByText(/SEDI insider reports of the last 12 months/)).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Buy trades" })).toBeVisible();
+  await expect(page.getByText("Disposition in the public market · Common Shares")).toBeVisible();
+  await expect(page.getByText(/Nasdaq/)).toHaveCount(0);
+  await expect(page.getByText(/10b5-1/)).toHaveCount(0);
+  // a listing without reports: sentences, not empty tables
+  await page.route("**/api/symbol/RY.TO/insiders", (route) => route.fulfill({ json: { symbol: "RY.TO", source: "tmx", summary: [], trades: [] } }));
+  await page.reload();
+  await expect(page.getByText("No insider trading totals for this symbol.")).toBeVisible();
+  await expect(page.getByText("No insider reports were filed for this symbol in the last 12 months.")).toBeVisible();
+  // the source cannot be reached and nothing is stored: the tab's error state with the plain sentence
+  for (const [tab, api, what] of [["insiders", "insiders", "Insider data"], ["news", "news", "News"], ["about", "profile", "The company profile"]]) {
+    const detail = `${what} could not be loaded right now. Try again in a few minutes.`;
+    await page.route(`**/api/symbol/RY.TO/${api}`, (route) => route.fulfill({ status: 502, json: { detail } }));
+    await page.goto(`/s/RY.TO/${tab}`);
+    await expect(page.getByRole("alert")).toContainText(detail);
+  }
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  clean(p);
+});
+
 test("Canadian earnings carry their source (TMX Money); Status lists the Canadian earnings sources", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/s/RY.TO/earnings");

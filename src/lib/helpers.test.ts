@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { BridgeStatus } from "../../electron/shared/api";
 import type { ColumnDef, SymbolRef } from "../api/types";
 import { fundamentalText, shortSector } from "./format";
-import { sellSplit } from "./insiders";
+import { insiderText, sellSplit } from "./insiders";
 import { rankSymbols } from "./search";
 import { bridgePillLabel, farmsSummary, jobState, nextCollectionWindow, optionsSubscriptionText, populateText, readableDetail } from "./status";
 import { templateUsesWidth } from "./strategy";
@@ -140,5 +140,22 @@ describe("sellSplit", () => {
   it("splits automatic (10b5-1) from open-market sells", () => {
     const t = (transaction: string) => ({ insider: "x", relation: null, date: null, transaction, shares: 1, price: 1, value: 1, shares_held: 1 });
     expect(sellSplit([t("Automatic Sell"), t("Automatic Sell"), t("Sell"), t("Buy"), t("Option Execute")])).toEqual({ automatic: 2, openMarket: 1, total: 3 });
+  });
+  it("counts no sells among SEDI reports (Canadian listings have no 10b5-1 plans)", () => {
+    const t = (transaction: string) => ({ insider: "x", relation: null, date: null, transaction, shares: -1, price: 1, value: -1, shares_held: 1 });
+    expect(sellSplit([t("Disposition in the public market · Common Shares"), t("Exercise of options · Options")]).total).toBe(0);
+  });
+});
+
+describe("insiderText", () => {
+  it("names each source's data and never leaves an empty table unexplained", () => {
+    const us = insiderText("nasdaq"), ca = insiderText("tmx");
+    expect(us.summary).toBe("Nasdaq counts every kind of sale together");
+    expect(us.noTrades).toMatch(/Nasdaq/);
+    expect(us.trades).toBeUndefined();
+    expect(ca.summary).toMatch(/TMX Money/);
+    expect(ca.trades).toMatch(/SEDI insider reports of the last 12 months.*negative shares = disposed/);
+    for (const t of [us, ca]) { expect(t.noSummary.length).toBeGreaterThan(10); expect(t.noTrades.length).toBeGreaterThan(10); }
+    expect(ca.noSummary + ca.noTrades).not.toMatch(/Nasdaq/);
   });
 });

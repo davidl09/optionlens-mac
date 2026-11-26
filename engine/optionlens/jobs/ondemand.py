@@ -1,6 +1,6 @@
-"""On-demand work triggered by API requests: symbol visits (first-visit history, the visit itself), cached Nasdaq
-fundamentals. Concurrent requests for the same symbol share one fetch (per-symbol lock). On-demand chains are
-services.refresh's."""
+"""On-demand work triggered by API requests: symbol visits (first-visit history, the visit itself), cached company
+data (Nasdaq for US listings; TMX Money's profile, news and insider reports for Canadian ones). Concurrent requests
+for the same symbol share one fetch (per-symbol lock). On-demand chains are services.refresh's."""
 from __future__ import annotations
 
 import asyncio
@@ -14,11 +14,11 @@ from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import cache as cache_repo
 from ..repo import views as views_repo
-from ..sources import nasdaq
+from ..sources import nasdaq, tmx, tmx_company
 from . import prices
 from .universe import UnknownSymbol, ensure_symbol
 
-__all__ = ["visit", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "UnknownSymbol",
+__all__ = ["visit", "ensure_history", "fetch_cached", "cache_key", "peek_cached", "source_of", "UnknownSymbol",
            "fetch_calendar", "CACHE_TTL_S", "NEGATIVE_TTL_S"]
 
 _locks: dict[str, asyncio.Lock] = {}
@@ -103,11 +103,26 @@ async def _from_nasdaq(kind: str, symbol: str, params: dict) -> Any:
     }[kind]()
 
 
-def _fetcher(kind: str, symbol: str, params: dict) -> Callable[[], Awaitable[Any]] | None:
-    """The fetch of `kind` for `symbol` from the source that covers its market, or None when no source does."""
+# Company data of Canadian listings that TMX Money has (the other kinds have no source there).
+_FROM_TMX: dict[str, Callable[[str], Awaitable[Any]]] = {
+    "profile": tmx_company.fetch_profile, "news": tmx_company.fetch_news, "insiders": tmx_company.fetch_insiders,
+}
+
+
+def source_of(kind: str, symbol: str) -> str | None:
+    """Which source answers `kind` for `symbol`: nasdaq.NAME (US listings), tmx.NAME (Canadian listings, the kinds
+    TMX Money has) or None (no source)."""
     if covered_by_nasdaq(symbol):
+        return nasdaq.NAME
+    return tmx.NAME if kind in _FROM_TMX else None
+
+
+def _fetcher(kind: str, symbol: str, params: dict) -> Callable[[], Awaitable[Any]] | None:
+    """The fetch of `kind` for `symbol` from the source that covers it (source_of), or None when no source does."""
+    source = source_of(kind, symbol)
+    if source == nasdaq.NAME:
         return lambda: _from_nasdaq(kind, symbol, params)
-    return None
+    return (lambda: _FROM_TMX[kind](symbol)) if source == tmx.NAME else None
 
 
 NEGATIVE_TTL_S = 6 * H     # "no data" answers (None, e.g. ETF financials/profile) are re-asked after 6 h

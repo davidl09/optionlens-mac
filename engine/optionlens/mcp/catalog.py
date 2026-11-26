@@ -182,10 +182,17 @@ CURATED: dict[str, Curated] = {
     "GET /api/symbol/{sym}/fundamentals": Curated("symbol_fundamentals", "Key stats and income / balance / cash-flow / "
                                                   "ratio tables (annual or quarterly), values as reported (text)."),
     "GET /api/symbol/{sym}/peers": Curated("symbol_peers", f"Peers comparison table. {U_TABLE}"),
-    "GET /api/symbol/{sym}/insiders": Curated("symbol_insiders", "Insider trading summary and trades."),
-    "GET /api/symbol/{sym}/news": Curated("symbol_news", "Recent news headlines with links."),
-    "GET /api/symbol/{sym}/profile": Curated("symbol_profile", "Company profile: description, sector, industry, "
-                                             "exchange, website, peers."),
+    "GET /api/symbol/{sym}/insiders": Curated(
+        "symbol_insiders", "Insider trading summary (3 and 12 months) and trades. source nasdaq (US listings): "
+        "unsigned shares, transaction Buy / Sell / Automatic Sell. source tmx (Canadian listings): SEDI insider "
+        "reports of the last 12 months (latest 200, without the issuer's buybacks), shares signed (negative = "
+        "disposed), transaction = report type and security."),
+    "GET /api/symbol/{sym}/news": Curated(
+        "symbol_news", "Recent news headlines with links (US listings: Nasdaq; Canadian listings: TMX Money press "
+        "releases, published as an ISO datetime, no summary)."),
+    "GET /api/symbol/{sym}/profile": Curated(
+        "symbol_profile", "Company profile: description, sector, industry, exchange, website, peers (US listings: "
+        "Nasdaq; Canadian listings and funds: TMX Money)."),
     # ---- calculator and backtests (read-only POSTs: they compute, nothing is stored)
     "POST /api/calc/strategy": Curated("calc_strategy", "Price an option / stock position on the stored chain: legs "
                                        "(kind option|stock, right C|P, strike, expiry, qty: + long / - short, "

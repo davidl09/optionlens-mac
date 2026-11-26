@@ -429,6 +429,7 @@ export interface Fundamentals {
 }
 export interface Insiders {
   symbol: string;
+  source: "nasdaq" | "tmx";        // nasdaq: US listings; tmx: Canadian listings (SEDI reports; shares signed, negative = disposed)
   summary: { label: string; m3: string | null; m12: string | null }[];
   trades: { insider: string; relation: string | null; date: ISODate | null; transaction: string | null; shares: number | null; price: number | null; value: number | null; shares_held: number | null }[];
 }

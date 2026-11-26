@@ -1,0 +1,19 @@
+{
+ "errors": [
+  {
+   "message": "Cannot read properties of undefined (reading 'prev3mons')",
+   "locations": [
+    {
+     "line": 1,
+     "column": 55
+    }
+   ],
+   "path": [
+    "getCompanyInsidersActivities"
+   ]
+  }
+ ],
+ "data": {
+  "getCompanyInsidersActivities": null
+ }
+}

@@ -8,7 +8,7 @@ import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
 import { AsOf, Async, Card, Empty, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmtDateTime, fundamentalText } from "../../lib/format";
-import { sellSplit } from "../../lib/insiders";
+import { insiderText, sellSplit } from "../../lib/insiders";
 import { useSym } from "./shared";
 
 function FinTableView({ t }: { t: FinTable | null }) {
@@ -95,20 +95,23 @@ export function InsidersTab() {
   const sym = useSym();
   const st = useApi(() => api.insiders(sym), [sym]);
   return (
-    <Async state={st}>{(d) => (
-      <div className="stack">
-        <Card title="Insider activity summary" subtitle="Nasdaq counts every kind of sale together">
-          <DataTable minimal rowLink={false} rows={d.summary.map((r) => ({ ...r, label: /^number of sells$/i.test(r.label) ? "Number of sells (all kinds)" : r.label })) as unknown as ReportRow[]}
-            columns={[{ key: "label", label: "", fmt: "text" }, { key: "m3", label: "3 months", fmt: "text" }, { key: "m12", label: "12 months", fmt: "text" }]}
-            emptyState="Nasdaq has no insider summary for this symbol." />
-          <SellSplitLine trades={d.trades} />
-        </Card>
-        <Card title="Transactions">
-          <DataTable columns={INSIDER_COLUMNS} rows={d.trades as unknown as ReportRow[]} rowLink={false} csvName={`${sym}-insiders`}
-            emptyState="No insider transactions reported to Nasdaq for this symbol." />
-        </Card>
-      </div>
-    )}</Async>
+    <Async state={st}>{(d) => {
+      const text = insiderText(d.source);
+      return (
+        <div className="stack">
+          <Card title="Insider activity summary" subtitle={text.summary}>
+            <DataTable minimal rowLink={false} rows={d.summary.map((r) => ({ ...r, label: /^number of sells$/i.test(r.label) ? "Number of sells (all kinds)" : r.label })) as unknown as ReportRow[]}
+              columns={[{ key: "label", label: "", fmt: "text" }, { key: "m3", label: "3 months", fmt: "text" }, { key: "m12", label: "12 months", fmt: "text" }]}
+              emptyState={text.noSummary} />
+            <SellSplitLine trades={d.trades} />
+          </Card>
+          <Card title="Transactions" subtitle={text.trades}>
+            <DataTable columns={INSIDER_COLUMNS} rows={d.trades as unknown as ReportRow[]} rowLink={false} csvName={`${sym}-insiders`}
+              emptyState={text.noTrades} />
+          </Card>
+        </div>
+      );
+    }}</Async>
   );
 }
 

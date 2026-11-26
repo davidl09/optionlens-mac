@@ -1,0 +1,18 @@
+{
+ "data": {
+  "getQuoteBySymbol": {
+   "symbol": "XIU",
+   "name": "iShares S&P/TSX 60 Index ETF",
+   "exchangeName": "Toronto Stock Exchange",
+   "exShortName": "TSX",
+   "exchangeCode": "TSX",
+   "sector": "",
+   "industry": "",
+   "longDescription": "The investment objective of the Fund is to provide long-term capital growth by replicating, to the extent possible, the performance of the S&P/TSX 60 Index , net of expenses. Under normal market conditions, the Fund will primarily invest in Canadian equity securities. The Index is a strategy index focused on dividend income. The Index is comprised of 60 of the largest by market capitalization and most liquid constituents of the S&P/TSX Composite Index. Sectors are intended to mirror sector weights of the S&P/TSX Composite Index To achieve its investment objective the Fund uses an indexing strategy. Under this strategy, the Fund seeks to replicate the performance of the Index, net of expenses, by employing, directly or indirectly, through investment in one or more iShares ETFs and/or through the use of derivatives, a replicating strategy or sampling strategy.",
+   "fulldescription": "The investment objective of the Fund is to provide long-term capital growth by replicating, to the extent possible, the performance of the S&P/TSX 60 Index , net of expenses. Under normal market conditions, the Fund will primarily invest in Canadian equity securities. The Index is a strategy index focused on dividend income. The Index is comprised of 60 of the largest by market capitalization and most liquid constituents of the S&P/TSX Composite Index. Sectors are intended to mirror sector weights of the S&P/TSX Composite Index To achieve its investment objective the Fund uses an indexing strategy. Under this strategy, the Fund seeks to replicate the performance of the Index, net of expenses, by employing, directly or indirectly, through investment in one or more iShares ETFs and/or through the use of derivatives, a replicating strategy or sampling strategy. A replicating strategy is an investment strategy intended to replicate the performance of the Index by investing, directly or indirectly, primarily in a portfolio of index securities in substantially the same proportions as they are represented in the Index. A sampling strategy is an investment strategy intended to replicate the performance of the Index by investing, directly or indirectly, primarily in a representative portfolio of securities that has an aggregate investment profile similar to the Index. The securities selected are expected to have, in the aggregate, investment characteristics, fundamental characteristics and liquidity measures similar to those of the Index, as more fully described in the Funds prospectus.",
+   "website": "www.ishares.com",
+   "employees": "",
+   "datatype": "etf"
+  }
+ }
+}

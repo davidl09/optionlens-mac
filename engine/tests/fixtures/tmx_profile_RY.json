@@ -1,0 +1,18 @@
+{
+ "data": {
+  "getQuoteBySymbol": {
+   "symbol": "RY",
+   "name": "Royal Bank of Canada",
+   "exchangeName": "Toronto Stock Exchange",
+   "exShortName": "TSX",
+   "exchangeCode": "TSX",
+   "sector": "Finance",
+   "industry": "Banking",
+   "longDescription": "Royal Bank of Canada is a global financial institution with a purpose-driven, principles-led approach to delivering leading performance. Our success comes from the 105,000+ employees who leverage their imaginations and insights to bring our vision, values and strategy to life so we can help our clients thrive and communities prosper. As Canada's biggest bank and one of the largest in the world, based on market capitalization, we have a diversified business model with a focus on innovation and providing exceptional experiences to our more than 19 million clients in Canada, the U.S. and 27 other countries.",
+   "fulldescription": "Royal Bank of Canada is a global financial institution with a purpose-driven, principles-led approach to delivering leading performance. Our success comes from the 105,000+ employees who leverage their imaginations and insights to bring our vision, values and strategy to life so we can help our clients thrive and communities prosper. As Canada's biggest bank and one of the largest in the world, based on market capitalization, we have a diversified business model with a focus on innovation and providing exceptional experiences to our more than 19 million clients in Canada, the U.S. and 27 other countries.",
+   "website": "https://www.rbc.com",
+   "employees": "97795",
+   "datatype": "equity"
+  }
+ }
+}

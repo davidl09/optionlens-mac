@@ -278,5 +278,5 @@ def test_bridge_is_never_asked_for_canadian_listings(tmpdb):
 
 
 async def test_nasdaq_is_never_asked_for_canadian_listings(tmpdb):
-    assert await ondemand.fetch_cached("profile", "T.TO") is None     # TELUS; Nasdaq's T is AT&T
+    assert await ondemand.fetch_cached("summary", "T.TO") is None     # TELUS; Nasdaq's T is AT&T
     assert not ondemand.covered_by_nasdaq("T.TO") and ondemand.covered_by_nasdaq("T")

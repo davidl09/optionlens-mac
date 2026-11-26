@@ -1086,3 +1086,33 @@ upcoming date; …"); `Earnings.next_missing` / `SymbolSummary.next_earnings_mis
 Canadian listing's next event feeds `ChainArrays.next_earnings` / `next_reaction` (the calculator's IV-crush model,
 `earnings_before_expiry`), with reaction sessions on the TSX calendar. These endpoints are not documented by TMX or
 Yahoo and may change or close without notice: the parsers fail loudly (the source turns unavailable) rather than guess.
+
+### 12.1 Company data of Canadian listings (About, News, Insiders)
+
+`GET /api/symbol/{sym}/profile`, `/news` and `/insiders` are answered from the source of the symbol's market
+(`jobs/ondemand.py` `source_of`): Nasdaq for US listings (unchanged), **TMX Money** for Canadian ones
+(`sources/tmx_company.py`, the same endpoint, client and politeness as above; US listings are never asked of TMX, and
+Canadian ones never of Nasdaq). Operations, as the site's company page sends them (bare Toronto ticker: RY, RCI.B):
+
+- `getQuoteBySymbol(symbol, locale)` → `Profile`: `name`, `longDescription`, `website` (linked only as https; a bare
+  host such as "www.ishares.com" gets the scheme), `sector`, `industry`, `exShortName` (TSX / TSXV) as `exchange`.
+  Funds answer too (no sector / industry). An unknown ticker (error code "404"): the symbol's stored name, no
+  description. `peers` stay the same-industry symbols of the symbols table (TMX offers none).
+- `getNewsForSymbol(symbol, page 1, limit 20, locale)` → `NewsItem[]`: `headline`, `datetime` (ISO with offset, as
+  `published`), `source` ("Canada Newswire via QuoteMedia"); `url` is the story's page,
+  `https://money.tmx.com/quote/<ticker>/news/<newsid>`. A release repeated by a second wire (same headline and time)
+  is listed once; `summary` is null.
+- `getCompanyInsidersActivities(symbol)` + `getInsiderTransactions(symbol, monthDuration 12)` → `Insiders` with
+  `source: "tmx"`: `summary` = TMX's own totals over 3 and 12 months (buy / sell / total trades, shares bought / sold,
+  net activity); `trades` = the SEDI insider reports of the last 12 months, newest first, at most 200, without the
+  issuer's own reports (buybacks). Per report: `insider` (filer), `relation` ("Senior Officer of Issuer"), `date`,
+  `transaction` = the report's type and security ("Exercise of options · Options"; a public-market trade reads
+  "Acquisition / Disposition in the public market · Common Shares"; "· price in USD" when the price is not in CAD),
+  `shares` **signed** (negative = disposed), `price`, `value` = shares × price, `shares_held` (balance after). US
+  payloads carry `source: "nasdaq"` (unsigned shares, Nasdaq's "Sell" / "Automatic Sell" wording).
+
+Caching: the on-demand `http_cache` with the TTLs of the Nasdaq-backed data (profile 7 days, insiders 12 h, news
+30 min; a "no data" answer 6 h), one fetch per tab view at most, the stored answer served when TMX fails. When TMX
+fails and nothing is stored the endpoint answers 502 with a plain sentence (`{"detail": "News could not be loaded
+right now. Try again in a few minutes."}`; likewise "Insider data …", "The company profile …", for US listings
+too), which the tab shows in its error box with Retry.

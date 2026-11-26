@@ -18,7 +18,7 @@ from ..jobs import scheduler
 from ..jobs.ondemand import UnknownSymbol
 from ..net import FetchError
 from ..services import alerts, ingest, mcp_access, reference
-from ..services.errors import BadRequest, NotFound
+from ..services.errors import BadRequest, NotFound, Unavailable
 from . import (
     routes_agents,
     routes_backtest,
@@ -98,6 +98,10 @@ def _install_errors(app: FastAPI) -> None:
     async def upstream(_: Request, exc: FetchError):
         log.warning("upstream fetch failed: %s", exc)
         return _detail(502, f"upstream data source unavailable: {exc}")
+
+    @app.exception_handler(Unavailable)
+    async def unavailable(_: Request, exc: Unavailable):
+        return _detail(502, str(exc))
 
     @app.exception_handler(HTTPException)
     async def http_error(_: Request, exc: HTTPException):

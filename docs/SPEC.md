@@ -30,11 +30,11 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
    IV proxy for model pricing, in order: stored ATM IV for that symbol/date/tenor → stored IV30 →
    `HV30(date) * k` where k = median(IV30/HV30) over stored history for that symbol, else 1.15.
 4. Data is ~15 min delayed (CBOE delayed feed). Show "as of" timestamps everywhere.
-5. Canadian listings (§3 "Symbols and markets"): no free source of dividend histories, financial statements, insider
-   trades or news is used for them (Nasdaq covers US listings only, and a Toronto ticker can name a different US
-   company: T.TO is TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current dividend)
-   cover them like US listings. Their earnings come from TMX Money, else Yahoo Finance (unofficial endpoints,
-   INTEGRATION.md §12). The engine never sends a Canadian symbol to Nasdaq; the symbol's Dividends answer (and its
+5. Canadian listings (§3 "Symbols and markets"): no free source of dividend histories or financial statements is
+   used for them (Nasdaq covers US listings only, and a Toronto ticker can name a different US company: T.TO is
+   TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current dividend) cover them like
+   US listings. Their earnings come from TMX Money, else Yahoo Finance, and their profile, news and insider reports
+   from TMX Money (unofficial endpoints, INTEGRATION.md §12 and §12.1). The engine never sends a Canadian symbol to Nasdaq; the symbol's Dividends answer (and its
    Earnings answer when no source has a date) says why in `unavailable`; dividend reports cover US listings only.
 
 ---------------------------------------------------------------------------------------------

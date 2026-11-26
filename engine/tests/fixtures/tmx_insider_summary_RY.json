@@ -1,0 +1,38 @@
+{
+ "data": {
+  "getCompanyInsidersActivities": {
+   "activitySummary": [
+    {
+     "periodkey": "threeMonths",
+     "buyShares": 46194,
+     "soldShares": 47780,
+     "netActivity": -1586,
+     "totalShares": 93974,
+     "buyTrades": 10,
+     "sellTrades": 14,
+     "totalTrades": 24
+    },
+    {
+     "periodkey": "sixMonths",
+     "buyShares": 128035,
+     "soldShares": 129621,
+     "netActivity": -1586,
+     "totalShares": 257656,
+     "buyTrades": 17,
+     "sellTrades": 21,
+     "totalTrades": 38
+    },
+    {
+     "periodkey": "twelveMonths",
+     "buyShares": 343118,
+     "soldShares": 337637,
+     "netActivity": 5481,
+     "totalShares": 680755,
+     "buyTrades": 45,
+     "sellTrades": 40,
+     "totalTrades": 85
+    }
+   ]
+  }
+ }
+}
