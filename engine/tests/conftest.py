@@ -46,7 +46,7 @@ def _offline_sources(monkeypatch):
     async def no_yahoo(symbol):
         raise FetchError(f"test://yahoo/{symbol}", None, "network disabled in tests")
 
-    monkeypatch.setattr(tmx, "_query", no_tmx)
+    monkeypatch.setattr(tmx, "query", no_tmx)
     monkeypatch.setattr(yahoo, "_summary", no_yahoo)
     offline = OfflineSource()
     monkeypatch.setattr(chain_source, "REGISTRY", {"questrade": lambda: offline})

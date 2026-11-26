@@ -27,7 +27,7 @@ from optionlens.analytics.calendar import NY
 
 FIX = Path(__file__).parent / "fixtures"
 # captured at import, before the suite's offline guards (and tests/api's session-wide net.get stand-in) replace them
-_REAL_TMX_QUERY, _REAL_YAHOO_SUMMARY, _REAL_NET_GET = tmx._query, yahoo._summary, net.get
+_REAL_TMX_QUERY, _REAL_YAHOO_SUMMARY, _REAL_NET_GET = tmx.query, yahoo._summary, net.get
 TODAY = date(2026, 11, 26)
 
 
@@ -103,7 +103,7 @@ async def test_tmx_fetchers_post_graphql_as_optionlens(monkeypatch):
             return httpx.Response(200, json=_json("tmx_wsh_events.json"))
         return httpx.Response(200, json=_json("tmx_earnings_2024-12-04.json"))
 
-    monkeypatch.setattr(tmx, "_query", _REAL_TMX_QUERY)   # the real one (the suite guards it) over a mock transport
+    monkeypatch.setattr(tmx, "query", _REAL_TMX_QUERY)   # the real one (the suite guards it) over a mock transport
     monkeypatch.setattr(tmx, "UPCOMING_BATCH", 2)
     monkeypatch.setattr(net, "POLITE_RPS", 1000.0)       # (the real gate asks once a second)
     n = net._net()
@@ -132,7 +132,7 @@ async def test_tmx_failure_keeps_what_was_answered(monkeypatch):
                                       if e["qmSymbol"][:-3] in variables["symbols"]]
         return p
 
-    monkeypatch.setattr(tmx, "_query", fake)
+    monkeypatch.setattr(tmx, "query", fake)
     monkeypatch.setattr(tmx, "UPCOMING_BATCH", 1)
     got, err = await tmx.fetch_upcoming(["RY.TO", "TECK.B.TO", "ATD.TO"], TODAY)
     assert set(got) == {"RY.TO"} and err.startswith("503") and len(calls) == 2   # stops at the failure

@@ -1,5 +1,6 @@
-"""TMX Money (money.tmx.com) earnings of Canadian listings. UNOFFICIAL: the GraphQL endpoint behind the TMX Money
-site (https://app-money.tmx.com/graphql), not a documented API, so it may change or close without notice; a failure
+"""TMX Money (money.tmx.com): the GraphQL client every TMX source shares (`query`, `answer`, `ticker`) and the
+earnings of Canadian listings. UNOFFICIAL: the GraphQL endpoint behind the TMX Money site
+(https://app-money.tmx.com/graphql), not a documented API, so it may change or close without notice; a failure
 makes the source unavailable for the run (sources/ca_earnings.py asks the next one).
 
 Operations (as the site's own pages send them, read 2026-11-26; tests/fixtures/tmx_*.json are recorded answers):
@@ -68,7 +69,7 @@ def _ticker_of(v: Any) -> str | None:
     return s or None
 
 
-def _data(payload: Any, op: str) -> Any:
+def answer(payload: Any, op: str) -> Any:
     """`data[op]` of a GraphQL answer; [] for TMX's empty-day error; Unexpected for any other error or shape."""
     if not isinstance(payload, dict):
         raise Unexpected(f"{op}: not a JSON object")
@@ -85,7 +86,7 @@ def _data(payload: Any, op: str) -> Any:
 def parse_earnings_day(payload: Any, on: date, to_symbol: ToSymbol) -> list[EarningsEvent]:
     """getEnhancedEarningsForDate -> events of `on` (surprise as a fraction; tickers `to_symbol` maps to None are
     left out)."""
-    rows = _data(payload, "getEnhancedEarningsForDate")
+    rows = answer(payload, "getEnhancedEarningsForDate")
     if rows is None:
         return []
     if not isinstance(rows, list):
@@ -111,7 +112,7 @@ def _wsh_timing(name: str) -> Timing:
 def parse_upcoming(payload: Any, to_symbol: ToSymbol, today: date) -> dict[str, EarningsEvent]:
     """getWSHEventData -> {symbol: its next earnings announcement (EAD, not past, on/after today)} with the time of
     day from the event name and the fiscal quarter ("Q4 2026")."""
-    events = (_data(payload, "quote") or {}).get("data")
+    events = (answer(payload, "quote") or {}).get("data")
     if isinstance(events, dict):          # {"error": "No matching companies found"}
         return {}
     if not isinstance(events, list):
@@ -136,13 +137,14 @@ def parse_upcoming(payload: Any, to_symbol: ToSymbol, today: date) -> dict[str, 
 
 
 # ----------------------------------------------------------------------------- fetchers
-async def _query(op: str, query: str, variables: dict) -> Any:
-    return await net.post_json(URL, {"operationName": op, "variables": variables, "query": query}, headers=HEADERS)
+async def query(op: str, text: str, variables: dict) -> Any:
+    """One GraphQL request (net's tmx.com gate: one at a time, at most once a second), identifying as OptionLens."""
+    return await net.post_json(URL, {"operationName": op, "variables": variables, "query": text}, headers=HEADERS)
 
 
 async def fetch_earnings_day(on: date, to_symbol: ToSymbol) -> list[EarningsEvent]:
     """The TSX / TSX Venture earnings calendar of one day (FetchError when TMX fails or answers unexpectedly)."""
-    payload = await _query("getEnhancedEarningsForDate", EARNINGS_DAY_QUERY, {"date": on.isoformat()})
+    payload = await query("getEnhancedEarningsForDate", EARNINGS_DAY_QUERY, {"date": on.isoformat()})
     try:
         return parse_earnings_day(payload, on, to_symbol)
     except Unexpected as e:
@@ -157,7 +159,7 @@ async def fetch_upcoming(symbols: Sequence[str], today: date) -> tuple[dict[str,
     out: dict[str, EarningsEvent] = {}
     for i in range(0, len(tickers), UPCOMING_BATCH):
         try:
-            payload = await _query("WSH", UPCOMING_QUERY, {"symbols": tickers[i:i + UPCOMING_BATCH]})
+            payload = await query("WSH", UPCOMING_QUERY, {"symbols": tickers[i:i + UPCOMING_BATCH]})
             out.update(parse_upcoming(payload, by_ticker.get, today))
         except (net.FetchError, Unexpected) as e:
             return out, str(e)

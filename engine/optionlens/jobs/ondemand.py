@@ -73,7 +73,7 @@ async def ensure_history(symbol: str, row: dict | None = None) -> int:
         return await prices.backfill_symbol(row)
 
 
-# ----------------------------------------------------------------------------- cached Nasdaq data
+# ----------------------------------------------------------------------------- cached company data
 H = 3600
 CACHE_TTL_S: dict[str, int] = {
     "info": 24 * H, "summary": 24 * H, "financials": 24 * H, "earnings_surprise": 24 * H,
@@ -83,8 +83,15 @@ SPLITS_LOOKBACK_DAYS = 30
 CALENDAR_TTL_S = 6 * H     # universe-wide Nasdaq calendars (splits, IPOs)
 
 
-def _fetcher(kind: str, symbol: str, asset: str, params: dict) -> Callable[[], Awaitable[Any]]:
-    return {
+def covered_by_nasdaq(symbol: str) -> bool:
+    """Nasdaq's quote, company, calendar and dividend endpoints cover US listings only: a Canadian symbol (RY.TO) is
+    never sent to Nasdaq (its ticker can name a different US company: T.TO is TELUS, T is AT&T)."""
+    return not markets.is_canadian(symbol)
+
+
+async def _from_nasdaq(kind: str, symbol: str, params: dict) -> Any:
+    asset = "etf" if (await ensure_symbol(symbol))["kind"] == "etf" else "stocks"
+    return await {
         "info": lambda: nasdaq.fetch_info(symbol, asset),
         "summary": lambda: nasdaq.fetch_summary(symbol, asset),
         "financials": lambda: nasdaq.fetch_financials(symbol, bool(params.get("quarterly"))),
@@ -93,7 +100,14 @@ def _fetcher(kind: str, symbol: str, asset: str, params: dict) -> Callable[[], A
         "insiders": lambda: nasdaq.fetch_insiders(symbol),
         "news": lambda: nasdaq.fetch_news(symbol, asset),
         "extended": lambda: nasdaq.fetch_extended(symbol, params.get("market", "pre"), asset),
-    }[kind]
+    }[kind]()
+
+
+def _fetcher(kind: str, symbol: str, params: dict) -> Callable[[], Awaitable[Any]] | None:
+    """The fetch of `kind` for `symbol` from the source that covers its market, or None when no source does."""
+    if covered_by_nasdaq(symbol):
+        return lambda: _from_nasdaq(kind, symbol, params)
+    return None
 
 
 NEGATIVE_TTL_S = 6 * H     # "no data" answers (None, e.g. ETF financials/profile) are re-asked after 6 h
@@ -137,28 +151,17 @@ async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> 
         return payload
 
 
-def covered_by_nasdaq(symbol: str) -> bool:
-    """Nasdaq's quote, company, calendar and dividend endpoints cover US listings only: a Canadian symbol (RY.TO) is
-    never sent to Nasdaq (its ticker can name a different US company: T.TO is TELUS, T is AT&T)."""
-    return not markets.is_canadian(symbol)
-
-
 async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
-    """Normalized Nasdaq payload of `kind` (see CACHE_TTL_S) for symbol, via http_cache with TTL; None without a
-    request for a symbol Nasdaq does not cover (covered_by_nasdaq).
-    A None answer (Nasdaq has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
+    """Normalized payload of `kind` (see CACHE_TTL_S) for symbol from the source of its market (_fetcher), via
+    http_cache with TTL; None without a request when no source covers the symbol.
+    A None answer (the source has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
     params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
     cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
     ttl = CACHE_TTL_S[kind]
     symbol = normalize_symbol(symbol)
-    if not covered_by_nasdaq(symbol):
+    fetch = _fetcher(kind, symbol, params)
+    if fetch is None:
         return None
-
-    async def fetch() -> Any:
-        row = await ensure_symbol(symbol)
-        asset = "etf" if row["kind"] == "etf" else "stocks"
-        return await _fetcher(kind, symbol, asset, params)()
-
     return await _cached(cache_key(kind, symbol, **params), ttl, fetch)
 
 
