@@ -245,7 +245,11 @@ Bank on the TSX, **RY** its NYSE listing; search shows both with exchange and cu
 amounts. Reports have a **Market** filter (US by default, Canada, or All; totals are per market). Canadian chains,
 price history, intraday charts and live quotes come from Questrade, sessions follow the TSX holiday calendar, and options
 are priced with the Bank of Canada 3-month T-bill rate. Questrade's daily figures (P/E, EPS, market cap, current
-dividend, …) cover Canadian listings too. Not available for them (no free source): earnings dates, dividend histories
+dividend, …) cover Canadian listings too. Their earnings come from **TMX Money** (earnings calendar with BMO / AMC and
+EPS, 3 years back, and each company's next date), else **Yahoo Finance** (next date) — both unofficial endpoints that
+may change or stop answering; each event shows its source, Status → Data sources shows how each did, and a listing
+without a date says why (e.g. "TMX Money and Yahoo Finance were unavailable"). OptionLens asks them as itself, once a
+second, once a day (docs/INTEGRATION.md §12). Not available for Canadian listings (no free source): dividend histories
 (only Questrade's current dividend is shown), financial statements, insider trades and news. Pre-market / after-hours
 quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
 

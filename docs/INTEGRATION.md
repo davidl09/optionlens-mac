@@ -220,7 +220,8 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
 - **Markets** (SPEC §3 "Symbols and markets"): `SymbolRef`, `SymbolSummary` and profile peers carry `market` ("US" |
   "CA"), `exchange` ("TSX" | "TSXV" | null) and `currency` ("USD" | "CAD"); report and watchlist rows of a symbol carry
   `currency`. Universe reports take `market` (US default / CA / all; aggregates US / CA; US-only sources none, SPEC §7).
-  `Earnings.unavailable` / `Dividends.unavailable`: why that data is missing for a Canadian listing (null otherwise).
+  `Earnings.unavailable` / `Dividends.unavailable`: why that data is missing for a Canadian listing (null otherwise);
+  Canadian listings' earnings come from TMX Money, else Yahoo Finance (§12), so earnings reports take `market` too.
   The renderer labels money by currency (`src/lib/format.ts` MoneyStyle: C$; US$ where a view mixes currencies). A
   stock backtest takes symbols of one market (422 otherwise).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
@@ -1038,3 +1039,50 @@ positions grouped by underlying with expandable legs (source badge Questrade / I
 graph per underlying, "Open in calculator" (the positions at their cost basis as pinned prices — your price, live quotes
 do not move them — the same contract in several accounts as one leg, up to the calculator's 8), each source's state
 with what to do, and empty states ("No open positions", "Connect a broker").
+
+## 12. Earnings sources
+
+US listings' earnings come from Nasdaq's earnings calendar (jobs `earnings` daily 05:30 for today−10 … today+90,
+`earnings_backfill` 3 years back, resumable). Canadian listings (`.TO` / `.VN`) never go to Nasdaq; their earnings come
+from two **unofficial** endpoints, in this precedence (`sources/ca_earnings.py`), and US listings never go to these:
+
+1. **TMX Money** (`sources/tmx.py`) — the GraphQL endpoint behind money.tmx.com, `POST https://app-money.tmx.com/graphql`:
+   - `getEnhancedEarningsForDate(date)`: the TSX / TSX Venture earnings calendar of a day (symbol, `announceTime` BTO /
+     AMC / N/A, `estimatedEps`, `actualEps`, `epsSurprisePercent`). Its tickers are bare Toronto tickers (RY, TECK.B,
+     AP.UN): a ticker maps to the known Canadian listing with that ticker, else to the TSX one (`.TO`). A day without
+     reporters is answered with an error ("Cannot read properties of undefined") and counts as empty.
+   - `getWSHEventData(symbols)` (Wall Street Horizon events, 50 tickers per request): each company's next earnings
+     announcement (`EAD`, "Q4 2026 Earnings Announcement-Before Mkt" / "-After Mkt" / "-During Mkt" = unknown time),
+     listing named by `qmSymbol` ("TECK.B:CA").
+2. **Yahoo Finance** (`sources/yahoo.py`) — a cookie from `fc.yahoo.com`, a crumb from
+   `query2.finance.yahoo.com/v1/test/getcrumb`, then `v10/finance/quoteSummary/{RY.TO | RCI-B.TO | XYZ.V}?modules=
+   calendarEvents`: the next earnings date (time of day only when the timestamp says before the open / after the
+   close; an estimated window keeps its first day with an unknown time) and the EPS estimate. Yahoo gives no past
+   report dates, so history comes from TMX only.
+
+Jobs: `earnings_ca` (daily 05:35) fetches TMX's calendar for each weekday of today−10 … today+90 (replacing TMX's rows
+of each non-empty day), then asks for each Canadian stock's next date: TMX (its per-company date, else its calendar's),
+and for the stocks TMX has none for, Yahoo. The first source with a date wins; the symbol's other pending Canadian rows
+go (a moved date). A symbol answered earlier the same day is not asked again (`earnings_lookups` keeps each symbol's
+last lookup: when, which source answered, else why none). `earnings_backfill_ca` (daily 04:15, resumable, no-op once
+complete) reads TMX's calendar 3 years back. Without any Canadian listing (Questrade not connected) neither job asks
+anything.
+
+Health: a source that fails (transport error, HTTP error, throttling, an answer of an unknown shape) is unavailable for
+the rest of the run; what it answered before stays, and the remaining symbols go to the next source. The run's detail
+ends with each source's state (`{"tmx": "ok", "yahoo": "not needed"}`), which `Status.sources` shows as the entries
+`tmx` and `yahoo`; the run fails only when no source could be reached. `Status.earnings_backfill_ca_progress` is the
+TMX backfill's progress.
+
+Politeness: both are asked as `OptionLens/<version>` (never a browser User-Agent), at most once a second, one request
+at a time, once a day. A 403 block page suspends the host for an hour (as for Nasdaq / CBOE); a 429 is not waited
+out (`max_throttles=0`): the source counts as unavailable and the fallback is used. Yahoo throttles clients that do not
+look like a browser, so it may simply be unavailable (on 2026-11-26 its crumb endpoint answered 429 to OptionLens).
+
+What the app shows: every stored event carries `source` (`nasdaq` | `tmx` | `yahoo`; `EarningsEventRow.source`,
+`NextEarnings.source`, earnings-report rows), shown as a source badge. `Earnings.unavailable`: a Canadian listing with
+no stored event says why from its last lookup ("TMX Money and Yahoo Finance were unavailable (…)" or "TMX Money has no
+upcoming date; …"); `Earnings.next_missing` / `SymbolSummary.next_earnings_missing` say why there is no next date. A
+Canadian listing's next event feeds `ChainArrays.next_earnings` / `next_reaction` (the calculator's IV-crush model,
+`earnings_before_expiry`), with reaction sessions on the TSX calendar. These endpoints are not documented by TMX or
+Yahoo and may change or close without notice: the parsers fail loudly (the source turns unavailable) rather than guess.

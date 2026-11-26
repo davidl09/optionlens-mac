@@ -182,8 +182,9 @@ def summary(symbol: str) -> dict:
         **_option_volume(sym),
         "returns": stats.returns_row(a.dates, a.close) if len(a) else dict.fromkeys(
             ("d1", "d5", "m1", "m3", "m6", "ytd", "y1", "y3")),
-        "next_earnings": {k: nxt[k] for k in ("date", "timing", "days", "implied_move_pct", "avg_abs_move_pct")}
-        if nxt else None,
+        "next_earnings": {k: nxt[k] for k in ("date", "timing", "days", "implied_move_pct", "avg_abs_move_pct",
+                                              "source")} if nxt else None,
+        "next_earnings_missing": None if nxt else symbol_earnings.next_missing(sym),
         "next_dividend": divs_a.next_dividend(div_list, ks["price"] or spot, ctx.today()),   # the key stats' price
         "support": support, "resistance": resistance,
         "rsi14": stats.rsi(a.close, 14), "atr14_pct": stats.atr_pct(a.high, a.low, a.close, 14),

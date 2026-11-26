@@ -12,12 +12,13 @@ from ..analytics import markets
 from ..analytics.calendar import is_market_open, now_ny, prev_trading_day
 from ..config import Settings, get_settings
 from ..jobs import scheduler
-from ..jobs.calendars import earnings_backfill_progress
+from ..jobs.calendars import CA_BACKFILL_JOB, ca_source_health, earnings_backfill_progress
 from ..repo import bridge as bridge_repo
 from ..repo import jobs as jobs_repo
 from ..repo import options as options_repo
 from ..repo import status as status_repo
 from ..repo import symbols as symbols_repo
+from ..sources import ca_earnings
 from . import sources as data_sources
 
 SEARCH_LIMIT = 20
@@ -103,11 +104,27 @@ def bridge(now: datetime | None = None) -> dict:
             "farms": b.get("farms") if connected else None, "options_subscription": b.get("options_subscription")}
 
 
+def ca_earnings_sources() -> list[dict]:
+    """Status.sources entries of the Canadian listings' earnings sources (TMX Money, then Yahoo Finance): each one's
+    state in the latest earnings_ca run (ok None: not asked yet, or not needed because an earlier source answered)."""
+    out = []
+    for i, (name, h) in enumerate(ca_source_health().items()):
+        st = h["state"]
+        role = "first source" if i == 0 else "fallback"
+        what = f"{ca_earnings.LABELS[name]}: Canadian listings' earnings dates ({role}; unofficial endpoint)"
+        note = {None: "no lookup yet", "ok": None, "not needed": "not needed in the last lookup"}.get(st, st)
+        out.append({"name": name, "ok": None if st in (None, "not needed") else st == "ok",
+                    "last_success_at": h["last_success_at"], "detail": what + (f" · {note}" if note else "")})
+    return out
+
+
 def sources(latest: dict[str, dict], br: dict) -> list[dict]:
-    """nasdaq, treasury, ibkr-bridge (heartbeat / last push) and the enabled server-side chain sources."""
+    """nasdaq, treasury, ibkr-bridge (heartbeat / last push), the enabled server-side chain sources and the Canadian
+    earnings sources."""
     ibkr = {"name": "ibkr-bridge", "ok": br["connected"] if br["client"] else None,
             "last_success_at": br["last_push_at"], "detail": br["client"]}
-    return [_source("nasdaq", latest), _source("treasury", latest), ibkr, *data_sources.status_entry()]
+    return [_source("nasdaq", latest), _source("treasury", latest), ibkr, *data_sources.status_entry(),
+            *ca_earnings_sources()]
 
 
 def _sessions_back(d, n: int):
@@ -136,6 +153,7 @@ def status() -> dict:
         "iv_history_days": status_repo.distinct_dates("metrics_daily"),
         "option_eod_days": status_repo.distinct_dates("option_eod"),
         "earnings_backfill_progress": earnings_backfill_progress(),
+        "earnings_backfill_ca_progress": earnings_backfill_progress(job=CA_BACKFILL_JOB),
         "row_counts": status_repo.row_counts(),
         "jobs": [_job(r) for r in latest + recent],
         "db_size_bytes": status_repo.db_size_bytes(),

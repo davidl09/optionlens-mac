@@ -156,8 +156,10 @@ CURATED: dict[str, Curated] = {
     "GET /api/symbol/{sym}/vol-seasonality": Curated("symbol_vol_seasonality", f"Average IV30 / HV20 by calendar month. "
                                                      f"{U_FRAC}"),
     "GET /api/symbol/{sym}/earnings": Curated("symbol_earnings", "Earnings: next date with implied vs historical move, "
-                                              "past events (timing, EPS, surprise, gap / move, drift) and stats. "
-                                              f"{U_FRAC}"),
+                                              "past events (timing, EPS, surprise, gap / move, drift, source) and "
+                                              "stats. Sources: Nasdaq (US listings); TMX Money, else Yahoo Finance "
+                                              "(Canadian listings, unofficial endpoints); unavailable / next_missing "
+                                              f"say why dates are missing. {U_FRAC}"),
     "GET /api/symbol/{sym}/earnings/strategies": Curated("symbol_earnings_strategies", "Backtest of option strategies "
                                                          "around past earnings (lookback events, entry/exit days "
                                                          "relative to the event): win rate, returns, real vs model-"

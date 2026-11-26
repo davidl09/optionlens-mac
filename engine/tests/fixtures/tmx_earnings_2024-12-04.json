@@ -1,0 +1,78 @@
+{
+ "data": {
+  "getEnhancedEarningsForDate": [
+   {
+    "symbol": "RY",
+    "companyName": "Royal Bank of Canada",
+    "announceTime": "BTO",
+    "estimatedEps": 3,
+    "actualEps": 3.07,
+    "epsSurprisePercent": 2.3333,
+    "epsSurpriseDollar": 0.07
+   },
+   {
+    "symbol": "TRX",
+    "companyName": "TRX Gold Corporation",
+    "announceTime": "N/A",
+    "estimatedEps": 0.01,
+    "actualEps": 0.01,
+    "epsSurprisePercent": 0,
+    "epsSurpriseDollar": 0
+   },
+   {
+    "symbol": "AXL",
+    "companyName": "Arrow Exploration Corp.",
+    "announceTime": "N/A",
+    "estimatedEps": "N/A",
+    "actualEps": 0.03,
+    "epsSurprisePercent": "N/A",
+    "epsSurpriseDollar": "N/A"
+   },
+   {
+    "symbol": "BKMT",
+    "companyName": "Blockmint Technologies Inc.",
+    "announceTime": "N/A",
+    "estimatedEps": "N/A",
+    "actualEps": "N/A",
+    "epsSurprisePercent": "N/A",
+    "epsSurpriseDollar": "N/A"
+   },
+   {
+    "symbol": "DTOL",
+    "companyName": "D2L Inc. Subordinate Voting Shares",
+    "announceTime": "AMC",
+    "estimatedEps": 0.16,
+    "actualEps": 0.14,
+    "epsSurprisePercent": -12.5,
+    "epsSurpriseDollar": -0.02
+   },
+   {
+    "symbol": "EQB",
+    "companyName": "EQB Inc.",
+    "announceTime": "AMC",
+    "estimatedEps": 2.9,
+    "actualEps": 2.51,
+    "epsSurprisePercent": -13.4483,
+    "epsSurpriseDollar": -0.39
+   },
+   {
+    "symbol": "CEO.H",
+    "companyName": "Clydesdale Resources Inc.",
+    "announceTime": "N/A",
+    "estimatedEps": "N/A",
+    "actualEps": "N/A",
+    "epsSurprisePercent": "N/A",
+    "epsSurpriseDollar": "N/A"
+   },
+   {
+    "symbol": "EPO.H",
+    "companyName": "Encanto Potash Corp.",
+    "announceTime": "N/A",
+    "estimatedEps": "N/A",
+    "actualEps": "N/A",
+    "epsSurprisePercent": "N/A",
+    "epsSurpriseDollar": "N/A"
+   }
+  ]
+ }
+}

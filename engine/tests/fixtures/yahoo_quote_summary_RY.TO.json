@@ -1,0 +1,53 @@
+{
+ "_fixture_note": "NOT RECORDED: built from the published shape of Yahoo Finance's quoteSummary answer (modules=calendarEvents). On 2026-11-26 Yahoo's crumb endpoint answered 429 to OptionLens's honest client, so no live answer could be recorded. Values are illustrative (RY.TO, Q4 2026 before the open).",
+ "quoteSummary": {
+  "result": [
+   {
+    "calendarEvents": {
+     "maxAge": 1,
+     "earnings": {
+      "earningsDate": [
+       {
+        "raw": 1796295600,
+        "fmt": "2026-12-03"
+       }
+      ],
+      "earningsCallDate": [
+       {
+        "raw": 1796302800,
+        "fmt": "2026-12-03"
+       }
+      ],
+      "isEarningsDateEstimate": false,
+      "earningsAverage": {
+       "raw": 4.15,
+       "fmt": "4.15"
+      },
+      "earningsLow": {
+       "raw": 3.98,
+       "fmt": "3.98"
+      },
+      "earningsHigh": {
+       "raw": 4.3,
+       "fmt": "4.30"
+      },
+      "revenueAverage": {
+       "raw": 17700000000,
+       "fmt": "17.7B",
+       "longFmt": "17,700,000,000"
+      }
+     },
+     "exDividendDate": {
+      "raw": 1793059200,
+      "fmt": "2026-10-27"
+     },
+     "dividendDate": {
+      "raw": 1795478400,
+      "fmt": "2026-11-24"
+     }
+    }
+   }
+  ],
+  "error": null
+ }
+}

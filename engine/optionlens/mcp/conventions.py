@@ -18,9 +18,11 @@ CONVENTIONS = """\
   point (0.01 of IV). Position greeks (calc_strategy) are totals for the position in $.
 - Volume and open interest are contracts (options) or shares (stocks); premium is dollars.
 - Dates YYYY-MM-DD (New York trading days); times ISO-8601 with offset. dte = calendar days to expiry.
-- Universe reports take `market`: US (default), CA or all (aggregates: US or CA only); earnings, dividend and Nasdaq
-  calendar reports cover US listings only. Earnings dates and dividend histories of Canadian listings are not
-  available (`unavailable` says why); their risk-free rate is the Bank of Canada 3-month T-bill.
+- Universe reports take `market`: US (default), CA or all (aggregates: US or CA only); earnings reports too, the
+  dividend and Nasdaq calendar reports cover US listings only. Earnings of US listings come from Nasdaq, of Canadian
+  listings from TMX Money, else Yahoo Finance (unofficial endpoints; `source` names who reported each event; without
+  a date `unavailable` / `next_missing` say why). Dividend histories of Canadian listings are not available
+  (`unavailable` says why); their risk-free rate is the Bank of Canada 3-month T-bill.
 - Report columns carry `fmt`: pct / pct_signed / vol = fraction, money = per share in the row's currency, bigmoney =
   amount in the row's currency, int / num /
   num2 = plain numbers, ratio = x times, date / datetime, osi = option code, badge / text / bool.

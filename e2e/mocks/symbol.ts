@@ -186,7 +186,7 @@ function baseSummary(sym: string): SymbolSummary {
     iv30: 0.274, iv30_asof: TODAY_NY, iv_rank: null, iv_percentile: null, iv_history_days: 12, hv20: 0.221, iv_hv_ratio: 1.24,
     call_volume: 412_300, put_volume: 288_100, avg_option_volume_20d: null, avg_option_volume_days: 0, rel_option_volume: null, pc_volume_ratio: 0.7, total_oi: 5_500_000,
     returns: { d1: 0.0126, d5: -0.018, m1: 0.041, m3: 0.083, m6: 0.12, ytd: 0.19, y1: 0.24, y3: null },
-    next_earnings: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: null, avg_abs_move_pct: 0.038 },
+    next_earnings: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: null, avg_abs_move_pct: 0.038, source: "nasdaq" }, next_earnings_missing: null,
     next_dividend: { ex_date: "2026-11-24", amount: 0.26, days: 5, yield: 0.0045, source: "nasdaq" }, key_stats: keyStats(sym),
     support: [224.5, 218.2, 210.0], resistance: [236.8, 241.3, 248.1],
     rsi14: 58.2, atr14_pct: 0.0172, sma20: 228.4, sma50: 224.9, sma200: 211.7,
@@ -290,11 +290,12 @@ export function volSeasonality(sym: string): VolSeasonality {
 
 export function earnings(sym: string): Earnings {
   reseed(23);
+  const source = sym.endsWith(".TO") ? "tmx" as const : "nasdaq" as const;   // Canadian listings: TMX Money
   const events = Array.from({ length: 16 }, (_, i) => {
     const date = addDays("2026-10-30", -91 * i);
     const move = round((rnd() - 0.45) * 0.12, 4);
     return {
-      date, timing: "amc" as const, timing_inferred: i % 5 === 3, reaction_date: addDays(date, 1), fiscal_quarter: `Q${((3 - i) % 4 + 4) % 4 + 1} ${2026 - Math.floor(i / 4)}`,
+      date, timing: "amc" as const, timing_inferred: i % 5 === 3, reaction_date: addDays(date, 1), source, fiscal_quarter: `Q${((3 - i) % 4 + 4) % 4 + 1} ${2026 - Math.floor(i / 4)}`,
       eps_estimate: round(1.5 + rnd() * 0.5), eps_actual: round(1.55 + rnd() * 0.5), surprise_pct: round((rnd() - 0.3) * 0.1, 4),
       pre_close: round(200 + rnd() * 30), gap_pct: round(move * 0.8, 4), move_pct: move, max_move_pct: round(Math.abs(move) * 1.3, 4),
       pre_drift_5: round((rnd() - 0.5) * 0.05, 4), pre_drift_10: round((rnd() - 0.5) * 0.07, 4), post_drift_1: round((rnd() - 0.5) * 0.03, 4),
@@ -304,8 +305,8 @@ export function earnings(sym: string): Earnings {
   });
   const stats = { count: 12, avg_move: 0.006, avg_abs_move: 0.038, median_abs_move: 0.033, stdev_move: 0.047, up_pct: 0.58, max_up: 0.072, max_down: -0.061, avg_abs_gap: 0.031, avg_pre_drift_5: 0.004, avg_post_drift_5: -0.002, avg_post_drift_20: 0.011 };
   return {
-    symbol: sym, next: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: 0.049, avg_abs_move_pct: 0.038, excess_implied_move_pct: 0.041, implied_vs_hist_ratio: 1.29, expiry_used: "2027-01-29" },
-    events, stats, stats_all: { ...stats, count: 16 }, unavailable: null,
+    symbol: sym, next: { date: "2027-01-28", timing: "amc", days: 70, implied_move_pct: 0.049, avg_abs_move_pct: 0.038, excess_implied_move_pct: 0.041, implied_vs_hist_ratio: 1.29, expiry_used: "2027-01-29", source },
+    events, stats, stats_all: { ...stats, count: 16 }, unavailable: null, next_missing: null,
   };
 }
 

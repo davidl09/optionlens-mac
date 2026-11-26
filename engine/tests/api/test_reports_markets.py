@@ -83,9 +83,37 @@ def test_aggregates_never_mix_markets(ca_seeded):
 
 
 def test_us_only_sources_have_no_market_param_and_no_canadian_rows(ca_seeded):
-    for rid in ("earnings-calendar", "dividend-calendar", "splits-calendar", "premarket-movers"):
+    for rid in ("dividend-calendar", "splits-calendar", "premarket-movers"):
         assert "market" not in {p["key"] for p in registry.get(rid).as_dict()["params"]}, rid
     assert CA not in _syms(registry.run_sync("best-dividends"))
+
+
+def test_earnings_reports_cover_both_markets(ca_seeded):
+    """Canadian listings' earnings come from TMX Money / Yahoo Finance: the earnings reports have the market filter
+    (US by default) and the per-day summary never mixes markets."""
+    from optionlens.models import EarningsEvent
+    from optionlens.repo import earnings
+    from optionlens.services.reports.base import today
+    d = today()
+    earnings.upsert_earnings([EarningsEvent(CA, d, "bmo", "Q4 2026", None, 4.15, None, None, "tmx")])
+    _clear_caches()
+    try:
+        prm = {p["key"]: p for p in registry.get("earnings-calendar").as_dict()["params"]}
+        assert [o["value"] for o in prm["market"]["options"]] == ["US", "CA", "all"]
+        summary = {p["key"]: p for p in registry.get("earnings-upcoming-summary").as_dict()["params"]}
+        assert [o["value"] for o in summary["market"]["options"]] == ["US", "CA"]
+        us = registry.run_sync("earnings-calendar", {"start": d.isoformat(), "end": d.isoformat()})
+        assert CA not in _syms(us)
+        ca = registry.run_sync("earnings-calendar", {"start": d.isoformat(), "end": d.isoformat(), "market": "CA"})
+        row = next(r for r in ca["rows"] if r["symbol"] == CA)
+        assert row["source"] == "tmx" and row["currency"] == "CAD" and row["eps_estimate"] == 4.15
+        days = registry.run_sync("earnings-upcoming-summary", {"market": "CA", "days": "1"})["rows"]
+        assert days and days[0]["count"] == 1 and days[0]["notable"] == CA
+        us_days = registry.run_sync("earnings-upcoming-summary", {"days": "1"})["rows"]
+        assert all(CA not in r["notable"] for r in us_days)
+    finally:
+        earnings.replace_day(d, [], "tmx")
+        _clear_caches()
 
 
 def test_explicit_symbols_are_shown_whatever_the_market(ca_seeded):
@@ -111,9 +139,34 @@ def test_canadian_symbol_pages(ca_seeded, api):
     s = api.get(f"/api/symbol/{CA}/summary").json()
     assert (s["market"], s["exchange"], s["currency"]) == ("CA", "TSX", "CAD")
     e = api.get(f"/api/symbol/{CA}/earnings").json()
-    assert e["events"] == [] and "not available" in e["unavailable"]
+    assert e["events"] == [] and e["unavailable"].startswith(f"Earnings dates for {CA} are not available: not looked up")
+    assert "TMX Money, else Yahoo Finance" in e["next_missing"] and s["next_earnings_missing"] == e["next_missing"]
     assert api.get("/api/symbol/AAPL/earnings").json()["unavailable"] is None
     d = api.get(f"/api/symbol/{CA}/dividends").json()
     assert d["history"] == [] and "current dividend Questrade reports" in d["unavailable"]
     ch = api.get(f"/api/symbol/{CA}/chain").json()
     assert ch["symbol"] == CA and ch["calls"] and all(r["osi"].startswith("RY.TO") for r in ch["calls"] + ch["puts"])
+
+
+def test_canadian_earnings_reach_the_chain_and_pages(ca_seeded, api):
+    """A Canadian listing's next earnings (from TMX Money) is the chain's next_earnings / next_reaction, so the
+    calculator's IV-crush model and earnings_before_expiry see it, and the pages show its source."""
+    from optionlens.models import EarningsEvent
+    from optionlens.repo import earnings
+    from optionlens.services import context
+    from optionlens.services.reports.base import today
+    cal = calendar_for(CA)
+    d = cal.add_trading_days(today(), 5)
+    earnings.upsert_earnings([EarningsEvent(CA, d, "amc", "Q4 2026", None, 4.15, None, None, "tmx")])
+    _clear_caches()
+    try:
+        ca = context.load_chain_arrays(CA, ensure_fresh=False)
+        assert ca.next_earnings == d and ca.next_reaction == cal.next_trading_day(d)
+        e = api.get(f"/api/symbol/{CA}/earnings").json()
+        assert e["unavailable"] is None and e["next_missing"] is None
+        assert (e["next"]["date"], e["next"]["timing"], e["next"]["source"]) == (d.isoformat(), "amc", "tmx")
+        s = api.get(f"/api/symbol/{CA}/summary").json()
+        assert s["next_earnings"]["source"] == "tmx" and s["next_earnings_missing"] is None
+    finally:
+        earnings.replace_day(d, [], "tmx")
+        _clear_caches()

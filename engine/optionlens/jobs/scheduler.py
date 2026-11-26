@@ -158,6 +158,8 @@ def build_jobs() -> dict[str, Job]:
         Job("splits", prices.splits, daily(time(6, 40))),
         Job("earnings", calendars.earnings, daily(time(5, 30))),
         Job("earnings_backfill", calendars.earnings_backfill, daily(time(4, 0))),  # no-op once complete
+        Job("earnings_ca", calendars.earnings_ca, daily(time(5, 35))),
+        Job("earnings_backfill_ca", calendars.earnings_backfill_ca, daily(time(4, 15))),  # no-op once complete
         Job("dividends", calendars.dividends, daily(time(5, 45))),
         Job("dividends_history", calendars.dividends_history, daily(time(6, 30), {SUN})),
         Job("vix", marketdata.vix, manual(), catch_up=False),

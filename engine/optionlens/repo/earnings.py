@@ -3,8 +3,8 @@ listings, TMX Money / Yahoo Finance for Canadian ones (EarningsEvent.source)."""
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
-from typing import Any, Iterable, Sequence
+from datetime import date, datetime
+from typing import Any, Iterable, Mapping, Sequence
 
 from .. import db
 from ..models import EarningsEvent
@@ -38,13 +38,15 @@ def _merged(cur: Any, events: list[EarningsEvent]) -> list[EarningsEvent]:
 
 def replace_day(day: date, events: Iterable[EarningsEvent], source: str) -> int:
     """Replace the events of `source` dated `day` with `events` (drops rescheduled ones; keeps known values the
-    new rows lack; other sources' rows stay). Returns rows written."""
+    new rows lack; other sources' rows of that day stay unless `events` has the same symbol, which it replaces).
+    Returns rows written."""
     uniq = list({e.symbol: e for e in events if e.date == day}.values())
     if any(e.source != source for e in uniq):
         raise ValueError(f"replace_day({day}, source={source!r}) given rows of another source")
     with db.write() as cur:
         rows = _merged(cur, uniq)
-        cur.execute("DELETE FROM earnings WHERE date = ? AND source = ?", [day, source])
+        cur.execute("DELETE FROM earnings WHERE date = ? AND (source = ? OR symbol IN (SELECT unnest(?::VARCHAR[])))",
+                    [day, source, [e.symbol for e in uniq]])
         return insert_arrow(cur, "earnings", to_columns(rows, _FIELDS))
 
 
@@ -53,6 +55,47 @@ def upsert_earnings(events: Iterable[EarningsEvent]) -> int:
     uniq = list({(e.symbol, e.date): e for e in events}.values())
     with db.write() as cur:
         return insert_arrow(cur, "earnings", to_columns(_merged(cur, uniq), _FIELDS), "INSERT OR REPLACE")
+
+
+def replace_upcoming(events: Mapping[str, EarningsEvent], since: date, sources: Sequence[str]) -> int:
+    """Each symbol's next event as a source selected it (sources/ca_earnings.py): the symbol's other rows dated on/after
+    `since` from `sources` go (a moved date), then the event is upserted. Returns rows written."""
+    if not events:
+        return 0
+    syms, dates = list(events), [e.date for e in events.values()]
+    with db.write() as cur:
+        rows = _merged(cur, list(events.values()))
+        cur.execute("""DELETE FROM earnings WHERE date >= ? AND source IN (SELECT unnest(?::VARCHAR[]))
+                         AND symbol IN (SELECT unnest(?::VARCHAR[]))""", [since, list(sources), syms])
+        cur.execute("DELETE FROM earnings WHERE (symbol, date) IN (SELECT unnest(?::VARCHAR[]), unnest(?::DATE[]))",
+                    [syms, dates])
+        return insert_arrow(cur, "earnings", to_columns(rows, _FIELDS))
+
+
+def has_events(symbol: str) -> bool:
+    return bool(query("SELECT 1 FROM earnings WHERE symbol = ? LIMIT 1", [symbol]))
+
+
+# ----------------------------------------------------------------------------- next-earnings lookups (Canada)
+def record_lookups(rows: Iterable[tuple[str, datetime, str | None, str | None]]) -> int:
+    """Store (symbol, checked_at, source | None, detail | None) of a lookup run (one row per symbol, latest wins)."""
+    data = list({r[0]: r for r in rows}.values())
+    with db.write() as cur:
+        return insert_arrow(cur, "earnings_lookups", {k: [r[i] for r in data] for i, k in
+                                                      enumerate(("symbol", "checked_at", "source", "detail"))},
+                            "INSERT OR REPLACE")
+
+
+def lookup(symbol: str) -> dict | None:
+    """{symbol, checked_at, source, detail} of the symbol's latest lookup, or None."""
+    rows = query("SELECT symbol, checked_at, source, detail FROM earnings_lookups WHERE symbol = ?", [symbol])
+    return rows[0] if rows else None
+
+
+def answered_since(since: datetime) -> set[str]:
+    """Symbols a source answered in a lookup at/after `since` (the per-day cache of the lookup job)."""
+    return {r["symbol"] for r in query(
+        "SELECT symbol FROM earnings_lookups WHERE source IS NOT NULL AND checked_at >= ?", [since])}
 
 
 def for_symbol(symbol: str) -> list[EarningsEvent]:

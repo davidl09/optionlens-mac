@@ -1,0 +1,128 @@
+{
+ "data": {
+  "quote": {
+   "data": [
+    {
+     "event_id": "55LF33LB",
+     "company_id": "2220",
+     "isin": "CA7800871021",
+     "stock_symbol": "RY",
+     "event_type": "EAD",
+     "event_date": "12/03/2026",
+     "event_status": "CON",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=329029",
+     "event_name": "Q4 2026 Earnings Announcement-Before Mkt",
+     "qmSymbol": "RY:CA"
+    },
+    {
+     "event_id": "55QT47YR",
+     "company_id": "1431684814",
+     "isin": "CA8787422044",
+     "stock_symbol": "TECK",
+     "event_type": "EAD",
+     "event_date": "02/25/2027",
+     "event_status": "UNC",
+     "event_url": "",
+     "event_name": "Q4 2026 Earnings Announcement-Before Mkt",
+     "qmSymbol": "TECK.B:CA"
+    },
+    {
+     "event_id": "55T54FST",
+     "company_id": "1431684711",
+     "isin": "CA2483561072",
+     "stock_symbol": "DNN",
+     "event_type": "EAD",
+     "event_date": "03/10/2027",
+     "event_status": "UNC",
+     "event_url": "",
+     "event_name": "Q4 2026 Earnings Announcement-During Mkt",
+     "qmSymbol": "DML:CA"
+    },
+    {
+     "event_id": "55TC004V",
+     "company_id": "1431696572",
+     "isin": "CA94947L1022",
+     "stock_symbol": "CA:WELL",
+     "event_type": "EAD",
+     "event_date": "03/18/2027",
+     "event_status": "UNC",
+     "event_url": "",
+     "event_name": "Q4 2026 Earnings Announcement-After Mkt",
+     "qmSymbol": "WELL:CA"
+    },
+    {
+     "event_id": "55VU2KLG",
+     "company_id": "1431689246",
+     "isin": "CA01626P1484",
+     "stock_symbol": "CA:ATD",
+     "event_type": "EAD",
+     "event_date": "03/16/2027",
+     "event_status": "UNC",
+     "event_url": "",
+     "event_name": "Q3 2027 Earnings Announcement-After Mkt",
+     "qmSymbol": "ATD:CA"
+    },
+    {
+     "event_id": "5L982UAP",
+     "company_id": "2220",
+     "isin": "CA7800871021",
+     "stock_symbol": "RY",
+     "event_type": "ECC",
+     "event_date": "12/03/2026",
+     "event_status": "CON",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=329029",
+     "event_name": "Q4 2026 Earnings Conference Call",
+     "qmSymbol": "RY:CA"
+    },
+    {
+     "event_id": "5LBA30W0",
+     "company_id": "1431689246",
+     "isin": "CA01626P1484",
+     "stock_symbol": "CA:ATD",
+     "event_type": "ECC",
+     "event_date": "11/25/2026",
+     "event_status": "HIS",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=838211",
+     "event_name": "Q2 2027 Earnings Conference Call",
+     "qmSymbol": "ATD:CA"
+    },
+    {
+     "event_id": "5LBA30VZ",
+     "company_id": "1431689246",
+     "isin": "CA01626P1484",
+     "stock_symbol": "CA:ATD",
+     "event_type": "ERA",
+     "event_date": "11/24/2026",
+     "event_status": "HIS",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=846041",
+     "event_name": "Q2 2027 Results Announced",
+     "qmSymbol": "ATD:CA"
+    },
+    {
+     "event_id": "5LET0RWF",
+     "company_id": "1431684814",
+     "isin": "CA8787422044",
+     "stock_symbol": "TECK",
+     "event_type": "DIV",
+     "event_date": "12/15/2026",
+     "event_status": "APP",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=837332",
+     "event_name": "Quarterly Dividend",
+     "qmSymbol": "TECK.B:CA"
+    },
+    {
+     "event_id": "5LHG0NG4",
+     "company_id": "1431689246",
+     "isin": "CA01626P1484",
+     "stock_symbol": "CA:ATD",
+     "event_type": "DIV",
+     "event_date": "12/03/2026",
+     "event_status": "APP",
+     "event_url": "http://mmm.wallstreethorizon.com/u.asp?u=846041",
+     "event_name": "Quarterly Dividend",
+     "qmSymbol": "ATD:CA"
+    }
+   ]
+  }
+ }
+}

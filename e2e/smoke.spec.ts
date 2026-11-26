@@ -193,6 +193,21 @@ test("earnings strategy drill-down", async ({ page }) => {
   clean(p);
 });
 
+test("Canadian earnings carry their source (TMX Money); Status lists the Canadian earnings sources", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/s/RY.TO/earnings");
+  await expect(page.locator(".card", { hasText: "Next earnings" }).locator(".source-badge")).toHaveText("TMX Money");
+  const history = page.locator(".card", { hasText: "Earnings history" });
+  await expect(history.locator("th").filter({ hasText: "Source" })).toBeVisible();
+  await expect(history.locator("td .badge", { hasText: "TMX Money" }).first()).toBeVisible();
+  await page.goto("/s/AAPL/earnings");
+  await expect(page.locator(".card", { hasText: "Next earnings" }).locator(".source-badge")).toHaveText("Nasdaq");
+  await page.goto("/status");
+  await expect(page.getByText("Earnings backfill (Canada)")).toBeVisible();
+  await expect(page.getByText(/Yahoo Finance: Canadian listings' earnings dates \(fallback; unofficial endpoint\) · 429/)).toBeVisible();
+  clean(p);
+});
+
 test("search, theme, bell", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/");

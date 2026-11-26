@@ -117,7 +117,7 @@ def _event_row(a: BarArrays, ev: EarningsEvent, implied: Mapping[date, float] | 
     timing = inferred_timing(ev, react) if inferred else ev.timing
     row = {
         "date": ev.date, "timing": timing, "timing_inferred": inferred and timing != "unknown",
-        "timing_label": timing_label(timing, inferred), "reaction_date": react,
+        "timing_label": timing_label(timing, inferred), "reaction_date": react, "source": ev.source,
         "fiscal_quarter": ev.fiscal_quarter, "eps_estimate": ev.eps_estimate,
         "eps_actual": ev.eps_actual, "surprise_pct": ev.surprise_pct,
         "pre_close": None, "gap_pct": None, "move_pct": None, "max_move_pct": None,

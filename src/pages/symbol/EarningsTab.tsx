@@ -8,7 +8,8 @@ import { BarChart } from "../../components/charts/Charts";
 import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatItem } from "../../components/StatGrid";
-import { Async, Card, InfoBox, Segmented } from "../../components/ui";
+import { Async, Card, InfoBox, Segmented, SourceBadge } from "../../components/ui";
+import { nextEarningsSub, noNextEarningsText } from "../../lib/earnings";
 import { useSym } from "./shared";
 
 const EVENT_COLUMNS: ColumnDef[] = [
@@ -150,12 +151,12 @@ function EarningsBody({ e, sym }: { e: Earnings; sym: string }) {
     <div className="stack">
       <Card title="Next earnings">
         {n ? <StatGrid items={[
-          { label: "Date", value: n.date, fmt: "date", sub: `${n.timing.toUpperCase()} · in ${n.days}d` },
+          { label: "Date", value: n.date, fmt: "date", sub: <>{nextEarningsSub(n)} <SourceBadge source={n.source} /></> },
           { label: "Implied move", value: n.implied_move_pct, fmt: "pct", hint: "No stored straddle covering the event.", sub: n.expiry_used ? `exp ${n.expiry_used}` : undefined },
           { label: "Excess implied", value: n.excess_implied_move_pct, fmt: "pct", title: "Event-day move implied beyond the normal daily volatility (term-structure method)" },
           { label: "Avg |move| (hist)", value: n.avg_abs_move_pct, fmt: "pct" },
           { label: "Implied / hist", value: n.implied_vs_hist_ratio, fmt: "ratio" },
-        ]} /> : <div className="muted small">No upcoming earnings date for {sym} in the Nasdaq calendar (collected daily, 90 days ahead).</div>}
+        ]} /> : <div className="muted small">{noNextEarningsText(sym, e.next_missing)}</div>}
       </Card>
       <Card title="Reaction statistics" actions={<Segmented label="Scope" value={scope} onChange={setScope} options={[{ value: "recent", label: "Last 12" }, { value: "all", label: "All" }]} />}>
         <StatGrid items={statItems(scope === "recent" ? e.stats : e.stats_all)} />

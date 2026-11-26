@@ -4,13 +4,13 @@ upcoming summary."""
 from __future__ import annotations
 
 from dataclasses import replace
-
 from datetime import date, timedelta
 from typing import Iterable, Sequence
 
 import numpy as np
 
 from ...analytics import chainmetrics as cm
+from ...analytics import markets
 from ...analytics import earnings as earn_a
 from ...analytics import optbacktest
 from ...analytics.calendar import is_trading_day, next_trading_day
@@ -44,6 +44,8 @@ def _events_in(p: RunParams, f: Frame, start: date, end: date) -> list[EarningsE
     evs = earn_repo.between(start, end, p.scope)
     out = []
     for e in evs:
+        if p.market is not None and markets.market_of(e.symbol).code != p.market:
+            continue   # the market filter (aggregates such as the summary have no symbol rows to drop later)
         i = pos.get(e.symbol)
         if p.get("universe_only") and p.scope is None and (i is None or not f["in_universe"][i]):
             continue
@@ -134,6 +136,7 @@ def calendar_rows(p: RunParams, start: date, end: date) -> tuple[list[dict], Fra
         im = imp.get(e.symbol, {})
         rows.append({
             "date": e.date, "time": TIME_LABEL.get(e.timing, "n/a"), "timing": e.timing, "symbol": e.symbol,
+            "source": e.source,
             "name": _fval(f, i, "name"), "market_cap": _fval(f, i, "market_cap"), "sector": _fval(f, i, "sector"),
             "price": _fval(f, i, "price"), "change_pct": _fval(f, i, "change_pct"),
             "eps_estimate": e.eps_estimate, "num_estimates": e.num_estimates, "fiscal_quarter": e.fiscal_quarter,
@@ -198,7 +201,7 @@ def run_results(p: RunParams) -> Output:
         i = pos.get(e.symbol)
         imp = symbol_earnings.implied_before(snaps.get((e.symbol, e.date), []), ev_row["reaction_date"])
         mv = ev_row["move_pct"]
-        rows.append({"date": e.date, "time": ev_row["timing_label"], "symbol": e.symbol,
+        rows.append({"date": e.date, "time": ev_row["timing_label"], "symbol": e.symbol, "source": e.source,
                      "name": _fval(f, i, "name"), "market_cap": _fval(f, i, "market_cap"), "sector": _fval(f, i, "sector"),
                      "fiscal_quarter": e.fiscal_quarter, "eps_actual": e.eps_actual, "eps_estimate": e.eps_estimate,
                      "surprise_pct": e.surprise_pct, "reaction_date": ev_row["reaction_date"],
@@ -414,5 +417,6 @@ SUMMARY = ReportDef(
     "Per day for the next 30 days: number of reporters, BMO/AMC split, total market cap and notable names.",
     (p_int("days", "Days ahead", 30, 1, 90), MIN_MCAP, UNIVERSE_ONLY), SUM_COLS, run_summary, ("date", "asc"))
 
-# US listings only: the data comes from the Nasdaq earnings calendar (no free source covers Canadian listings).
-REPORTS = tuple(replace(d, markets="us") for d in (CALENDAR, RESULTS, PATTERN, STRATEGY_SCREENER, OPPORTUNITIES, SUMMARY))
+# Both markets (US by default): US listings' events from Nasdaq, Canadian listings' from TMX Money / Yahoo Finance
+# (sources/ca_earnings.py); the summary's per-day totals never mix markets.
+REPORTS = (CALENDAR, RESULTS, PATTERN, STRATEGY_SCREENER, OPPORTUNITIES, replace(SUMMARY, markets="one"))

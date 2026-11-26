@@ -80,7 +80,10 @@ def test_status_sources_and_bridge(client):
     client.post("/api/ingest/heartbeat", json={"client": "optionlens-mac 0.1.0", "ibkr_connected": True,
                                                "account_type": "paper"})
     st = client.get("/api/status").json()
-    assert [s["name"] for s in st["sources"]] == ["nasdaq", "treasury", "ibkr-bridge", "questrade"]
+    assert [s["name"] for s in st["sources"]] == ["nasdaq", "treasury", "ibkr-bridge", "questrade", "tmx", "yahoo"]
+    tmx, yahoo = st["sources"][4:]                                                 # no Canadian lookup yet
+    assert tmx["ok"] is None and tmx["detail"].startswith("TMX Money: Canadian listings' earnings dates (first source")
+    assert yahoo["ok"] is None and "(fallback; unofficial endpoint) · no lookup yet" in yahoo["detail"]
     qt = st["sources"][3]                                                          # configured, not connected
     assert qt["ok"] is None and qt["detail"].startswith("not connected") and "0/10,500 calls this hour" in qt["detail"]
     assert st["bridge"]["connected"] is True and st["bridge"]["client"] == "optionlens-mac 0.1.0"

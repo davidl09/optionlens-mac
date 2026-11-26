@@ -10,7 +10,7 @@ export function status(): Status {
   return {
     now: NOW, market_open: true, next_sweep_at: "2026-11-19T16:00:00-05:00", universe_size: 1124, optionable_count: 1098,
     options_listed_count: 1110, no_options_count: 14,
-    last_sweep_at: NOW, last_eod_date: "2026-11-18", iv_history_days: 12, option_eod_days: 11, earnings_backfill_progress: 0.64,
+    last_sweep_at: NOW, last_eod_date: "2026-11-18", iv_history_days: 12, option_eod_days: 11, earnings_backfill_progress: 0.64, earnings_backfill_ca_progress: 0.3,
     row_counts: { symbols: 1124, daily_bars: 2_712_000, option_eod: 9_870_000, metrics_daily: 13_400, earnings: 41_200 },
     jobs: [
       { job: "sweep", started_at: "2026-11-19T15:30:00-05:00", finished_at: "2026-11-19T15:41:12-05:00", ok: true, detail: "1098 symbols" },
@@ -26,6 +26,8 @@ export function status(): Status {
       { name: "nasdaq", ok: true, last_success_at: "2026-11-19T15:20:00-05:00", detail: null },
       { name: "treasury", ok: false, last_success_at: "2026-11-15T07:00:00-05:00", detail: "HTTP 503" },
       { name: "questrade", ok: null, last_success_at: null, detail: "not connected (Settings → Data sources) · 0/10,500 calls this hour" },
+      { name: "tmx", ok: true, last_success_at: "2026-11-19T05:41:00-05:00", detail: "TMX Money: Canadian listings' earnings dates (first source; unofficial endpoint)" },
+      { name: "yahoo", ok: false, last_success_at: null, detail: "Yahoo Finance: Canadian listings' earnings dates (fallback; unofficial endpoint) · 429 https://query2.finance.yahoo.com/v1/test/getcrumb" },
     ],
     bridge: { connected: true, last_push_at: NOW, client: "optionlens-mac 0.1.0" },
   };

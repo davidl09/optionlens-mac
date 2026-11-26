@@ -76,7 +76,8 @@ def test_eod_and_daily_schedules():
 
 
 def test_all_spec_jobs_defined():
-    spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill",
+    spec = {"universe", "prices_backfill", "prices_refresh", "earnings", "earnings_backfill", "earnings_ca",
+            "earnings_backfill_ca",
             "dividends", "dividends_history", "vix", "rates", "rates_cad", "universe_ca", "sweep", "sweep_final",
             "sweep_fill", "eod", "prune", "splits", "extended_quotes"}
     # services.alerts.install() may add its own digest job when it has been imported by other tests

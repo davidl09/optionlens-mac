@@ -70,7 +70,8 @@ export function StatusPage() {
                 { label: "IV history", value: s.iv_history_days, fmt: "int", sub: "days in metrics" },
                 { label: "EOD chains", value: s.option_eod_days, fmt: "int", sub: "days stored" },
                 { label: "DB size", node: <span>{fmt(s.db_size_bytes / 1e6, "num")} MB</span> },
-                { label: "Earnings backfill", node: <Progress value={s.earnings_backfill_progress} /> },
+                { label: "Earnings backfill", node: <Progress value={s.earnings_backfill_progress} />, title: "3 years of Nasdaq's earnings calendar (US listings)" },
+                ...(s.earnings_backfill_ca_progress !== undefined ? [{ label: "Earnings backfill (Canada)", node: <Progress value={s.earnings_backfill_ca_progress} />, title: "3 years of TMX Money's earnings calendar (Canadian listings)" }] : []),
               ]} />
             </Card>
             <div className="grid-2">
@@ -102,8 +103,9 @@ export function AboutPage() {
             <li><b>Interactive Brokers (IBKR bridge)</b> — option chains (bid/ask, volume, open interest, model greeks), per-underlying option volume / open interest / IV for the whole universe, IV and HV history, dividend history (derived from IBKR's dividend-adjusted daily closes, for every listing), VIX-family quotes and history, pushed from your IB Gateway or TWS. Real-time where your IBKR account has the subscription, otherwise 15-minute delayed (labelled <span className="badge warn">delayed</span>).</li>
             <li><b>Questrade</b> — option chains (bid/ask, volume, open interest, IV and greeks) and underlying quotes (with VWAP and trading halts) for the whole universe, extended-hours quotes for the pre-market / after-hours movers, and once a day each symbol's P/E, EPS, market cap, shares, 52-week range, average volumes, sector and current dividend — fetched by the engine with your Questrade API token (Settings → Data sources). Real-time with a Questrade real-time data package, otherwise delayed (labelled). When both IBKR and Questrade deliver a chain, the better one is used: a closing snapshot over an intraday one, real-time over delayed, more quoted contracts, then the fresher fetch.</li>
             <li><b>Nasdaq public endpoints</b> — daily price history, earnings and dividend calendars, dividend history, company profile, financial statements, insider filings, headlines and extended-hours quotes.</li>
+            <li><b>TMX Money, else Yahoo Finance</b> — earnings of Canadian listings: TMX Money's earnings calendar (dates, before-open / after-close, EPS estimate and actual, 3 years back) and its per-company upcoming dates; Yahoo Finance's next date when TMX Money has none or cannot be reached. Both are unofficial endpoints that may change or stop answering (Status → Data sources shows how they did); OptionLens asks them as itself, once a second, once a day. Each event is labelled with its source.</li>
             <li><b>U.S. Treasury</b> — the 13-week bill rate, used as the risk-free rate in option models of US listings.</li>
-            <li><b>Canadian markets (with Questrade)</b> — about 200 of the largest TSX / TSX Venture stocks with Montréal Exchange options plus optionable Canadian ETFs (symbols like <b>RY.TO</b>; <b>RY</b> is the NYSE listing): chains, quotes, daily and intraday history from Questrade, prices in CAD (<b>C$</b>), sessions on the TSX holiday calendar, and the <b>Bank of Canada</b> 3-month T-bill as their risk-free rate. Reports have a Market filter (US by default).</li>
+            <li><b>Canadian markets (with Questrade)</b> — about 200 of the largest TSX / TSX Venture stocks with Montréal Exchange options plus optionable Canadian ETFs (symbols like <b>RY.TO</b>; <b>RY</b> is the NYSE listing): chains, quotes, daily and intraday history from Questrade, prices in CAD (<b>C$</b>), sessions on the TSX holiday calendar, and the <b>Bank of Canada</b> 3-month T-bill as their risk-free rate. Reports have a Market filter (US by default), earnings reports included.</li>
             <li>Everything else (IV rank, term structure, skew, the IV surface, expected moves, backtests…) is computed locally from those inputs.</li>
           </ul>
         </Card>
@@ -122,7 +124,7 @@ export function AboutPage() {
       <Card title="Not available (no free source)">
         <ul className="prose-list cols-2">
           <li>Individual option trades: time & sales, block and sweep detection, multi-leg trade detection.</li>
-          <li>Canadian listings: earnings dates, dividend histories (only Questrade’s current dividend), financial statements, insider filings and news (the free source, Nasdaq, covers US listings only); extended-hours quotes (the TSX has none). IBKR data for Canadian listings (the bridge stays US-only).</li>
+          <li>Canadian listings: dividend histories (only Questrade’s current dividend), financial statements, insider filings and news (the free source, Nasdaq, covers US listings only); extended-hours quotes (the TSX has none). IBKR data for Canadian listings (the bridge stays US-only). Earnings are available (TMX Money, else Yahoo Finance) except where neither has a date: the Earnings page then says why.</li>
           <li>Order-flow sentiment (whether trades hit the bid or the ask) and large single delta trades.</li>
           <li>Opening/closing auctions and order-imbalance data.</li>
           <li>Short-sale threshold lists.</li>

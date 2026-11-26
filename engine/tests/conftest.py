@@ -1,11 +1,11 @@
-"""Suite-wide guards: tests never reach CBOE (its last fetcher, the index history CSV) or Questrade: the configured
-server-side chain source (Questrade, by default) is an offline stand-in that is not connected."""
+"""Suite-wide guards: tests never reach CBOE (its last fetcher, the index history CSV), Questrade (the configured
+server-side chain source, by default, is an offline stand-in that is not connected), TMX Money or Yahoo Finance."""
 import pytest
 
 from optionlens.jobs import chains, ondemand, source_health
 from optionlens.net import FetchError
 from optionlens.services import refresh
-from optionlens.sources import cboe, chain_source
+from optionlens.sources import cboe, chain_source, tmx, yahoo
 
 
 class OfflineSource:
@@ -39,6 +39,15 @@ def _offline_sources(monkeypatch):
         raise FetchError(f"test://cboe/history/{symbol}", None, "network disabled in tests")
 
     monkeypatch.setattr(cboe, "fetch_history", no_network)
+
+    async def no_tmx(op, query, variables):
+        raise FetchError(f"test://tmx/{op}", None, "network disabled in tests")
+
+    async def no_yahoo(symbol):
+        raise FetchError(f"test://yahoo/{symbol}", None, "network disabled in tests")
+
+    monkeypatch.setattr(tmx, "_query", no_tmx)
+    monkeypatch.setattr(yahoo, "_summary", no_yahoo)
     offline = OfflineSource()
     monkeypatch.setattr(chain_source, "REGISTRY", {"questrade": lambda: offline})
 

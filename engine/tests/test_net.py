@@ -126,3 +126,38 @@ def test_concurrent_block_pages_escalate_once_and_state_survives_restart(tmp_pat
         net._blocks.clear()
         net._blocks_loaded = False
         config.get_settings.cache_clear()
+
+
+def test_post_json_headers_and_a_429_budget(monkeypatch):
+    """POST bodies and per-request headers reach the server; max_throttles=0 gives up at the first 429 (a source that
+    throttles an honest client is left for the fallback instead of waited out)."""
+    import asyncio
+    import json as _json
+    import httpx
+    from optionlens import net
+
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.headers["user-agent"], request.content))
+        if request.url.path == "/throttled":
+            return httpx.Response(429, headers={"content-type": "text/plain"}, text="Too Many Requests")
+        return httpx.Response(200, json={"ok": True})
+
+    net._blocks.clear()
+    net._blocks_loaded = True
+    monkeypatch.setattr(net, "_save_blocks", lambda: None)
+
+    async def run():
+        n = net._net()
+        await n.client.aclose()
+        n.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers={"User-Agent": "default"})
+        got = await net.post_json("https://example.org/graphql", {"q": 1}, headers={"User-Agent": "OptionLens/x"})
+        with pytest.raises(net.FetchError) as e:
+            await _REAL_GET("https://example.org/throttled", max_throttles=0)
+        await net.aclose()
+        return got, e.value
+
+    got, err = asyncio.run(run())
+    assert got == {"ok": True} and seen[0][:2] == ("POST", "OptionLens/x") and _json.loads(seen[0][2]) == {"q": 1}
+    assert err.status == 429 and "Too Many Requests" in str(err) and len(seen) == 2   # one try, no waiting

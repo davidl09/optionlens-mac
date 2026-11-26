@@ -93,6 +93,8 @@ const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutr
   model: { label: "model", tone: "warn", title: "Priced with a Black-Scholes model" },
   cboe: { label: "CBOE", tone: "neutral", title: "CBOE" },
   nasdaq: { label: "Nasdaq", tone: "neutral", title: "Nasdaq public data" },
+  tmx: { label: "TMX Money", tone: "neutral", title: "TMX Money (unofficial endpoint): earnings of Canadian listings" },
+  yahoo: { label: "Yahoo Finance", tone: "neutral", title: "Yahoo Finance (unofficial endpoint): earnings dates of Canadian listings when TMX Money has none" },
   live: { label: "live quotes", tone: "neutral", title: "Built from live quotes: the latest minutes, until the source's own bars for them arrive" },
   "ibkr-adjusted": { label: "IBKR adj.", tone: "neutral", title: "Derived from IBKR's dividend-adjusted vs raw daily closes (amounts in today's shares)" },
   computed: { label: "computed", tone: "neutral", title: "Computed by OptionLens from the data shown (e.g. a VWAP from typical prices × volume)" },
@@ -100,6 +102,11 @@ const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutr
 
 export function isDataSource(v: unknown): v is DataSource {
   return typeof v === "string" && v in SOURCES;
+}
+
+/** A source's name as badges show it ("TMX Money"). */
+export function sourceLabel(source: DataSource): string {
+  return SOURCES[source].label;
 }
 
 /** Where the data came from; `delayed` adds a delayed marker (IBKR without a real-time subscription). */

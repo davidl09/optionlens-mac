@@ -8,7 +8,7 @@ export type Right = "C" | "P";
 export type Pricing = "real" | "model";
 export type SymbolKind = "stock" | "etf" | "index";
 /** Where a value came from (INTEGRATION.md §5). */
-export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "model" | "reconstructed" | "live" | "ibkr-adjusted" | "computed";
+export type DataSource = "vendor" | "ibkr" | "questrade" | "cboe" | "nasdaq" | "tmx" | "yahoo" | "model" | "reconstructed" | "live" | "ibkr-adjusted" | "computed";
 
 /** Markets followed (SPEC §3 "Symbols"): US listings are bare tickers (RY), Canadian ones carry the exchange suffix
  * (RY.TO on the TSX, XYZ.VN on the TSX Venture). A symbol's market fixes its currency. */
@@ -81,7 +81,8 @@ export interface Status {
   last_sweep_at: ISODateTime | null; last_eod_date: ISODate | null;
   iv_history_days: number;            // distinct dates in metrics_daily
   option_eod_days: number;            // distinct dates in option_eod
-  earnings_backfill_progress: number; // 0..1
+  earnings_backfill_progress: number; // 0..1 (Nasdaq, US listings)
+  earnings_backfill_ca_progress: number; // 0..1 (TMX Money, Canadian listings)
   row_counts: Record<string, number>;
   jobs: JobRun[];                     // latest run of each job + last 50 runs
   db_size_bytes: number;
@@ -187,7 +188,8 @@ export interface MarketOverview {
 
 // ---------------- symbol summary ----------------
 export interface ReturnsRow { d1: number | null; d5: number | null; m1: number | null; m3: number | null; m6: number | null; ytd: number | null; y1: number | null; y3: number | null }
-export interface NextEarnings { date: ISODate; timing: "bmo" | "amc" | "unknown"; days: number; implied_move_pct: number | null; avg_abs_move_pct: number | null }
+export interface NextEarnings { date: ISODate; timing: "bmo" | "amc" | "unknown"; days: number; implied_move_pct: number | null; avg_abs_move_pct: number | null;
+  source: DataSource | null }   // nasdaq (US listings) | tmx | yahoo (Canadian listings)
 export interface NextDividend { ex_date: ISODate; amount: number; days: number; yield: number | null; source: DataSource | null }
 /** GET /api/symbol/{sym}/key-stats (INTEGRATION.md §8 "Reference data"): one source of these figures for every page. */
 export interface KeyStats {
@@ -216,6 +218,7 @@ export interface SymbolSummary extends MarketFields {
   rel_option_volume: number | null; pc_volume_ratio: number | null; total_oi: number | null;
   returns: ReturnsRow;
   next_earnings: NextEarnings | null; next_dividend: NextDividend | null;
+  next_earnings_missing: string | null;   // why there is no next earnings date (null when there is one)
   support: number[]; resistance: number[];
   rsi14: number | null; atr14_pct: number | null; sma20: number | null; sma50: number | null; sma200: number | null;
   price_1y: { date: ISODate; close: number }[];
@@ -349,6 +352,7 @@ export interface EarningsEventRow {
   date: ISODate; timing: "bmo" | "amc" | "unknown"; timing_inferred: boolean; reaction_date: ISODate | null;
   /** "BMO", "AMC", "AMC (inferred)" (unknown timing read off the price gaps; timing then holds the inferred one), "n/a". */
   timing_label?: string;
+  source: DataSource | null;    // who reported the event: nasdaq | tmx | yahoo
   fiscal_quarter: string | null; eps_estimate: number | null; eps_actual: number | null; surprise_pct: number | null;
   pre_close: number | null; gap_pct: number | null; move_pct: number | null; max_move_pct: number | null;
   pre_drift_5: number | null; pre_drift_10: number | null;
@@ -366,7 +370,8 @@ export interface Earnings {
   events: EarningsEventRow[];   // newest first, past only (up to 40)
   stats: EarningsStats;         // over last 12
   stats_all: EarningsStats;
-  unavailable: string | null;   // why earnings dates are not available (Canadian listings: Nasdaq covers US only)
+  unavailable: string | null;   // why a Canadian listing has no earnings data (its last TMX Money / Yahoo Finance lookup)
+  next_missing: string | null;  // why there is no next earnings date (null when there is one)
 }
 export interface StrategyBacktestSummary {
   strategy: string; label: string; trades: number; win_rate: number | null; avg_return: number | null; median_return: number | null;

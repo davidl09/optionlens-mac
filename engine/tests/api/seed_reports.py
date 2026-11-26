@@ -150,7 +150,7 @@ def seeded(tmp_path_factory):
     prev_path = db.path()
     mp = pytest.MonkeyPatch()
 
-    async def offline(url, params=None):
+    async def offline(url, params=None, **opts):
         if url.endswith("/info"):          # Nasdaq answers unknown symbols with data: null
             return httpx.Response(200, json={"data": None}, request=httpx.Request("GET", url))
         raise net.FetchError(url, None, "network disabled in tests")

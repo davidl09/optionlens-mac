@@ -30,11 +30,12 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
    IV proxy for model pricing, in order: stored ATM IV for that symbol/date/tenor → stored IV30 →
    `HV30(date) * k` where k = median(IV30/HV30) over stored history for that symbol, else 1.15.
 4. Data is ~15 min delayed (CBOE delayed feed). Show "as of" timestamps everywhere.
-5. Canadian listings (§3 "Symbols and markets"): no free source of earnings dates, dividend histories, financial
-   statements, insider trades or news is used for them (Nasdaq covers US listings only, and a Toronto ticker can name a
-   different US company: T.TO is TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current
-   dividend) cover them like US listings. The engine never sends a Canadian symbol to Nasdaq; the symbol's Earnings
-   and Dividends answers say so in `unavailable`, and earnings / dividend reports cover US listings only.
+5. Canadian listings (§3 "Symbols and markets"): no free source of dividend histories, financial statements, insider
+   trades or news is used for them (Nasdaq covers US listings only, and a Toronto ticker can name a different US
+   company: T.TO is TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current dividend)
+   cover them like US listings. Their earnings come from TMX Money, else Yahoo Finance (unofficial endpoints,
+   INTEGRATION.md §12). The engine never sends a Canadian symbol to Nasdaq; the symbol's Dividends answer (and its
+   Earnings answer when no source has a date) says why in `unavailable`; dividend reports cover US listings only.
 
 ---------------------------------------------------------------------------------------------
 ## 1. Data sources (all free, verified reachable)
@@ -59,11 +60,14 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
 
 | Bank of Canada Valet | `https://www.bankofcanada.ca/valet/observations/TB.CDN.90D.MID/json?start_date=YYYY-MM-DD` | CAD risk-free rate: "Treasury bills, 3-month" mid yield (legacy id V39065), percent, business daily: `observations[] {d, TB.CDN.90D.MID: {v}}` (verified 2026-11-24) |
 | Questrade (user's account) | `symbols/search`, `symbols/:id`, `symbols/:id/options`, `markets/quotes`, `markets/candles/:id` (docs/INTEGRATION.md §8) | Canadian listings: symbol ids (TSX `.TO`, TSX Venture `.VN`, CAD), market cap / hasOptions / yield, Montréal Exchange chains, daily (`OneDay`) and intraday candles |
+| TMX Money (unofficial) | `POST https://app-money.tmx.com/graphql`: `getEnhancedEarningsForDate(date)`, `getWSHEventData(symbols)` (read 2026-11-26) | Canadian listings' earnings calendar (BTO/AMC, EPS est/actual/surprise, years back) and next dates (INTEGRATION.md §12) |
+| Yahoo Finance (unofficial) | cookie `fc.yahoo.com`, crumb `query2…/v1/test/getcrumb`, `query2…/v10/finance/quoteSummary/{SYM}?modules=calendarEvents` | Canadian listings' next earnings date when TMX Money has none (often 429 to an honest client) |
 | Montréal Exchange options list | `https://www.m-x.ca/en/trading/data/options-list` (read once, 2026-11-24) | the equity / ETF option classes bundled as `engine/optionlens/canada.txt` (the Canadian universe's candidates; not fetched at run time) |
 
 All Nasdaq calls need a browser User-Agent and `Accept: application/json`. Use a generic UA,
 never personal info. Rate limits: Nasdaq ≤ 4 req/s, CBOE ≤ 8 concurrent. Retries: 3 with
-exponential backoff on 429/5xx/timeouts. Yahoo is rate-limited from this host: **do not use**.
+exponential backoff on 429/5xx/timeouts. Yahoo throttles non-browser clients: used only as the last fallback for
+Canadian listings' next earnings date, asked as OptionLens and given up at the first 429 (INTEGRATION.md §12).
 Risk-free rate: Treasury 13-week bill (`https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{YEAR}/all?type=daily_treasury_bill_rates&field_tdr_date_value={YEAR}&_format=csv`, column for 13 weeks "COUPON EQUIVALENT"), fallback config `RISK_FREE_RATE=0.04`.
 CAD (Canadian listings' options): Bank of Canada 3-month T-bill (above), fallback config `RISK_FREE_RATE_CAD=0.03`.
 
@@ -163,7 +167,8 @@ metrics_daily(date, symbol, PK(date,symbol), close, change_pct, volume,
         net_delta_volume (Σ vol*delta*100 over calls and puts), straddle30_pct, expected_move30_pct,
         updated_at)                                            -- today's row upserted every sweep
 earnings(symbol, date, timing, fiscal_quarter, eps_actual, eps_estimate, surprise_pct, num_estimates,
-        PK(symbol,date))
+        source ('nasdaq' | 'tmx' | 'yahoo'), PK(symbol,date))
+earnings_lookups(symbol PK, checked_at, source, detail)  -- Canadian listings' daily next-date lookup
 dividends(symbol, ex_date, amount, pay_date, record_date, declared_date, kind, PK(symbol, ex_date))
 index_bars(symbol, date, open, high, low, close, PK(symbol,date))   -- VIX family
 rates(date PK, rate)                                                 -- 13w T-bill fraction (USD)
@@ -198,6 +203,7 @@ Christmas Eve only. Report snapshots and the EOD digest are the US market's.
 | prices_backfill | first run + daily 06:10 for symbols missing history | Nasdaq 10y history → daily_bars (Canadian listings: Questrade `OneDay` candles, continued past the 2,000-candle limit; depth and split adjustment are not documented — stored as returned, the weekly refresh replaces a changed history) |
 | prices_refresh | Sat 07:00 | refetch last 30 days for all (corrects splits/revisions); on detected split (close jump inconsistent) refetch full |
 | earnings | daily 05:30; backfill once | calendar for today−10 … today+90 (one call/day). Backfill: every weekday for the past 3 years (resumable; store progress in job_runs). Store every row (not only universe). |
+| earnings_ca | daily 05:35; backfill daily 04:15 until complete | Canadian listings: TMX Money's calendar today−10 … today+90 (weekdays), then each stock's next date from TMX Money, else Yahoo Finance (INTEGRATION.md §12). Backfill: TMX's calendar, 3 years (resumable). |
 | dividends | daily 05:45 | calendar today−10 … today+60; weekly (Sun) per-universe-symbol dividend history |
 | vix | daily 17:00 | CBOE VIX family CSVs → index_bars |
 | rates | daily 17:05 | Treasury 13w bill |
@@ -294,7 +300,8 @@ hidden columns), watchlist membership filter, row click → symbol page. Max 500
 
 **Markets.** Every report declares `ReportDef.markets`: `any` = a `market` param US (default) / CA / all; `one` =
 US / CA (aggregates: options-broad-view, performance-by-sector, performance-by-industry); `us` = a US-only source, no
-param (earnings, dividends, splits / IPO calendars, pre-market / after-hours movers, event-driven). The filter
+param (dividends, splits / IPO calendars, pre-market / after-hours movers, event-driven). Earnings reports are `any`
+(Canadian listings' events from TMX Money / Yahoo Finance), the upcoming-earnings summary `one`. The filter
 applies before limits (universe frame, chain loads) and again to the result rows; an explicit `symbols` list is
 shown whatever its market, a watchlist is narrowed to it. Rows of a symbol carry `currency`.
 

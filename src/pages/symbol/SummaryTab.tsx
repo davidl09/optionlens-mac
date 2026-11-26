@@ -8,6 +8,7 @@ import { usePalette } from "../../components/charts/EChart";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
 import { Async, Card, SourceBadge } from "../../components/ui";
+import { nextEarningsSub, noNextEarningsText } from "../../lib/earnings";
 import { fmt, plural } from "../../lib/format";
 import { atPrice } from "../../lib/keyStats";
 import { isFlowing, useLiveQuote, useLiveStatus } from "../../live";
@@ -99,11 +100,11 @@ function SummaryBody({ s }: { s: SymbolSummary }) {
         <div className="stack">
           <Card title="Next earnings" actions={<Link to={`/s/${s.symbol}/earnings`} className="small">Details →</Link>}>
             {ne ? <StatGrid cols={2} items={[
-              { label: "Date", value: ne.date, fmt: "date", sub: `${ne.timing.toUpperCase()} · in ${ne.days}d` },
+              { label: "Date", value: ne.date, fmt: "date", sub: <>{nextEarningsSub(ne)} <SourceBadge source={ne.source} /></> },
               { label: "Implied move", value: ne.implied_move_pct, fmt: "pct", hint: "No straddle available covering the event." },
               { label: "Avg |move|", value: ne.avg_abs_move_pct, fmt: "pct", hint: "No past earnings reactions in price history." },
               { label: "Implied / hist", value: ne.implied_move_pct !== null && ne.avg_abs_move_pct ? ne.implied_move_pct / ne.avg_abs_move_pct : null, fmt: "ratio" },
-            ]} /> : <div className="muted small">No upcoming earnings date in the Nasdaq calendar (collected daily, 90 days ahead).</div>}
+            ]} /> : <div className="muted small">{noNextEarningsText(s.symbol, s.next_earnings_missing)}</div>}
           </Card>
           <Card title="Next ex-dividend">
             {nd ? <StatGrid cols={2} items={[

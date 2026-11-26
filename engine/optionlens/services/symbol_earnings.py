@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Sequence
 
 from ..analytics import calendar as cal
+from ..analytics import markets
 from ..analytics.calendar import now_ny
 from ..analytics import chainmetrics as cm
 from ..analytics import earnings as earn_a
@@ -16,6 +17,7 @@ from ..models import Bar, EarningsEvent
 from ..repo import earnings as earn_repo
 from ..repo import options as options_repo
 from ..repo import report_snapshots as snaps_repo
+from ..sources import ca_earnings
 from . import context as ctx
 from .errors import BadRequest, NotFound
 
@@ -113,7 +115,7 @@ def next_earnings(symbol: str, ca: ChainArrays | None, bars: Sequence[Bar],
     imp = {"implied_move_pct": None, "excess_implied_move_pct": None, "expiry_used": None}
     if ca is not None:
         imp = earn_a.implied_earnings_move(ctx.derived(ca, "term_rows", cm.expiry_term_rows), reaction_day(ev), ca.spot)
-    return {"date": ev.date, "timing": ev.timing, "days": (ev.date - ctx.today()).days,
+    return {"date": ev.date, "timing": ev.timing, "days": (ev.date - ctx.today()).days, "source": ev.source,
             "implied_move_pct": imp["implied_move_pct"], "avg_abs_move_pct": avg_abs,
             "excess_implied_move_pct": imp["excess_implied_move_pct"],
             "implied_vs_hist_ratio": earn_a.implied_vs_hist_ratio(imp["implied_move_pct"], avg_abs),
@@ -127,7 +129,39 @@ def earnings(symbol: str) -> dict:
     ca = ctx.load_chain_arrays(sym, ensure_fresh=False)
     return {"symbol": sym, "next": next_earnings(sym, ca, bars, rows), "events": rows,
             "stats": earn_a.earnings_stats(rows[:STATS_LAST]), "stats_all": earn_a.earnings_stats(rows),
-            "unavailable": ctx.nasdaq_gap(sym, "Earnings dates")}
+            "unavailable": unavailable(sym), "next_missing": next_missing(sym)}
+
+
+# ----------------------------------------------------------------------------- why dates are missing
+CA_SOURCES_TEXT = (f"Canadian listings' dates come from {ca_earnings.LABELS['tmx']}, else "
+                   f"{ca_earnings.LABELS['yahoo']} (unofficial sources), looked up daily")
+
+
+def _lookup_text(symbol: str) -> str:
+    lk = earn_repo.lookup(symbol)
+    if lk is None:
+        return f"not looked up yet ({CA_SOURCES_TEXT})"
+    when = lk["checked_at"].date().isoformat()
+    if lk["source"]:
+        return f"{ca_earnings.LABELS.get(lk['source'], lk['source'])} gave none ahead (checked {when})"
+    return f"{lk['detail']} (checked {when}; {CA_SOURCES_TEXT})"
+
+
+def unavailable(symbol: str) -> str | None:
+    """Why `symbol` has no earnings data at all, or None. US listings: Nasdaq's calendar (never unavailable as a
+    whole). A Canadian listing without any stored event: what its last TMX Money / Yahoo Finance lookup found."""
+    if not markets.is_canadian(symbol) or earn_repo.has_events(symbol):
+        return None
+    return f"Earnings dates for {symbol} are not available: {_lookup_text(symbol)}."
+
+
+def next_missing(symbol: str) -> str | None:
+    """Why there is no upcoming earnings date for `symbol`, or None when there is one."""
+    if _upcoming(symbol) is not None:
+        return None
+    if not markets.is_canadian(symbol):
+        return f"No upcoming earnings date for {symbol} in the Nasdaq calendar (collected daily, 90 days ahead)."
+    return f"No upcoming earnings date for {symbol}: {_lookup_text(symbol)}."
 
 
 # ----------------------------------------------------------------------------- strategy backtests
