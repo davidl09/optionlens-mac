@@ -271,9 +271,11 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
         if k not in ("close", "change_pct", "volume"):
             C[k] = _nan(n)
     C["metrics_date"] = _obj(n)
-    for s, row in {s: r for d in set(by_market.values()) for s, r in metrics_repo.metrics_on(d).items()}.items():
+    latest = {s: r for d in set(by_market.values()) for s, r in metrics_repo.metrics_on(d).items()
+              if by_market.get(markets.market_of(s)) == d}   # each symbol's row of its market's latest session
+    for s, row in latest.items():
         i = pos.get(s)
-        if i is None or row["date"] != by_market.get(markets.market_of(s)):
+        if i is None:
             continue
         C["metrics_date"][i] = row["date"]
         for k in mcols:
