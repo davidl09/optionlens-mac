@@ -231,7 +231,7 @@ test("search, theme, bell", async ({ page }) => {
   clean(p);
 });
 
-test("screenshots: dashboard, summary (dark + light), phone", async ({ page }) => {
+test("screenshots: dashboard, summary (dark + light), smallest window", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/");
   await expect(page.getByText("Sector ETFs")).toBeVisible();
@@ -249,7 +249,7 @@ test("screenshots: dashboard, summary (dark + light), phone", async ({ page }) =
   await page.goto("/s/AAPL/summary");
   await page.waitForLoadState("networkidle");
   await page.screenshot({ path: `${SHOTS}/summary-light.png`, fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width: 900, height: 600 });   // the desktop window's minimum size (electron/main/window.ts)
   for (const path of ["/", "/s/AAPL/chain", "/reports/unusual-option-volume"]) {
     await page.goto(path);
     await page.waitForLoadState("networkidle");
@@ -258,10 +258,10 @@ test("screenshots: dashboard, summary (dark + light), phone", async ({ page }) =
   }
   await page.goto("/");
   await page.waitForLoadState("networkidle");
-  await page.screenshot({ path: `${SHOTS}/dashboard-phone.png`, fullPage: true });
+  await page.screenshot({ path: `${SHOTS}/dashboard-min-window.png`, fullPage: true });
   await page.getByRole("button", { name: "Menu" }).click();
   await page.getByRole("button", { name: "Strategies" }).click();
-  await page.screenshot({ path: `${SHOTS}/menu-phone.png` });
+  await page.screenshot({ path: `${SHOTS}/menu-min-window.png` });
   clean(p);
 });
 
