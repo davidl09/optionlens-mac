@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS dividends_derived (
     kind VARCHAR NOT NULL, updated_at TIMESTAMP NOT NULL,
     PRIMARY KEY (symbol, ex_date, source)
 );
+ALTER TABLE dividends_derived ADD COLUMN IF NOT EXISTS record_date DATE;
+ALTER TABLE dividends_derived ADD COLUMN IF NOT EXISTS declared_date DATE;
 -- The IBKR dividend-history fetches (also of symbols that paid nothing): the span of closes they covered.
 CREATE TABLE IF NOT EXISTS dividend_history_fetches (
     symbol VARCHAR PRIMARY KEY, source VARCHAR NOT NULL, first_date DATE, last_date DATE, dividends INTEGER NOT NULL,

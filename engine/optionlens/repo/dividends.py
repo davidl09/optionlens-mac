@@ -30,7 +30,7 @@ def _merged(where: str = "TRUE") -> str:
         WITH obs AS (
             SELECT {_COLS}, '{NASDAQ}' AS source FROM dividends
             UNION ALL
-            SELECT symbol, ex_date, amount, pay_date, NULL::DATE, NULL::DATE, kind, source FROM dividends_derived),
+            SELECT symbol, ex_date, amount, pay_date, record_date, declared_date, kind, source FROM dividends_derived),
         o AS (SELECT *, {_prio('source')} AS prio FROM obs WHERE {where})
         SELECT symbol, ex_date, arg_min(amount, prio) AS amount,
                arg_min(pay_date, prio) FILTER (WHERE pay_date IS NOT NULL) AS pay_date,
@@ -58,7 +58,7 @@ def upsert_derived(divs: Iterable[Dividend], now: datetime) -> int:
     uniq = list({(d.symbol, d.ex_date, d.source): d for d in divs}.values())
     if any(d.source in (None, NASDAQ) for d in uniq):
         raise ValueError("derived dividends need their own source")
-    data = to_columns(uniq, ("symbol", "ex_date", "source", "amount", "pay_date", "kind"))
+    data = to_columns(uniq, ("symbol", "ex_date", "source", "amount", "pay_date", "kind", "record_date", "declared_date"))
     data["updated_at"] = [utc_naive(now)] * len(uniq)
     with db.write() as cur:
         return insert_arrow(cur, "dividends_derived", data, "INSERT OR REPLACE")

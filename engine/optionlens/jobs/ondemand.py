@@ -89,40 +89,44 @@ def covered_by_nasdaq(symbol: str) -> bool:
     return not markets.is_canadian(symbol)
 
 
-async def _from_nasdaq(kind: str, symbol: str, params: dict) -> Any:
-    asset = "etf" if (await ensure_symbol(symbol))["kind"] == "etf" else "stocks"
-    return await {
-        "info": lambda: nasdaq.fetch_info(symbol, asset),
-        "summary": lambda: nasdaq.fetch_summary(symbol, asset),
-        "financials": lambda: nasdaq.fetch_financials(symbol, bool(params.get("quarterly"))),
-        "earnings_surprise": lambda: nasdaq.fetch_earnings_surprise(symbol),
-        "profile": lambda: nasdaq.fetch_profile(symbol),
-        "insiders": lambda: nasdaq.fetch_insiders(symbol),
-        "news": lambda: nasdaq.fetch_news(symbol, asset),
-        "extended": lambda: nasdaq.fetch_extended(symbol, params.get("market", "pre"), asset),
-    }[kind]()
-
-
-# Company data of Canadian listings that TMX Money has (the other kinds have no source there).
-_FROM_TMX: dict[str, Callable[[str], Awaitable[Any]]] = {
-    "profile": tmx_company.fetch_profile, "news": tmx_company.fetch_news, "insiders": tmx_company.fetch_insiders,
+# Company data per source: kind -> fetch(symbol, asset ("etf" | "stocks"), params). Nasdaq has every kind of US
+# listings; TMX Money the kinds listed here of Canadian ones.
+_FROM_NASDAQ: dict[str, Callable[[str, str, dict], Awaitable[Any]]] = {
+    "info": lambda s, asset, p: nasdaq.fetch_info(s, asset),
+    "summary": lambda s, asset, p: nasdaq.fetch_summary(s, asset),
+    "financials": lambda s, asset, p: nasdaq.fetch_financials(s, bool(p.get("quarterly"))),
+    "earnings_surprise": lambda s, asset, p: nasdaq.fetch_earnings_surprise(s),
+    "profile": lambda s, asset, p: nasdaq.fetch_profile(s),
+    "insiders": lambda s, asset, p: nasdaq.fetch_insiders(s),
+    "news": lambda s, asset, p: nasdaq.fetch_news(s, asset),
+    "extended": lambda s, asset, p: nasdaq.fetch_extended(s, p.get("market", "pre"), asset),
 }
+_FROM_TMX: dict[str, Callable[[str, str, dict], Awaitable[Any]]] = {
+    "profile": lambda s, asset, p: tmx_company.fetch_profile(s),
+    "news": lambda s, asset, p: tmx_company.fetch_news(s),
+    "insiders": lambda s, asset, p: tmx_company.fetch_insiders(s),
+}
+_SOURCES = {nasdaq.NAME: _FROM_NASDAQ, tmx.NAME: _FROM_TMX}
 
 
 def source_of(kind: str, symbol: str) -> str | None:
-    """Which source answers `kind` for `symbol`: nasdaq.NAME (US listings), tmx.NAME (Canadian listings, the kinds
-    TMX Money has) or None (no source)."""
-    if covered_by_nasdaq(symbol):
-        return nasdaq.NAME
-    return tmx.NAME if kind in _FROM_TMX else None
+    """Which source answers `kind` for `symbol`: nasdaq.NAME (US listings), tmx.NAME (Canadian listings), or None
+    when the market's source does not have the kind."""
+    name = nasdaq.NAME if covered_by_nasdaq(symbol) else tmx.NAME
+    return name if kind in _SOURCES[name] else None
 
 
 def _fetcher(kind: str, symbol: str, params: dict) -> Callable[[], Awaitable[Any]] | None:
     """The fetch of `kind` for `symbol` from the source that covers it (source_of), or None when no source does."""
     source = source_of(kind, symbol)
-    if source == nasdaq.NAME:
-        return lambda: _from_nasdaq(kind, symbol, params)
-    return (lambda: _FROM_TMX[kind](symbol)) if source == tmx.NAME else None
+    if source is None:
+        return None
+
+    async def fetch() -> Any:
+        asset = "etf" if (await ensure_symbol(symbol))["kind"] == "etf" else "stocks"
+        return await _SOURCES[source][kind](symbol, asset, params)
+
+    return fetch
 
 
 NEGATIVE_TTL_S = 6 * H     # "no data" answers (None, e.g. ETF financials/profile) are re-asked after 6 h
