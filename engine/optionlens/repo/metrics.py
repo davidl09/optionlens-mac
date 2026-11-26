@@ -133,6 +133,11 @@ def latest_date() -> date | None:
     return scalar("SELECT max(date) FROM metrics_daily")
 
 
+def latest_dates() -> dict[str, date]:
+    """{symbol: its most recent metrics date}."""
+    return {r["symbol"]: r["d"] for r in query("SELECT symbol, max(date) AS d FROM metrics_daily GROUP BY symbol")}
+
+
 def dates(symbol: str | None = None) -> list[date]:
     """Distinct metrics dates (optionally for one symbol), ascending."""
     return [r["date"] for r in query(

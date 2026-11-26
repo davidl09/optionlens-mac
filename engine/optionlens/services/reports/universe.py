@@ -251,18 +251,29 @@ def with_live_bar(b: dict, q) -> tuple:
 _HIST_COLS = ("iv30", "hv30", "skew25_30", "call_volume", "put_volume")
 
 
+def market_dates() -> dict[markets.Market, date]:
+    """Each market's latest metrics date. Markets keep their own calendars: a TSX session on a US holiday (or the
+    other way round) must not hide the other market's last session."""
+    out: dict[markets.Market, date] = {}
+    for s, d in metrics_repo.latest_dates().items():
+        m = markets.market_of(s)
+        if m not in out or d > out[m]:
+            out[m] = d
+    return out
+
+
 def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
     n = len(syms)
-    mdate = metrics_repo.latest_date()
+    by_market = market_dates()
+    mdate = max(by_market.values(), default=None)
     mcols = metrics_repo.metric_columns()
     for k in mcols:
         if k not in ("close", "change_pct", "volume"):
             C[k] = _nan(n)
     C["metrics_date"] = _obj(n)
-    today_rows = metrics_repo.metrics_on(mdate) if mdate else {}
-    for s, row in today_rows.items():
+    for s, row in {s: r for d in set(by_market.values()) for s, r in metrics_repo.metrics_on(d).items()}.items():
         i = pos.get(s)
-        if i is None:
+        if i is None or row["date"] != by_market.get(markets.market_of(s)):
             continue
         C["metrics_date"][i] = row["date"]
         for k in mcols:
@@ -277,19 +288,19 @@ def _metrics_block(C: dict, syms: list[str], pos: dict) -> date | None:
         C[k] = _nan(n)
     hist = metrics_repo.history_bulk(_HIST_COLS, last_n=HISTORY_ROWS, symbols=syms) if mdate else {}
     ranks = context.iv_rank_all() if mdate else {}
-    md = np.datetime64(mdate) if mdate else None
     for s, h in hist.items():
         i = pos.get(s)
         if i is None:
             continue
+        sdate = by_market.get(markets.market_of(s))   # the symbol's market's latest session
         dts = h["date"]
-        has_today = len(dts) and dts[-1] == md
+        has_today = sdate is not None and len(dts) and dts[-1] == np.datetime64(sdate)
         iv = h["iv30"]
         r = ranks.get(s)   # the symbol page's IV rank (context.iv_history: collected, else ingested IV30)
         C["iv_history_days"][i] = r["history_days"] if r else int(np.isfinite(iv).sum())
         if has_today:
             if r:
-                if r["iv30_asof"] == mdate:   # the value the rank is of (collected, else ingested IV30)
+                if r["iv30_asof"] == sdate:   # the value the rank is of (collected, else ingested IV30)
                     C["iv30"][i] = _f(r["iv30"])
                 C["iv_rank"][i], C["iv_pct"][i] = _f(r["iv_rank"]), _f(r["iv_percentile"])
                 C["iv_high_52w"][i], C["iv_low_52w"][i] = _f(r["iv_high_52w"]), _f(r["iv_low_52w"])
