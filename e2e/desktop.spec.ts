@@ -598,6 +598,11 @@ test("header: the status area never covers the menus; the nav scrolls and its me
   expect(n!.x + n!.width).toBeLessThanOrEqual(t!.x + 1);                      // side by side, never overlapping
   await expect(page.locator(".sources-pill .source-mark")).not.toHaveCount(0);   // collapsed to the sources' marks
   await expect(page.locator(".sources-pill .source-text").first()).toBeHidden();
+  await page.setViewportSize({ width: 1900, height: 800 });                    // room for everything: the text is back
+  await expect(page.locator(".sources-pill .source-text").first()).toBeVisible();
+  expect(await nav.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.setViewportSize({ width: 1150, height: 800 });
+  await expect(page.locator(".sources-pill .source-text").first()).toBeHidden();
   const last = page.locator(".main-nav .nav-btn").last();
   await last.scrollIntoViewIfNeeded();                                         // a menu scrolled into view opens under its button
   await last.click();

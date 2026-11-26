@@ -564,7 +564,11 @@ table.chain td a:hover { color: var(--accent); }
 .source-seg + .source-seg { padding-left: 10px; border-left: 1px solid var(--border); }
 .source-mark { position: relative; display: inline-flex; }
 .source-mark .dot { position: absolute; right: -3px; bottom: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); border: 1.5px solid var(--panel); }
-@media (max-width: 1700px) { .source-text { display: none; } .sources-pill { gap: 8px; padding: 0 8px; } .source-seg + .source-seg { padding-left: 8px; } }
+/* collapsed to the marks when the menus would not fit (Header), and wherever the nav is a drawer */
+.header-tools.compact .source-text { display: none; }
+.header-tools.compact .sources-pill { gap: 8px; padding: 0 8px; }
+.header-tools.compact .source-seg + .source-seg { padding-left: 8px; }
+@media (max-width: 1020px) { .source-text { display: none; } }
 .source-seg.pos .dot { background: var(--up); }
 .source-seg.warn .dot { background: var(--warn); }
 .source-seg.neg .dot { background: var(--down); }

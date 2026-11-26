@@ -1,5 +1,5 @@
 // Global header: brand, nav menus (report entries come from GET /api/reports), search, bell, theme.
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import type { ReportDef } from "../api/types";
@@ -92,6 +92,24 @@ export function Header() {
   const closeAll = useCallback(() => { setOpen(null); setDrawer(false); }, []);
   useClickOutside(navRef, () => setOpen(null), open !== null);
   useEffect(() => closeAll(), [loc.pathname, loc.search, closeAll]);
+  // The status pills give way before the menus do: laid out with their text first, and when the menus then do not
+  // fit, collapsed to the sources' marks (both passes happen before paint). Re-tried when the window or the pills change.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
+  const [measure, setMeasure] = useState(0);
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (nav && !compact && nav.scrollWidth > nav.clientWidth + 1) setCompact(true);
+  }, [compact, measure, menus]);
+  useEffect(() => {
+    const again = () => { setCompact(false); setMeasure((n) => n + 1); };
+    const ro = new ResizeObserver(again);
+    if (rowRef.current) ro.observe(rowRef.current);
+    const mo = new MutationObserver(again);
+    if (toolsRef.current) mo.observe(toolsRef.current, { childList: true, characterData: true, subtree: true });
+    return () => { ro.disconnect(); mo.disconnect(); };
+  }, []);
   const toggleMenu = (m: Menu, btn: HTMLElement) => {
     if (open === m.label) { setOpen(null); return; }
     setAt(menuPosition(btn.getBoundingClientRect(), isWide(m) ? 520 : 240, window.innerWidth));
@@ -108,7 +126,7 @@ export function Header() {
 
   return (
     <header className="app-header">
-      <div className="header-row">
+      <div className="header-row" ref={rowRef}>
         <button className="icon-btn hamburger" aria-label="Menu" aria-expanded={drawer} onClick={() => setDrawer((d) => !d)}>
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
         </button>
@@ -126,7 +144,7 @@ export function Header() {
             </div>
           ))}
         </nav>
-        <div className="header-tools">
+        <div className={`header-tools${compact ? " compact" : ""}`} ref={toolsRef}>
           <SymbolSearch onNavigate={closeAll} />
           <LiveIndicator />
           <SourcesIndicator />
