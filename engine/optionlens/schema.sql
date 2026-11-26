@@ -280,3 +280,7 @@ CREATE TABLE IF NOT EXISTS chain_verdicts (
 -- answer before chain_verdicts existed; it becomes unknown again, so every serving source is asked.
 UPDATE symbols SET optionable = NULL WHERE optionable = false
     AND symbol NOT IN (SELECT symbol FROM chain_verdicts WHERE verdict = 'no_options');
+-- Earnings sources (docs/INTEGRATION.md §6 "Earnings"): 'nasdaq' for US listings, 'tmx' / 'yahoo' for Canadian ones.
+-- Rows stored before the column came from Nasdaq.
+ALTER TABLE earnings ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'nasdaq';
+ALTER TABLE earnings ALTER COLUMN source DROP DEFAULT;

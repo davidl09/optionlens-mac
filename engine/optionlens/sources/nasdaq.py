@@ -13,6 +13,7 @@ from ..models import Bar, Dividend, EarningsEvent, Timing, normalize_symbol
 from .. import net
 
 BASE = "https://api.nasdaq.com/api"
+NAME = "nasdaq"   # the `source` of the rows it supplies
 AssetClass = Literal["stocks", "etf"]
 _NUM = re.compile(r"[^0-9.+-]")
 _TIMING: dict[str, Timing] = {"time-pre-market": "bmo", "time-after-hours": "amc"}
@@ -100,7 +101,7 @@ def parse_earnings(payload: dict, on: date) -> list[EarningsEvent]:
             timing=_TIMING.get(r.get("time") or "", "unknown"),
             fiscal_quarter=_text(r.get("fiscalQuarterEnding")),
             eps_actual=num(r.get("eps")), eps_estimate=num(r.get("epsForecast")),
-            surprise_pct=pct(r.get("surprise")), num_estimates=integer(r.get("noOfEsts")),
+            surprise_pct=pct(r.get("surprise")), num_estimates=integer(r.get("noOfEsts")), source=NAME,
         ))
     return out
 

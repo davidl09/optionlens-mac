@@ -90,7 +90,7 @@ def _stored_implied(symbol: str, events: Sequence[EarningsEvent], bars: Sequence
     snaps = snapshot_implied_moves([symbol], min(e.date for e in events) - timedelta(days=10), ctx.today())
     out = {}
     for ev in events:
-        react, _ = earn_a.reaction_from_arrays(a, ev.date, ev.timing)
+        react, _ = earn_a.reaction_from_arrays(a, ev.date, ev.timing, earn_a.event_calendar(ev))
         if react is None or (i := a.index_of(react)) is None or i == 0:
             continue
         ca = ctx.eod_chain_arrays(symbol, a.dates[i - 1]) if a.dates[i - 1] in eod_days else None

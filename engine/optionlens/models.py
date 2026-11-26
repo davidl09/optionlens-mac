@@ -104,6 +104,7 @@ class EarningsEvent:
     eps_estimate: float | None
     surprise_pct: float | None  # fraction
     num_estimates: int | None
+    source: str | None = None   # 'nasdaq' (US listings) | 'tmx' | 'yahoo' (Canadian listings, sources/ca_earnings.py)
 
 
 @dataclass(frozen=True, slots=True)

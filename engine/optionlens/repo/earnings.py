@@ -1,4 +1,5 @@
-"""earnings: every calendar row Nasdaq gives (not only universe symbols)."""
+"""earnings: every calendar row a source gives (not only universe symbols), tagged with its source: Nasdaq for US
+listings, TMX Money / Yahoo Finance for Canadian ones (EarningsEvent.source)."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -10,7 +11,8 @@ from ..models import EarningsEvent
 from ._sql import insert_arrow, query, to_columns
 
 _FIELDS = ("symbol", "date", "timing", "fiscal_quarter", "eps_actual", "eps_estimate", "surprise_pct",
-           "num_estimates")
+           "num_estimates", "source")
+_KEPT = _FIELDS[3:-1]   # values a new row may lack and the stored one keeps
 _COLS = ", ".join(_FIELDS)
 
 
@@ -29,18 +31,20 @@ def _merged(cur: Any, events: list[EarningsEvent]) -> list[EarningsEvent]:
             out.append(e)
             continue
         prev = EarningsEvent(*o)
-        out.append(replace(e, **{f: getattr(prev, f) for f in _FIELDS[3:] if getattr(e, f) is None},
+        out.append(replace(e, **{f: getattr(prev, f) for f in _KEPT if getattr(e, f) is None},
                            timing=e.timing if e.timing != "unknown" else prev.timing))
     return out
 
 
-def replace_day(day: date, events: Iterable[EarningsEvent]) -> int:
-    """Replace all events dated `day` with `events` (drops rescheduled ones; keeps known values the
-    new rows lack). Returns rows written."""
+def replace_day(day: date, events: Iterable[EarningsEvent], source: str) -> int:
+    """Replace the events of `source` dated `day` with `events` (drops rescheduled ones; keeps known values the
+    new rows lack; other sources' rows stay). Returns rows written."""
     uniq = list({e.symbol: e for e in events if e.date == day}.values())
+    if any(e.source != source for e in uniq):
+        raise ValueError(f"replace_day({day}, source={source!r}) given rows of another source")
     with db.write() as cur:
         rows = _merged(cur, uniq)
-        cur.execute("DELETE FROM earnings WHERE date = ?", [day])
+        cur.execute("DELETE FROM earnings WHERE date = ? AND source = ?", [day, source])
         return insert_arrow(cur, "earnings", to_columns(rows, _FIELDS))
 
 

@@ -12,7 +12,7 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from optionlens.analytics import calendar as cal
-from optionlens.analytics.earnings import UNKNOWN_TIMING_NOTE, reaction_window
+from optionlens.analytics.earnings import UNKNOWN_TIMING_NOTE, event_calendar, reaction_window
 from optionlens.analytics.stats import BarArrays, bar_arrays, rsi_series, sma_series
 from optionlens.models import Bar, EarningsEvent
 
@@ -107,7 +107,7 @@ def _cross(cond: np.ndarray) -> np.ndarray:
 def _reactions(events: Sequence[EarningsEvent]) -> list[tuple[date, date]]:
     """(first, last) possible reaction sessions per event, known before the event (no look-ahead;
     see earnings.reaction_window)."""
-    return sorted({reaction_window(ev.date, ev.timing) for ev in events})
+    return sorted({reaction_window(ev.date, ev.timing, event_calendar(ev)) for ev in events})
 
 
 def entry_signals(a: BarArrays, entry: Mapping, reactions: Sequence[tuple[date, date]], lo: int) -> np.ndarray:

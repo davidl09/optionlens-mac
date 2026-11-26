@@ -192,14 +192,20 @@ def test_metrics_upsert_and_reads(tmpdb):
 
 
 # ----------------------------------------------------------------------------- earnings / dividends
-def _ev(sym, d, eps=None):
-    return EarningsEvent(sym, d, "amc", "Sep/2026", eps, 1.0, None, 5)
+def _ev(sym, d, eps=None, source="nasdaq"):
+    return EarningsEvent(sym, d, "amc", "Sep/2026", eps, 1.0, None, 5, source)
 
 
 def test_earnings(tmpdb):
     d1, d2 = date(2026, 11, 20), date(2026, 12, 1)
-    earnings.replace_day(d1, [_ev("AAA", d1), _ev("BBB", d1)])
-    earnings.replace_day(d1, [_ev("AAA", d1, eps=1.1)])        # BBB rescheduled away
+    earnings.replace_day(d1, [_ev("AAA", d1), _ev("BBB", d1)], "nasdaq")
+    earnings.upsert_earnings([_ev("RY.TO", d1, source="tmx")])
+    earnings.replace_day(d1, [_ev("AAA", d1, eps=1.1)], "nasdaq")        # BBB rescheduled away
+    assert [e.symbol for e in earnings.between(d1, d1)] == ["AAA", "RY.TO"]   # another source's row stays
+    assert earnings.between(d1, d1)[1].source == "tmx"
+    with pytest.raises(ValueError):
+        earnings.replace_day(d1, [_ev("RY.TO", d1, source="tmx")], "nasdaq")
+    earnings.replace_day(d1, [], "tmx")   # nothing of tmx left on d1
     earnings.upsert_earnings([_ev("BBB", d2), _ev("AAA", date(2026, 8, 1), 0.9)])
     assert [e.symbol for e in earnings.between(d1, d1)] == ["AAA"]
     assert earnings.between(d1, d1)[0].eps_actual == 1.1
@@ -315,9 +321,9 @@ def test_cache_jobs_snapshots_status(tmpdb):
 
 def test_earnings_keep_known_timing_and_estimates(tmpdb):
     d = date(2026, 11, 18)
-    earnings.replace_day(d, [EarningsEvent("PANW", d, "amc", "Oct/2026", None, 0.52, None, 20)])
+    earnings.replace_day(d, [EarningsEvent("PANW", d, "amc", "Oct/2026", None, 0.52, None, 20, "nasdaq")], "nasdaq")
     # once the date has passed Nasdaq reports actuals but no time / estimate count
-    earnings.replace_day(d, [EarningsEvent("PANW", d, "unknown", None, 0.55, 0.52, 0.0577, None)])
+    earnings.replace_day(d, [EarningsEvent("PANW", d, "unknown", None, 0.55, 0.52, 0.0577, None, "nasdaq")], "nasdaq")
     e = earnings.for_symbol("PANW")[0]
     assert (e.timing, e.fiscal_quarter, e.eps_actual, e.num_estimates) == ("amc", "Oct/2026", 0.55, 20)
     earnings.upsert_earnings([EarningsEvent("PANW", d, "bmo", None, None, None, None, None)])

@@ -48,7 +48,7 @@ async def earnings(start: date | None = None, end: date | None = None) -> str:
         nonlocal total
         events = await nasdaq.fetch_earnings(d)
         if events:  # an empty answer may be a glitch: never wipe a stored day with it
-            n = await asyncio.to_thread(earnings_repo.replace_day, d, events)
+            n = await asyncio.to_thread(earnings_repo.replace_day, d, events, nasdaq.NAME)
             total += n
 
     ok, failed = await run_bounded(days, one, _rps(), "earnings")

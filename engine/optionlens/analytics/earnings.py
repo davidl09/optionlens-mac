@@ -12,6 +12,8 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 
 from optionlens.analytics import calendar as cal
+from optionlens.analytics import markets
+from optionlens.analytics.calendar import TradingCalendar
 from optionlens.analytics.stats import BarArrays, bar_arrays
 from optionlens.models import Bar, EarningsEvent
 
@@ -26,10 +28,21 @@ def _gap(a: BarArrays, i: int) -> float | None:
     return float(a.open[i] / a.close[i - 1] - 1.0)
 
 
-def reaction_from_arrays(a: BarArrays, event_date: date, timing: str) -> tuple[date | None, bool]:
+def event_calendar(ev: EarningsEvent) -> TradingCalendar:
+    """The sessions an event's reaction falls on: its listing's exchange (TSX for Canadian listings, else NYSE)."""
+    return markets.calendar_for(ev.symbol)
+
+
+def _candidate_days(event_date: date, calendar: TradingCalendar) -> tuple[date, date]:
+    """(bmo reaction day = the event day rolled forward to a session, amc reaction day = the next session)."""
+    bmo_day = event_date if calendar.is_trading_day(event_date) else calendar.next_trading_day(event_date)
+    return bmo_day, calendar.next_trading_day(event_date)
+
+
+def reaction_from_arrays(a: BarArrays, event_date: date, timing: str,
+                         calendar: TradingCalendar = cal.NYSE) -> tuple[date | None, bool]:
     """`reaction_date` over pre-built BarArrays (avoids rebuilding arrays per event)."""
-    bmo_day = event_date if cal.is_trading_day(event_date) else cal.next_trading_day(event_date)
-    amc_day = cal.next_trading_day(event_date)
+    bmo_day, amc_day = _candidate_days(event_date, calendar)
     if timing == "bmo":
         return (bmo_day if a.index_of(bmo_day) is not None else None), False
     if timing == "amc":
@@ -44,14 +57,13 @@ def reaction_from_arrays(a: BarArrays, event_date: date, timing: str) -> tuple[d
     return (amc_day if abs(g_amc) > abs(g_bmo) else bmo_day), True
 
 
-def reaction_window(event_date: date, timing: str) -> tuple[date, date]:
+def reaction_window(event_date: date, timing: str, calendar: TradingCalendar = cal.NYSE) -> tuple[date, date]:
     """(first, last) candidate reaction sessions as known BEFORE the event (calendar only, no bars —
     for trade placement without look-ahead): bmo → the event day (rolled to a trading day) twice;
     amc → the next trading day twice; unknown → (bmo day, amc day). Backtests enter relative to
     ``first`` and exit relative to ``last``, so an unknown-timing trade spans both candidates. The
     gap-based inference of `reaction_from_arrays` is for move statistics only."""
-    bmo_day = event_date if cal.is_trading_day(event_date) else cal.next_trading_day(event_date)
-    amc_day = cal.next_trading_day(event_date)
+    bmo_day, amc_day = _candidate_days(event_date, calendar)
     if timing == "bmo":
         return bmo_day, bmo_day
     if timing == "amc":
@@ -64,11 +76,12 @@ UNKNOWN_TIMING_NOTE = ("Events with unknown timing: entries count back from the 
                        "so trades span both without using the realized gaps.")
 
 
-def reaction_date(event_date: date, timing: str, bars: Sequence[Bar]) -> tuple[date | None, bool]:
+def reaction_date(event_date: date, timing: str, bars: Sequence[Bar],
+                  calendar: TradingCalendar = cal.NYSE) -> tuple[date | None, bool]:
     """(reaction day, timing_inferred). bmo → the event day (rolled forward to a trading day);
     amc → next trading day; unknown → amc when |gap| on the next trading day > |gap| on the
     event day, else bmo (inferred=True). None when the needed bars are missing."""
-    return reaction_from_arrays(bar_arrays(bars), event_date, timing)
+    return reaction_from_arrays(bar_arrays(bars), event_date, timing, calendar)
 
 
 TIMING_LABELS = {"bmo": "BMO", "amc": "AMC", "unknown": "n/a"}
@@ -77,8 +90,8 @@ TIMING_LABELS = {"bmo": "BMO", "amc": "AMC", "unknown": "n/a"}
 def inferred_timing(ev, react: date) -> str:
     """bmo/amc read off the inferred reaction day of an unknown-timing event ('unknown' when the event fell on a
     non-trading day: both readings give the same session)."""
-    bmo_day = ev.date if cal.is_trading_day(ev.date) else cal.next_trading_day(ev.date)
-    if bmo_day == cal.next_trading_day(ev.date):
+    bmo_day, amc_day = _candidate_days(ev.date, event_calendar(ev))
+    if bmo_day == amc_day:
         return "unknown"
     return "bmo" if react == bmo_day else "amc"
 
@@ -96,7 +109,7 @@ def _ret(a: float, b: float) -> float | None:
 
 def _event_row(a: BarArrays, ev: EarningsEvent, implied: Mapping[date, float] | None,
                iv30: Mapping[date, float] | None) -> dict | None:
-    react, inferred = reaction_from_arrays(a, ev.date, ev.timing)
+    react, inferred = reaction_from_arrays(a, ev.date, ev.timing, event_calendar(ev))
     if react is None:
         return None
     r = a.index_of(react)
@@ -220,7 +233,7 @@ def reaction_log_moves(a: BarArrays, events: Sequence[EarningsEvent]) -> list[tu
     reaction-day bar and the bar before it exist (pre_close as in `event_rows`)."""
     out = []
     for ev in events:
-        react, _ = reaction_from_arrays(a, ev.date, ev.timing)
+        react, _ = reaction_from_arrays(a, ev.date, ev.timing, event_calendar(ev))
         r = a.index_of(react) if react is not None else None
         if r is None or r < 1:
             continue

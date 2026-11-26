@@ -423,8 +423,8 @@ def universe_event_variance() -> float | None:
 
 def expected_reaction_day(ev: EarningsEvent) -> date:
     """Reaction session of a future event as known today: bmo -> event day, amc/unknown -> next
-    session (unknown counts as amc, so windows include the event)."""
-    return earn_a.reaction_window(ev.date, ev.timing)[1]
+    session (unknown counts as amc, so windows include the event), on the listing's exchange calendar."""
+    return earn_a.reaction_window(ev.date, ev.timing, earn_a.event_calendar(ev))[1]
 
 
 def next_earnings_date(symbol: str) -> date | None:

@@ -27,7 +27,7 @@ import numpy as np
 from . import bs
 from . import calendar as cal
 from .backtest import build_result
-from .earnings import UNKNOWN_TIMING_NOTE, event_variance, reaction_log_moves, reaction_window
+from .earnings import UNKNOWN_TIMING_NOTE, event_calendar, event_variance, reaction_log_moves, reaction_window
 from .stats import BarArrays, bar_arrays
 from .strategies import (OPTION_MULT, TEMPLATES, Leg, Template, close_dt, describe_legs, linear_profile,
                          naked_margin, net_cost, resolve_strikes)
@@ -555,8 +555,9 @@ def earnings_windows(bars: BarArrays, events: Sequence, lookback: int, entry: in
     exit n -> add_trading_days(last, n) (0 = close of the last possible reaction session)."""
     out = []
     for ev in sorted(events, key=lambda e: e.date, reverse=True):
-        first, last = reaction_window(ev.date, ev.timing)
-        d0, d1 = cal.add_trading_days(first, entry), cal.add_trading_days(last, exit)
+        ec = event_calendar(ev)   # the listing's sessions (TSX for a Canadian listing)
+        first, last = reaction_window(ev.date, ev.timing, ec)
+        d0, d1 = ec.add_trading_days(first, entry), ec.add_trading_days(last, exit)
         if d1 <= d0 or bars.index_of(d0) is None or bars.index_of(d1) is None:
             continue
         out.append(EarningsWindow(ev, first, last, d0, d1))
