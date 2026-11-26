@@ -89,3 +89,11 @@ def latest_iv30_date() -> date | None:
     """Most recent date of the merged history: any metrics_daily row or ingested iv30 point."""
     return scalar("""SELECT max(d) FROM (SELECT max(date) AS d FROM metrics_daily
                      UNION ALL SELECT max(date) FROM vol_history WHERE kind = 'iv30')""")
+
+
+def latest_iv30_dates() -> dict[str, date]:
+    """{symbol: the most recent date of its merged history} (any metrics_daily row or ingested iv30 point)."""
+    return {r["symbol"]: r["d"] for r in query("""
+        SELECT symbol, max(d) AS d FROM (SELECT symbol, max(date) AS d FROM metrics_daily GROUP BY symbol
+            UNION ALL SELECT symbol, max(date) FROM vol_history WHERE kind = 'iv30' GROUP BY symbol)
+        GROUP BY symbol""")}

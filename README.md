@@ -171,6 +171,21 @@ shows **"IBKR delayed (no OPRA subscription)"** when option quotes are delayed.
 Some generic ticks (option volume and open interest per underlying) are not sent with delayed data.
 The bridge then sends those values as unknown (never zero) and the status says so.
 
+### Canadian listings on IBKR
+
+The bridge collects the same data for Canadian symbols (RY.TO, RCI.B.TO, …) as for US ones: option chains from the
+Montréal Exchange (merged with Questrade's, the better chain is used), closing chains, IV and HV history (IV rank and
+percentile), option-bar catch-up, underlying stats, quotes, intraday bars and dividend-adjusted history. It works
+on the TSX calendar for them (for example on US Thanksgiving, when only Toronto trades), in CAD. IBKR positions in
+Canadian stocks and options are valued with the Canadian listing's prices on the Portfolio page.
+
+Canadian market data is its own set of IBKR subscriptions (*Toronto Stock Exchange*, *TSX Venture Exchange*,
+*Montréal Exchange*). Without them the bridge uses IBKR's delayed data where IBKR offers it; where IBKR refuses the
+data, the bridge stops asking for that exchange for 20 hours and the status lists it ("No IBKR market-data permission
+(skipped): TSX stocks"). US work is not affected either way. This support follows IBKR's documented contract
+conventions and has not been checked against every account type: if Canadian symbols stay empty, the app's log lines
+starting with `bridge:` say what IBKR answered.
+
 **Market data lines**: IBKR limits how many instruments you can stream at once (100 by default).
 Set your limit in **Settings → Bridge connection**. The bridge uses about 90% of it in each batch. If TWS
 says the limit is reached (error 101), the bridge uses smaller batches until it reconnects, and the status
@@ -201,8 +216,8 @@ through the work one task at a time:
 All historical requests are for daily bars, which IBKR does not hard-limit like small bars: they are
 sent about 1 s apart, and after a real pacing violation the bridge pauses (30 s, growing) and spaces
 requests further apart for a while. When IBKR says your account has no market-data permission for some
-data (for example option bars without OPRA), the bridge skips that symbol and kind for the day and the
-status lists it. Backfills can be resumed: after a restart or a reconnect, the bridge continues where it
+data (for example option bars without OPRA), the bridge skips that symbol and kind for the day — a whole
+Canadian exchange when nothing of it is served — and the status lists it. Backfills can be resumed: after a restart or a reconnect, the bridge continues where it
 stopped. You can cancel bridge work from the menu-bar menu or from Settings.
 
 ## Connect Questrade (optional)
@@ -255,7 +270,8 @@ industry, exchange, website), **News** (press releases, linked to the story on m
 disposed; the company's own buybacks are left out), fetched when a tab is opened and cached like the Nasdaq data of US
 listings (§12.1). Not available for Canadian listings (no free source): dividend histories (only Questrade's current
 dividend is shown) and financial statements. Pre-market / after-hours
-quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge stays US-only.
+quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge covers Canadian listings too (see
+"Canadian listings on IBKR" under Connect IB Gateway).
 
 ## IV surface
 

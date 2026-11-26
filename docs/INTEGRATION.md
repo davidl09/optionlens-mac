@@ -102,8 +102,8 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   (the IBKR bridge via `/api/ingest/no-options`, Questrade's empty chain) or does not carry the symbol, at least one
   of them "no options"; `null` = unknown. One source's "none" is that source's answer, never the symbol's: while
   another serving source has not answered (e.g. Questrade lists none, the IBKR bridge has not been asked) the
-  symbol stays unknown. The sources serving a symbol are the IBKR bridge for US listings once a bridge has reported
-  (it is set up) and every server-side chain source the user connected. Each source's answer is kept
+  symbol stays unknown. The sources serving a symbol (US or Canadian alike) are the IBKR bridge once a bridge has
+  reported (it is set up) and every server-side chain source the user connected. Each source's answer is kept
   (`chain_verdicts`) until that source stores a chain or the universe refresh asks again, and keeps only that
   source from asking for the symbol in the background (sweeps, the bridge's chain universe); opening the symbol
   asks every source again. Databases from before this rule: an `optionable = false` without any source's "no
@@ -226,15 +226,47 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
   stock backtest takes symbols of one market (422 otherwise).
 - Current IV30 (`SymbolSummary.iv30` / `iv30_asof`, `Volatility.iv30` / `iv30_asof`, report and peer IV30 columns):
   the latest value of the merged IV history (§6 "IV history semantics") and its date. IV rank / percentile are
-  of that same value, and only when it is from the last session (else null: stale, never shown as today's).
+  of that same value, and only when it is from the last session of the symbol's market — the latest date of that
+  market's IV history — (else null: stale, never shown as today's).
 
 ## 6. Ingest API (written by the IBKR bridge; all POST except `wants`, Bearer auth, JSON, idempotent)
 
-**The bridge serves US listings only** (`sources/chain_source.bridge_serves`; renderer `src/lib/markets.ts`
-`bridgeServes`). Canadian listings (TSX / MX) would need IBKR's Canadian market-data permissions and other contract
-definitions, so every work list (`wants`, `live-wants`) leaves them out, a refresh round of a Canadian symbol does not
-mark IBKR pending, and the renderer neither asks the bridge for its chain nor for its intraday bars: Canadian data
-comes from Questrade (§8).
+**Markets.** The bridge serves every market OptionLens follows (SPEC §3): US listings and Canadian ones (`RY.TO`,
+`RCI.B.TO`, `XYZ.VN`). Every body names a symbol by its canonical form, so a Canadian chain, series or bar is stored
+under the Canadian symbol and its Montréal Exchange contracts under the codes Questrade's chain has
+(`RY.TO261218C00120000`, `sources/osi.py`): the two sources' chains of a symbol merge and "Chain precedence" decides.
+Values are in the symbol's currency (CAD for Canadian symbols; nothing is converted or mixed), and every session rule
+below (closing snapshots, the session of stats, after-hours fills, history up to the last completed session) uses the
+calendar of the symbol's own market (TSX for Canadian symbols).
+
+How the bridge names a symbol at IBKR (`electron/bridge/markets.ts`, the one place that knows; documented IBKR
+conventions, **not verified against a live Gateway**):
+
+| | US listing (`AAPL`, `BRK.B`) | Canadian listing (`RY.TO`, `RCI.B.TO`, `XYZ.VN`) |
+|---|---|---|
+| stock | `STK`, symbol with a space for share classes (`BRK B`), exchange `SMART`, `USD` | `STK`, the ticker with its dots (`RCI.B`, `AP.UN`), exchange `SMART`, primaryExchange `TSE` (`.TO`) / `VENTURE` (`.VN`), `CAD` |
+| resolution | none (the contract as it is) | `reqContractDetails` once per symbol — the dotted ticker, then the spaced one (`RCI B`) when IBKR knows no such contract (error 200) — and from then on by the saved conId (`contract-cache/<SYMBOL>.json`); a listing IBKR does not know is left out for the run |
+| options | `OPT` on `SMART` (OPRA), `USD`; the `SMART` rows of `reqSecDefOptParams` | `OPT` on `CDE` (Montréal Exchange), `CAD`, multiplier 100; the `CDE` rows of `reqSecDefOptParams` (all rows when it names no `CDE` row); when an expiry is listed under several trading classes, the class named like the ticker before its class / unit suffix (`RY`; `TECK` for `TECK.B`) |
+| market-data groups | options: OPRA; stocks: not grouped (the symbol does not say which US exchange lists it) | stocks: TSX, TSX Venture; options: Montréal Exchange |
+
+**Market-data permissions per group** (`electron/bridge/permissions.ts`). IBKR grants market data per exchange, so
+the bridge keeps what an account may get per group and one market never holds up the other:
+- the options feed state of "No OPRA" (§7) is kept per market (`bridge-options-feed.json` for the US,
+  `bridge-options-feed-ca.json`): Canadian option quotes refused (354 / 10089 / 10090 / 10168) make the Canadian feed
+  `delayed_only` — asked as delayed data in regular hours, not at all outside them — and leave US chains as they are;
+- a refusal of stock data of the TSX or the TSX Venture (streaming: every contract of a stats batch refused; a
+  historical request: error 162 "No market data permissions …") while nothing of that exchange was ever served in
+  this run denies the exchange for 20 h: its queued stats, IV/HV, dividend-history and intraday work is dropped, none
+  is queued, and its symbols leave the live fallback. Once the exchange served anything, a refusal is the symbol's
+  own (the per-symbol denial of before). Option-bar history is one group per market in the same way;
+- a chain whose underlying quote is refused is centred on the engine's reference price (below), so Montréal Exchange
+  quotes do not need the TSX subscription.
+Stats batches hold symbols of one market and exchange; the markets' chains and stats batches are queued in turns.
+The log names every denial with IBKR's own error text and codes (`bridge: no market-data permission for TSX stocks
+(no TSX subscription?); skipping them for 20 h (TWS 354: … (IBKR errors: 10089 ×40))`), the first data of a group
+(`bridge: IBKR serves TSX stocks market data`), each listing resolved (`bridge: RY.TO is conId … at IBKR ("RY", TSE,
+CAD)`) and the first chain of each market (`bridge: first Canadian options chain pushed: RY.TO, 180 contracts, 97%
+quoted, options delayed, underlying real-time`).
 
 Times are ISO-8601 with offset; dates `YYYY-MM-DD`; IV/percent as fractions; prices per share.
 
@@ -338,8 +370,9 @@ POST /api/ingest/underlying-stats          // universe-wide per-underlying optio
                "iv30": 0.251, "hv30": 0.27 } ] }
 → 200 {"stored": n}   // fills that session's metrics row fields where no chain-derived value exists
                       // (chain-derived values for the same session win); iv30 also feeds IV history.
-                      // session_date must be the session of ts (400 otherwise, e.g. a fill queued before
-                      // the open and sent after it); ts at/after 20:00 ET of session_date = after-hours fill
+                      // One push holds symbols of one market (400 otherwise); session_date must be that
+                      // market's session of ts (400 otherwise, e.g. a fill queued before the open and sent
+                      // after it); ts at/after 20:00 ET of session_date = after-hours fill
 POST /api/ingest/option-bars               // historical daily bars of individual contracts (gap catch-up)
 { "source": "ibkr", "symbol": "AAPL",
   "bars": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C", "date": "2026-11-19",
@@ -364,7 +397,8 @@ POST /api/ingest/positions                 // the IBKR accounts' positions, read
   "positions": [ { "account": "U1234567", "sec_type": "STK" | "OPT" | ..., "symbol": "AAPL", "currency": "USD",
                    "qty": 100, "avg_cost": 182.5,            // as TWS reports it: per share (STK), per contract (OPT)
                    "multiplier": 100, "expiry": "2026-12-18", "strike": 350, "right": "C",   // options
-                   "trading_class": "AAPL", "con_id": 265598 } ],
+                   "trading_class": "AAPL", "con_id": 265598,
+                   "exchange": "NASDAQ" } ],                 // optional: the exchange TWS names (a stock's venue)
   "accounts": [ { "account": "U1234567", "currency": "USD",          // the account's base currency
                   "net_liquidation": 50000, "cash": 10000, "buying_power": 80000 } ],
   "fx": [ { "currency": "CAD", "base": "USD", "rate": 0.72 } ] }    // 1 CAD = 0.72 USD ($LEDGER ExchangeRate)
@@ -388,25 +422,37 @@ classes stay real-time). Unknown values are sent as null, never 0 (delayed data 
 exposes it as `delayed: boolean` on `Quote` and `Chain` JSON so the UI can badge delayed data.
 
 `GET /api/ingest/wants` → what the server would like the bridge to fetch now (the bridge polls it every
-5 min while connected, and immediately after connecting). The bridge runs one task at a time, always
+5 min while connected, and immediately after connecting). **Version 2**: `underlying_stats`, `chain_universe` and
+`eod_chains` are lists with one plan per market (`market`: "US" | "CA"), each on its market's calendar — on a US-only
+holiday the Canadian plans are a live session while the US ones are an after-hours fill of the day before; on an
+early close each market's closing window starts at its own close + 20 min. (Version 1 gave one object each, US only;
+the bridge reads a single object as one plan.) The flat lists (`iv_history`, `hv_history`, `dividend_history`,
+`option_bars`) hold symbols of both markets, each judged by its own market's sessions. The bridge runs one task at a time, always
 within IBKR pacing: on-demand refreshes (user-triggered) first — they even run between the market-data
 batches of a longer task, and a running historical request (IV/HV history, index bars, option bars) is
 aborted and re-queued (no attempt used) so the refresh does not wait behind a long download — and every other kind gets a weighted share of TWS time (eod_chains 8,
 chain_universe 4, underlying_stats 3, index quotes/bars 2, option_bars 1, iv_history 1), so each kind with
 work makes progress in every cycle (dividend_history 2, between option_bars and iv_history in tie-breaks).
 ```
-{ "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"} ],   // IV30 series to fetch (see below)
+{ "version": 2,
+  "iv_history": [ {"symbol": "AAPL", "from": "2016-01-01"}, {"symbol": "RY.TO", "from": "2016-01-01"} ],   // IV30 series to fetch (see below)
   "hv_history": [ {"symbol": "AAPL", "from": "2026-11-20"} ],   // HV30 series, same rule per series
   "history_symbols": 836,                                       // symbols kept (wanted or already current)
-  "underlying_stats": { "symbols": ["AAPL", ...], "max_age_s": 1800 },   // whole universe, open-20:00 ET; else
-                                                                // an after-hours fill (below) with "as_of_session"
-  "chain_universe": { "symbols": ["AAPL", ...], "max_age_s": 3600,       // watchlists + most liquid N (config,
-                      "expiries": 6, "moneyness": 0.20 },                // default 150) + recently opened symbols;
-                                                                // 09:00-20:00 ET on trading days; else an
+  "underlying_stats": [ { "market": "US", "session_date": "2026-11-20", "symbols": ["AAPL", ...], "max_age_s": 1800 },
+                        { "market": "CA", "session_date": "2026-11-20", "symbols": ["RY.TO", ...], "max_age_s": 1800 } ],
+                                                                // the market's universe, its open-20:00 ET, pushed
+                                                                // with session_date; else an after-hours fill
+                                                                // (below) with "as_of_session"
+  "chain_universe": [ { "market": "US", "symbols": ["AAPL", ...], "max_age_s": 3600,   // watchlists + most liquid N
+                        "expiries": 6, "moneyness": 0.20 },                // (config, default 150, over both markets)
+                      { "market": "CA", "symbols": ["RY.TO"], ... } ],     // + recently opened symbols; 09:00-20:00
+                                                                // ET on the market's trading days; else an
                                                                 // after-hours fill (below) with "as_of_session"
-  "eod_chains": { "session_date": "2026-11-20", "symbols": ["AAPL", ...], "not_before": "...", "deadline": "..." },
-                                                                // chain_universe + indices (SPX, NDX, RUT, XSP)
-                                                                // after close+20m until 20:00 ET
+  "eod_chains": [ { "market": "US", "session_date": "2026-11-20", "symbols": ["AAPL", ...], "not_before": "...", "deadline": "..." },
+                  { "market": "CA", "session_date": "2026-11-20", "symbols": ["RY.TO"], "not_before": "...", "deadline": "..." } ],
+                                                                // the market's chain-universe symbols (US: + the
+                                                                // indices SPX, NDX, RUT, XSP) after its close+20m
+                                                                // until 20:00 ET
   "option_bars": [ {"symbol": "AAPL", "sessions": ["2026-11-18"], "expiries": 6, "moneyness": 0.15} ],
                                                                 // sessions without a real end-of-day archive
                                                                 // (see ack-wants)
@@ -417,7 +463,7 @@ work makes progress in every cycle (dividend_history 2, between option_bars and 
   "dividend_history": [ {"symbol": "KO", "from": "2016-11-01"} ],     // daily adjusted + raw closes (§ Dividends)
   "chains_on_demand_max_age_s": 120 }
 ```
-**Dividends** (every US listing; Nasdaq has per-symbol histories for Nasdaq listings only). Three sources, merged per
+**Dividends** (every listing; Nasdaq has per-symbol histories for Nasdaq listings only, none for Canadian ones). Three sources, merged per
 (symbol, ex-date) on read (`repo/dividends.py`): **Nasdaq** (calendar + histories, table `dividends`) when it has the
 row, else **IBKR-derived** (`ibkr-adjusted`), else **Questrade's current dividend** (`questrade`); the merged row takes
 its missing pay / record / declared dates from the other sources, and `discrepancy` is true when the sources' amounts
@@ -447,20 +493,21 @@ first connection, minutes a week afterwards.
 Questrade's current dividend (`dividend`: one payment, see §8) with `exDate` / `dividendDate` is stored once per
 symbol per day with the reference snapshot.
 
-**After-hours fills.** Outside those hours (evening, weekend, weekday before the open) the engine asks for the current
-session's data (`session_date`: the last completed session) when it is missing — so a first launch on a weekend
+**After-hours fills.** Outside those hours (evening, weekend, weekday before the open; per market, so also on a
+day only the other market trades) the engine asks for the market's current
+session's data (`session_date`: its last completed session) when it is missing — so a first launch on a weekend
 populates the universe reports, dashboard, IV rankings and screeners instead of waiting for Monday:
 ```
-"underlying_stats": { "symbols": [...], "max_age_s": 21600, "as_of_session": "2026-11-20" },
-     // when > 20% of the universe has no metrics row for as_of_session: those symbols (else [])
-"chain_universe": { "symbols": [...], "max_age_s": 21600, "expiries": 6, "moneyness": 0.20, "as_of_session": "2026-11-20" },
-     // chain-universe symbols without a chain fetched since as_of_session's open
+"underlying_stats": [ { "market": "US", "session_date": "2026-11-20", "symbols": [...], "max_age_s": 21600, "as_of_session": "2026-11-20" }, ... ],
+     // when > 20% of the market's universe has no metrics row for as_of_session: those symbols (else [])
+"chain_universe": [ { "market": "US", "symbols": [...], "max_age_s": 21600, "expiries": 6, "moneyness": 0.20, "as_of_session": "2026-11-20" }, ... ],
+     // the market's chain-universe symbols without a chain fetched since as_of_session's open
 ```
 Symbols come in fill order: watchlists, recently opened, most liquid (stored option volume), the rest. `max_age_s`
 6 h: a fill is pushed once; a symbol IBKR sent nothing for is asked again 6 h later. The bridge runs them on its
 normal scheduler (on-demand still first) right after connecting, the stats pass before the chains (it takes a few
 minutes for the whole universe, and its option volumes rank the chain universe): it asks for the chains again once
-no stats work is left. The session-wide market data type 4 (delayed-frozen) makes TWS answer with the session's
+no stats work is left (a market in its live session is not held back by the other market's fill). The session-wide market data type 4 (delayed-frozen) makes TWS answer with the session's
 frozen values; generic ticks 100/101/104/106 are often absent then and are posted as null (never 0) — current IV30
 then comes from the IV history (§5). The stats push uses `session_date` = `as_of_session`. The bridge status reports
 `populate: {sessionDate, done, total}` ("Populating last session's data: 340/1145" in Settings, Status and empty
@@ -552,14 +599,15 @@ every 1.5 s while a source is pending and reloads the page each time a source de
 a problem and no other source delivered ("IBKR contract server unavailable; Questrade: missing market-data
 permission").
 
-The on-demand refresh runs at any time, also outside market hours and on weekends: the bridge requests
+The on-demand refresh (US and Canadian symbols alike) runs at any time, also outside market hours and on weekends: the bridge requests
 market data type 4 (delayed-frozen), so TWS answers with the last values of the session. Its result
 (`RefreshResult`, electron/shared/api.ts, also reported to the round) is `refreshed` / `fresh` / `no-options` (IBKR lists no options:
 the bridge POSTed `/api/ingest/no-options`) / `unavailable` (bridge off, not connected or paused; asked again
 when the bridge connects while the page is open) / `failed`. After `refreshed` or `no-options` the page reloads.
 
 Chain fetch details (bridge): the first 8 expiries listed by `reqSecDefOptParams` (underlying symbol, futFopExchange
-"", secType STK/IND, the underlying's conId; SMART rows), strikes within ±25% of spot. The option parameters are kept
+"", secType STK/IND, the underlying's conId; the rows of the market's option exchange: SMART, or CDE for a Canadian
+symbol, §6 "Markets"), strikes within ±25% of spot. The option parameters are kept
 per underlying for the New York day; an answer without rows (the end message alone) means IBKR lists no options
 (`no-options`, at once). When TWS does not answer within 60 s the request is sent once more with a 120 s wait. Every
 listed contract of every picked expiry is posted, those TWS sent nothing for with null fields (shown as "no quote"); an
@@ -581,7 +629,7 @@ strikes) and, per expiry, the resolved option contracts (conId, expiry, strike, 
 were fetched. While the sec-def farm is reported broken or connecting, or for 15 min after a contract request went
 unanswered (then the next request is the one probe), the bridge asks IBKR for no contract definitions: a chain is built
 from the saved list when it is at most 7 days old (expired expiries dropped; expiries listed since then are missing)
-and its quotes are requested by conId on SMART (the market-data farm serves them). Such a push carries
+and its quotes are requested by conId on the market's option exchange (SMART / CDE; the market-data farm serves them). Such a push carries
 `contracts_from_cache: true`. Without a usable saved list, chain work (universe, closing chains, option-bar catch-up)
 is parked — not failed, not retried — until the Gateway reports the sec-def farm OK (2158) or the 15 min probe time;
 an on-demand refresh answers `unavailable` with `waitingFor: "contract-server"` ("IBKR's contract server is
@@ -591,7 +639,9 @@ chains use saved contract lists".
 
 **No OPRA (US options delayed only).** Without an OPRA subscription TWS sends delayed option quotes during the regular
 session but refuses delayed-frozen option data outside it (354 on a weekend). After a 354 / 10089 / 10090 / 10168 on
-option quotes the bridge records `options_subscription: "delayed_only"` (persisted, `bridge-options-feed.json`). Then,
+option quotes the bridge records `options_subscription: "delayed_only"` (persisted, `bridge-options-feed.json`; the
+state is kept per market, §6 "Market-data permissions per group": the heartbeat and `optionsSubscription` report the
+US one, the Canadian one shows as a status note "Canadian options: delayed only (no Montréal Exchange subscription)"). Then,
 outside 09:30–16:00 ET (and on a day even delayed option data was refused, e.g. a holiday), no option market data is
 requested: closing and universe chains are not queued, and an on-demand refresh answers `unavailable` with
 `waitingFor: "market-hours"` ("Option quotes update during market hours (no real-time options subscription); showing
@@ -1002,7 +1052,11 @@ per-process random key: stable while the engine runs, not reversible); the bridg
   TotalCashValue,BuyingPower,$LEDGER:ALL` (ExchangeRate per currency); pushed once the first position list is
   complete, 1 s after a change (debounced) and every 60 s. States: `waiting` (no push yet), `ok`, `stale` (last push
   older than 3 min: shown as of its time), `disabled`. IBKR's option `avgCost` is per contract: the engine divides it by
-  the multiplier.
+  the multiplier. IBKR names a contract by ticker, currency and exchange: the engine maps it to its canonical
+  symbol (`portfolio/ibkr.py` `canonical`) — `BRK B` → `BRK.B`; a CAD contract → the Toronto listing of its venue
+  (`exchange` TSE → `.TO`, VENTURE → `.VN`; when TWS names no listing venue, as for an option, the listing OptionLens
+  knows, the TSX first), and a Montréal Exchange option gets the code every chain source uses. A CAD contract that
+  maps to no listing OptionLens follows keeps IBKR's ticker (shown, not valued).
 - Settings → Data sources → each broker: **"Show my positions"** (`GET|PUT /api/portfolio/settings {questrade?, ibkr?}`
   → `{questrade, ibkr}`, `DATA_DIR/portfolio.json`; default on). Off hides the broker's positions and stops fetching
   them (no Questrade account call; the bridge cancels its subscriptions; pushes are ignored).
@@ -1010,8 +1064,11 @@ per-process random key: stable while the engine runs, not reversible); the bridg
 **`GET /api/portfolio?currency=USD|CAD&refresh=`** → `Portfolio` (types.ts):
 - `positions` (in `underlyings[].positions`): qty in shares / contracts, `avg_cost` and `price` per share; money in the
   position's currency. `price`: the live value (§9) while some window keeps the contract live — the Portfolio page
-  subscribes the held US stocks, option contracts and SPY — else the fresher of the stored quote / chain row and the
-  broker's own price (`price_source` live | stored | broker). Market value = price × qty × multiplier; cost basis =
+  subscribes the held listed stocks, option contracts and SPY — else the fresher of the stored quote / chain row and
+  the broker's own price (`price_source` live | stored | broker). OptionLens' own data values a holding only when it
+  is of a listing OptionLens follows, held in that listing's currency (`linkable`: USD for a US symbol, CAD for a
+  Canadian one — a CAD position is never valued with the US listing's price); any other holding has the broker's
+  price (Questrade) or none (IBKR reports no price). Market value = price × qty × multiplier; cost basis =
   avg cost × qty × multiplier; unrealized P/L and % of |cost basis|; day P/L = the broker's figure (`day_pnl_basis`
   "broker", Questrade's `dayPnl` when sent), else (price − previous close) × qty × multiplier ("prev_close": the live /
   stored quote's previous close; for options the broker's previous close or the last archived session's mid; exact
@@ -1027,7 +1084,7 @@ per-process random key: stable while the engine runs, not reversible); the bridg
   the same way. `beta_weighted`: Σ bwd_delta_spy (SPY shares), × SPY price, positions weighted / excluded.
 - `sources[]`: each broker's `{state, detail, fetched_at, accounts, positions}`; `live`: what the page keeps live.
 
-**`GET /api/portfolio/risk?underlying=`** → `PortfolioRisk`: everything held on one US underlying, across accounts and
+**`GET /api/portfolio/risk?underlying=`** → `PortfolioRisk`: everything held on one listed underlying (US or Canadian, in its currency), across accounts and
 brokers, as one calculator position (analytics.payoff, the calculator engine): each leg at its cost basis (the
 average cost is the entry price), options at their IV (as above); P/L at the nearest expiry and today across underlying
 prices, breakevens, max profit / loss, greeks; legs without an IV or a cost are left out and named in `skipped`.

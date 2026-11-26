@@ -213,8 +213,14 @@ def test_iv_and_hv_history_of_a_canadian_symbol_feed_its_iv_rank(tmpdb):
     body = {"source": "ibkr", "symbol": SYM, "bars": [{"date": d, "value": 0.15 + 0.1 * i / 328} for i, d in enumerate(days)]}
     assert ingest.vol_history("iv30", {**body, "kind": "iv30"}) == {"stored": 329}
     assert ingest.vol_history("hv30", {**body, "kind": "hv30"}) == {"stored": 329}
+    vol_history_repo.upsert("AAPL", "iv30", "ibkr", [(d, 0.2 + i / 1000) for i, d in enumerate(days) if d <= WED])   # NYSE: closed on the 26th
+    context.invalidate()
     info = context.iv_rank_info(SYM)
     assert info["iv30"] == pytest.approx(0.25) and info["iv30_asof"] == THANKSGIVING and info["history_days"] > 200
+    assert info["iv_rank"] == pytest.approx(1.0) and info["iv_percentile"] is not None
+    # each market's rank is current on its own last session: Toronto's newer day does not make the US one stale
+    assert context.iv_rank_info("AAPL")["iv30_asof"] == WED and context.iv_rank_info("AAPL")["iv_rank"] is not None
+    assert context.iv_rank_all()[SYM]["iv_rank"] == pytest.approx(1.0) and context.iv_rank_all()["AAPL"]["iv_rank"] is not None
     assert context.iv_rank_info("RY")["iv30"] is None       # the NYSE listing has its own series
     assert set(vol_history_repo.last_dates("hv30", [SYM])) == {SYM}
 

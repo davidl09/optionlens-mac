@@ -360,9 +360,20 @@ def iv_history(symbol: str, cols: Sequence[str]) -> dict[str, np.ndarray]:
     return vol_history_repo.history_merged(normalize_symbol(symbol), cols)
 
 
-def iv_session() -> date | None:
-    """Latest date of the IV history (collected or ingested): IV rank is current only on it."""
-    return vol_history_repo.latest_iv30_date()
+def iv_sessions() -> dict[str, date]:
+    """{market code: the latest date of its symbols' IV history (collected or ingested)}. Per market: on a day only
+    one market trades, the other's IV ranks stay those of its own last session."""
+    out: dict[str, date] = {}
+    for sym, d in vol_history_repo.latest_iv30_dates().items():
+        code = markets.market_of(sym).code
+        if code not in out or d > out[code]:
+            out[code] = d
+    return out
+
+
+def iv_session(symbol: str) -> date | None:
+    """Latest date of the IV history of `symbol`'s market: its IV rank is current only on it."""
+    return iv_sessions().get(markets.market_of(symbol).code)
 
 
 def metrics_series(symbol: str, cols: list[str]) -> dict[str, dict[date, float | None]]:
@@ -378,14 +389,14 @@ def iv_rank_info(symbol: str) -> dict:
     iv_history iv30 (vol.iv_rank_current: the latest stored IV30 and its date; rank of that value over
     the last 252 rows, only when it is from iv_session). Every page shows this iv30 as the current IV30."""
     h = iv_history(symbol, ["iv30"])
-    return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), iv_session())
+    return vol.iv_rank_current(_dates(h["date"]), h["iv30"].tolist(), iv_session(symbol))
 
 
 def iv_rank_all() -> dict[str, dict]:
     """iv_rank_info for every symbol with IV history (one query, last 252 rows; cached per sweep)."""
     def build():
-        session = iv_session()
-        return {s: vol.iv_rank_current(_dates(c["date"]), c["iv30"].tolist(), session)
+        sessions = iv_sessions()
+        return {s: vol.iv_rank_current(_dates(c["date"]), c["iv30"].tolist(), sessions.get(markets.market_of(s).code))
                 for s, c in vol_history_repo.iv30_bulk(vol.IV_RANK_ROWS).items()}
     return _memoized("iv_rank_all", build)
 
