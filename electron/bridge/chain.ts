@@ -1,6 +1,6 @@
 // Option-chain planning and assembly (pure): which underlying contract, which expiries and strikes,
 // and how accumulated ticks become the POST /api/ingest/chain body (INTEGRATION.md §6).
-import type { IngestChain, IngestContract, IngestUnderlying } from "./ingest";
+import type { IngestChain, IngestContract, IngestUnderlying, ReferencePrice } from "./ingest";
 import { nyYmd } from "./ny";
 import { bestPrice, quoteSides, type QuoteSnapshot } from "./ticks";
 import type { OptionParams, TwsContract } from "./tws";
@@ -67,10 +67,16 @@ export function isoDate(twsDate: string): string | null {
 }
 
 /** `rthClose`: the regular-session close, sent with closing chains (the engine archives with it). */
-export function assembleUnderlying(q: QuoteSnapshot, ts: string, rthClose: number | null = null): IngestUnderlying | null {
-  const price = bestPrice(q) ?? rthClose;
+/**
+ * The chain's underlying: TWS's price, else the regular-session close (closing chains), else the engine's reference
+ * price (marked `reference`, stamped with its own time). Null without any.
+ */
+export function assembleUnderlying(q: QuoteSnapshot, ts: string, rthClose: number | null = null, reference: ReferencePrice | null = null): IngestUnderlying | null {
+  const live = bestPrice(q) ?? rthClose;
+  const price = live ?? reference?.price ?? null;
   if (price === null) return null;
-  return { price, ...quoteSides(q.bid, q.ask), open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts, rth_close: rthClose };
+  const base = { price, ...quoteSides(q.bid, q.ask), open: q.open, high: q.high, low: q.low, prev_close: q.close, volume: q.volume, ts, rth_close: rthClose };
+  return live === null && reference ? { ...base, ts: reference.ts, reference: true } : base;
 }
 
 /** TWS gave something usable for the contract: a quote side, a last price or a model IV. */

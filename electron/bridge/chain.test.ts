@@ -69,6 +69,7 @@ describe("tick sanitizing", () => {
 describe("chain planning", () => {
   it("maps indices to IND contracts and share classes to IBKR spelling", () => {
     expect(underlyingContract("spx")).toEqual({ symbol: "SPX", secType: "IND", exchange: "CBOE", currency: "USD" });
+    expect(underlyingContract("xsp")).toEqual({ symbol: "XSP", secType: "IND", exchange: "CBOE", currency: "USD" });
     expect(underlyingContract("BRK.B")).toEqual({ symbol: "BRK B", secType: "STK", exchange: "SMART", currency: "USD" });
   });
 

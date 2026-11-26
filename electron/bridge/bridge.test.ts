@@ -36,7 +36,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
   const quoteBodies: unknown[] = [];
   const intraday: IntradayBarsPush[] = [];
   const positionBodies: IngestPositions[] = [];
-  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), dividendHistory: rec("divs"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
+  const ingest: IngestApi = { wants: async () => (typeof wants === "function" ? wants() : wants), referencePrice: async () => { throw new Error("404 no price stored"); }, liveWants: async () => (o.live ? o.live() : { symbols: [], interval_s: 5 }), chain: async (b) => { chains.push(b); return rec("chain")(b); }, noOptions: rec("noOptions"), ackWants: async (b) => { calls.push(`ack:${JSON.stringify(b)}`); return {}; }, volHistory: rec("vol"), indexBars: rec("bars"), dividendHistory: rec("divs"), quotes: async (b) => { calls.push("quotes"); quoteBodies.push(b); return {}; },
     underlyingStats: async (b) => { calls.push("stats"); statsBodies.push(b); return {}; }, optionBars: rec("obars"), intradayBars: async (b) => { intraday.push(b); return rec("intraday")(b); }, heartbeat: async (b) => { calls.push("heartbeat"); heartbeats.push(b); return {}; },
     refreshResult: async (b) => { reports.push(b); return {}; }, positions: async (b) => { positionBodies.push(b); return {}; } };
   const session = new FakeSession(sessionMarket);

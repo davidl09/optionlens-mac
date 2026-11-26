@@ -248,9 +248,11 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
         metrics_repo.upsert_metrics(date(2026, 11, 19), sym, {"call_volume": v, "put_volume": v})
     monkeypatch.setattr(bridge_plan, "get_settings", lambda: type("S", (), {"chain_universe_size": 2})())
     assert bridge_plan.chain_universe(now) == ["F", "TSLA", "NVDA", "AAPL"]
-    symbols_repo.set_optionable("TSLA", False)                                     # IBKR lists no options
+    symbols_repo.record_verdict("NVDA", "questrade", "no_options")                 # another source's answer
+    assert bridge_plan.chain_universe(now) == ["F", "TSLA", "NVDA", "AAPL"]
+    symbols_repo.record_verdict("TSLA", "ibkr", "no_options")                      # IBKR lists no options
     assert bridge_plan.chain_universe(now) == ["F", "NVDA", "AAPL"]
-    symbols_repo.set_optionable("TSLA", True)
+    symbols_repo.reprobe_not_optionable(["TSLA", "NVDA"])                          # the universe refresh asks again
     live = bridge_plan.chain_universe_want(ny(2026, 11, 20, 19, 59))
     assert live == {"symbols": ["F", "TSLA", "NVDA", "AAPL"], "max_age_s": 3600, "expiries": 6, "moneyness": 0.20}
     # after the window (20:30 ET), before it (08:59 ET) and on Saturday: only an after-hours fill of the current

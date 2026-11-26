@@ -94,11 +94,20 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
 - Errors are `{"detail": "<message>"}`; where the UI acts on an error the body adds a machine-readable `code`.
   Every endpoint that needs a stored chain (chain, activity, open-interest, contract, skew, iv-surface, implied-moves,
   straddle, ideas, `POST /api/calc/strategy`) answers a known symbol without one with
-  `404 {"detail": "...", "code": "no_chain"}` (not fetched yet), or `"code": "no_options"` when a chain source
-  confirmed the symbol lists no options. The app shows "fetching" / "connect IB Gateway" / "no options" for these
-  instead of an error.
-- `SymbolSummary.optionable` is tri-state: `true` once a chain was stored, `false` when a chain source (the IBKR
-  bridge via `/api/ingest/no-options`, or a vendor source) confirmed no listed options, `null` = unknown.
+  `404 {"detail": "...", "code": "no_chain"}` (not fetched yet), or `"code": "no_options"` when the symbol is
+  known to list no options (`optionable` false, below). The app shows "fetching" / "connect IB Gateway" /
+  "no options" for these instead of an error.
+- `SymbolSummary.optionable` is tri-state (**Listed options**, jobs/optionable.py): `true` once a chain from any
+  source was stored; `false` once every chain source serving the symbol answered "none" for it — it lists no options
+  (the IBKR bridge via `/api/ingest/no-options`, Questrade's empty chain) or does not carry the symbol, at least one
+  of them "no options"; `null` = unknown. One source's "none" is that source's answer, never the symbol's: while
+  another serving source has not answered (e.g. Questrade lists none, the IBKR bridge has not been asked) the
+  symbol stays unknown. The sources serving a symbol are the IBKR bridge for US listings once a bridge has reported
+  (it is set up) and every server-side chain source the user connected. Each source's answer is kept
+  (`chain_verdicts`) until that source stores a chain or the universe refresh asks again, and keeps only that
+  source from asking for the symbol in the background (sweeps, the bridge's chain universe); opening the symbol
+  asks every source again. Databases from before this rule: an `optionable = false` without any source's "no
+  options" answer stored becomes unknown again at startup.
 - `Quote.after_hours` / `Chain.after_hours`: the stored quote / chain was collected after its session's closing data
   arrived (close + 20 min: evening, weekend, before the next open), i.e. from IBKR's frozen data of that session.
   `ReportResult.after_hours` / `MarketOverview.after_hours`: some rows' session values are an after-hours fill
@@ -239,6 +248,8 @@ POST /api/ingest/chain
                   "prev_close": ..., "volume": 123, "ts": "...",
                   "rth_close": 348.7 },             // final chains: regular-session close of session_date
                                                     // (daily TRADES bar, useRTH); optional, null if unknown
+                  // "reference": true — optional (default false): `price` is the engine's reference price and `ts`
+                  // its time, because TWS sent no underlying price (GET /api/ingest/reference-price, below)
   "contracts": [ { "expiry": "2026-12-18", "strike": 350.0, "right": "C",
                    "bid": 9.1, "ask": 9.3, "last": 9.2, "last_ts": "...",   // last_ts: when `last` traded (optional)
                    "volume": 812, "oi": 15321,
@@ -282,9 +293,19 @@ complete closing chain is posted with `final: false` (live chain only, never arc
 ```
 POST /api/ingest/no-options                // IBKR lists no options for the symbol (reqSecDefOptParams
 { "source": "ibkr", "symbol": "DELL" }    // returned no parameters / no future expiries)
-→ 200 {"symbol": "DELL", "optionable": false}   // 404 for unknown symbols. A later chain push sets it true
-                                                // again; stored data is kept. Such symbols leave the chain
+→ 200 {"symbol": "DELL", "optionable": false}   // 404 for unknown symbols. The bridge's answer (§5 Listed
+                                                // options: optionable false once every serving source answered
+                                                // "none", else null). A later chain push sets it true again;
+                                                // stored data is kept. Such symbols leave the bridge's chain
                                                 // universe (opening one still asks the bridge, §7)
+GET /api/ingest/reference-price/{symbol}   // Reference price: the engine's own current price (its newest stored
+→ 200 {"symbol": "XSP", "price": 700.49,  // quote, else its latest daily close) for a chain whose underlying TWS
+       "ts": "...", "source": "ibkr"}     // sent no price for (no market-data subscription for it, e.g. a CBOE
+                                          // index); 404 when none is stored. The bridge centres the strike band
+                                          // on it and posts the chain with `underlying.reference: true` (`price`
+                                          // = that price, `ts` = its time) and `delayed: true`; the engine uses it
+                                          // as the chain's underlying (IVs, moneyness) and stores it as the quote
+                                          // only when none is stored.
 POST /api/ingest/iv-history
 { "source": "ibkr", "symbol": "AAPL", "kind": "iv30",   // IBKR OPTION_IMPLIED_VOLATILITY daily close
   "bars": [ { "date": "2025-11-20", "value": 0.243 }, ... ] }
@@ -679,8 +700,17 @@ docs do not say which the headers describe). A 429 pauses until the reset (else 
 5xx / timeouts back off 0.5 s · 2^n, 3 times.
 
 **Fetching one chain**: symbol id (`symbols/search`, cached in `DATA_DIR/questrade_symbols.json`; not-found answers
-re-asked after 7 days and the symbol is skipped, never marked unoptionable), `symbols/:id` once per New York day
-(`hasOptions` false → no options), `markets/quotes?ids=`, `symbols/:id/options`, and one `markets/quotes/options`
+re-asked after 7 days and the symbol is skipped; ids cached by an older resolution version are resolved once more).
+Of the search results matching the symbol in its market (an `Index` result by its part before `.`: `SPX.IN`), the
+listing of the type that fits the symbol is taken first — `Index` for the cash indices, another type for every other
+symbol — and the choice is logged once (`questrade SYM: resolved to SPX.IN (symbolId 28987, Index, <description>,
+USD <exchange>); other listings: …`). `symbols/:id` once per New York day; when that listing lists no options
+(`hasOptions` false, or no standard contracts in `symbols/:id/options`) the symbol's other matching listings are
+tried once per New York day (`symbols/:id`, and `symbols/:id/options` where `hasOptions`), the first with options is
+adopted and cached, and one log line lists every listing tried with its `hasOptions` and contract count
+(`questrade SYM: lists no options; tried …` / `questrade SYM: adopted symbolId N (it lists options); tried …`). An
+index's options are asked for by the index listing's own id (SPX.IN's chain, quotes `SPX18Dec26C7000.00` with
+underlying `SPX.IN`). Then `markets/quotes?ids=`, `symbols/:id/options`, and one `markets/quotes/options`
 POST with one filter per expiry (first `QUESTRADE_EXPIRIES` on/after today, strikes within ±`QUESTRADE_MONEYNESS`
 of the price): 3 calls per chain (plus 2 per symbol per day). Mapping: OSI from root/expiry/right/strike (standard
 roots and 100 multiplier only; SPX/NDX/RUT keep the PM root where an expiry has both); every listed contract in the

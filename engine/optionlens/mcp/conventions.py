@@ -42,7 +42,8 @@ CONVENTIONS = """\
   atm_iv_computed / iv_computed: a metric uses engine-computed IVs because the source gave none.
 - contracts_from_cache: the chain's contract list was a saved one (IBKR's contract server was down); quotes are
   current, newly listed expiries may be missing.
-- optionable: true = a chain is stored, false = a source confirmed no listed options, null = not known yet.
+- optionable: true = a chain is stored, false = every chain source serving the symbol confirmed it lists no options,
+  null = not known yet (e.g. one source lists none, another has not answered).
 - IV30 and IV rank / percentile are of the latest stored value (iv30_asof); rank / percentile are null when that
   value is not from the last session.
 

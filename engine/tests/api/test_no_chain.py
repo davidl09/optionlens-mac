@@ -11,7 +11,7 @@ from optionlens.models import Bar, Quote
 from optionlens.repo import bars, quotes, symbols
 from optionlens.services import context
 
-from .test_engine_api import _chain
+from .test_engine_api import _chain, _contract
 
 SYM = "HPQ"
 QSYM = "HPQV"
@@ -105,3 +105,28 @@ def test_a_pushed_stock_quote_keeps_ohlc_and_volume_and_fills_gaps_from_bars(cli
     assert (q["price"], q["open"], q["high"], q["low"], q["volume"], q["bid"]) == (31.5, 31.0, 32.0, 30.9, 2_500_000, 31.4)
     assert q["source"] == "ibkr" and q["delayed"] is True
     assert client.post("/api/ingest/quotes", json={**body, "quotes": [{**body["quotes"][0], "volume": -1}]}).status_code == 422
+
+
+def test_reference_price_and_a_chain_centred_on_it(client):
+    """GET /api/ingest/reference-price: the engine's own price (here the latest daily close, no quote stored) for a
+    client whose feed sent no underlying price; a chain pushed with that price (`reference`) is stored and served,
+    but the price becomes the stored quote only while there is none."""
+    sym = "HPQR"
+    _bars_only_symbol(sym)
+    ref = client.get(f"/api/ingest/reference-price/{sym.lower()}")
+    assert ref.status_code == 200, ref.text
+    body = ref.json()
+    last = bars.get_bars(sym)["close"][-1]
+    assert body["symbol"] == sym and body["price"] == pytest.approx(last) and body["source"] == "nasdaq" and body["ts"]
+    assert client.get("/api/ingest/reference-price/ZZZZZ").status_code == 404
+    chain = _chain(symbol=sym, delayed=True, contracts=[_contract(k, r) for k in (30.0, 35.0, 40.0) for r in ("C", "P")])
+    chain["underlying"] = {"price": body["price"], "ts": body["ts"], "reference": True}
+    assert client.post("/api/ingest/chain", json=chain).status_code == 200
+    r = client.get(f"/api/symbol/{sym}/chain")
+    assert r.status_code == 200, r.text
+    q = quotes.get_quote(sym)                                             # none was stored: it stands in
+    assert q.price == pytest.approx(last) and q.ts.isoformat() == "2026-11-18T21:00:00+00:00"
+    quotes.upsert_quotes([Quote(sym, datetime(2026, 11, 19, 20, 0, tzinfo=timezone.utc), 36.0, None, None, None,
+                                None, None, None, None, None, None, None)], "nasdaq")
+    assert client.post("/api/ingest/chain", json=chain).status_code == 200
+    assert quotes.get_quote(sym).price == 36.0                            # a stored quote is never replaced by it

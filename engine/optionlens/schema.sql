@@ -267,3 +267,16 @@ CREATE TABLE IF NOT EXISTS halt_status (
 );
 
 -- A symbol's market, exchange and currency follow from the symbol itself (analytics/markets.py): no columns.
+
+-- What each chain source answered for a symbol it has no chain of (docs/INTEGRATION.md §5 "Listed options"): verdict
+-- 'no_options' (the source lists no options for it) or 'not_listed' (the source does not carry it); a chain stored
+-- from the source removes its row. symbols.optionable is false only once every chain source serving the symbol has a
+-- row here (jobs/optionable.py): one source's "none" is that source's answer, not the symbol's.
+CREATE TABLE IF NOT EXISTS chain_verdicts (
+    symbol VARCHAR NOT NULL, source VARCHAR NOT NULL, verdict VARCHAR NOT NULL, answered_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (symbol, source)
+);
+-- Migration (idempotent): optionable = false without any source's 'no_options' row was set from a single source's
+-- answer before chain_verdicts existed; it becomes unknown again, so every serving source is asked.
+UPDATE symbols SET optionable = NULL WHERE optionable = false
+    AND symbol NOT IN (SELECT symbol FROM chain_verdicts WHERE verdict = 'no_options');

@@ -9,7 +9,14 @@ export interface IngestUnderlying {
   price: number; bid: N; ask: N; open: N; high: N; low: N; prev_close: N; volume: N; ts: string;
   /** Regular-session close of session_date (closing chains; null when unknown or not final). */
   rth_close: N;
+  /** `price` is the engine's reference price (ReferencePrice; `ts` its time): TWS sent no underlying price. */
+  reference?: boolean;
 }
+/**
+ * The engine's own current price of a symbol (GET /api/ingest/reference-price/{symbol}: its newest stored quote, else
+ * its latest daily close), for a chain whose underlying TWS sent no price for (no market-data subscription for it).
+ */
+export interface ReferencePrice { symbol: string; price: number; ts: string; source: string | null }
 export interface IngestContract {
   expiry: string; strike: number; right: "C" | "P";
   bid: N; ask: N; last: N;
@@ -83,6 +90,8 @@ export interface IngestPositions {
 
 export interface IngestApi {
   wants(): Promise<unknown>;
+  /** ReferencePrice of `symbol` (404 when the engine stores none). */
+  referencePrice(symbol: string): Promise<unknown>;
   /** The symbols on screen to snapshot now (INTEGRATION.md §9; none unless the bridge is the live fallback). */
   liveWants(): Promise<unknown>;
   chain(b: IngestChain): Promise<unknown>;
@@ -104,6 +113,7 @@ export interface IngestApi {
 export function ingestApi(http: JsonHttp): IngestApi {
   return {
     wants: () => http.get("/api/ingest/wants"),
+    referencePrice: (symbol) => http.get(`/api/ingest/reference-price/${encodeURIComponent(symbol)}`),
     liveWants: () => http.get("/api/ingest/live-wants"),
     chain: (b) => http.post("/api/ingest/chain", b),
     noOptions: (b) => http.post("/api/ingest/no-options", b),

@@ -3,7 +3,7 @@
 // request goes through the pacer (begin → request → success | violation → RetryLater).
 import { assembleChain, assembleUnderlying, expiryCoverage, isoDate, isQuoted, pickExpiries, selectContracts, underlyingContract, type ChainShape, type ExpiryCoverage, type ExpiryPick } from "./chain";
 import type { IntradayInterval } from "../shared/api";
-import type { IngestApi, IngestChain, IngestQuote, OptionBar, UnderlyingStat } from "./ingest";
+import type { IngestApi, IngestChain, IngestQuote, OptionBar, ReferencePrice, UnderlyingStat } from "./ingest";
 import { BAR_SIZE, barStart, durationOf, endDateTime, type Chunk } from "./intraday";
 import type { HistoricalPacer } from "./pacer";
 import { RetryLater } from "./scheduler";
@@ -50,6 +50,13 @@ export interface CollectOptions {
   genericTicks: string; complete: (a: TickAccumulator) => boolean; minDwellMs?: number;
   /** IBKR market data type of the requests (session default when omitted). */
   marketDataType?: MarketDataKind;
+  /** Counts the TWS error codes the subscriptions answered with (code -> count), when given. */
+  errors?: Map<number, number>;
+}
+
+/** "10089 ×40, 354 ×2": TWS error codes by count, most frequent first. */
+export function errorCodesText(errors: Map<number, number>): string {
+  return [...errors].sort((a, b) => b[1] - a[1] || a[0] - b[0]).map(([code, n]) => `${code} ×${n}`).join(", ");
 }
 
 interface BatchResult { snaps: QuoteSnapshot[]; lineLimited: boolean[]; notSubscribed: number }
@@ -73,6 +80,7 @@ async function streamBatch(ctx: JobContext, batch: TwsContract[], o: CollectOpti
       onTick: (e) => { firstTick[j] ??= Date.now(); accs[j].apply(e); },
       onError: (err) => {
         accs[j].dead = true;
+        o.errors?.set(err.code, (o.errors.get(err.code) ?? 0) + 1);
         if (err.code === CODE.MAX_TICKERS) lineLimited[j] = true;
         else if (NOT_SUBSCRIBED_CODES.has(err.code)) notSubscribed += 1;
         if (isCompetingSession(err)) fatal = err;
@@ -121,7 +129,8 @@ export async function collectQuotes(ctx: JobContext, contracts: TwsContract[], o
     pending = [...(retry ? refused : []), ...pending.slice(batch.length)];
   }
   if (contracts.length > 0 && notSubscribed === contracts.length) {
-    throw new TwsRequestError(CODE.MKT_DATA_NOT_SUBSCRIBED, "no market data subscription for these contracts");
+    const codes = o.errors?.size ? ` (IBKR errors: ${errorCodesText(o.errors)})` : "";
+    throw new TwsRequestError(CODE.MKT_DATA_NOT_SUBSCRIBED, `no market data subscription for these contracts${codes}`);
   }
   return out;
 }
@@ -201,6 +210,8 @@ async function optionParams(ctx: JobContext, u: { symbol: string; secType: SecTy
 
 export interface ResolvedChain {
   underlying: QuoteSnapshot; spot: number; contracts: TwsContract[];
+  /** The engine's price the strike band is centred on when TWS sent no underlying price, else null. */
+  reference: ReferencePrice | null;
   /** Every picked expiry (YYYYMMDD), in order, including those without contracts (none listed in the band, or
    * TWS did not deliver the contract list: two timeouts, reported per expiry rather than failing the chain). */
   expiries: string[];
@@ -270,23 +281,39 @@ export async function resolveOptionContracts(ctx: JobContext, symbol: string, sh
   conId ??= saved()?.conId;
   if (conId === undefined) throw new ContractsUnavailable(symbol);
   const quote = await underlyingQuote(ctx, { ...und, conId });
-  const spot = spotOverride ?? bestPrice(quote);
-  if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?)`);
+  const ticked = spotOverride ?? bestPrice(quote);
+  const reference = ticked === null ? await referencePrice(ctx, symbol) : null;
+  const spot = ticked ?? reference?.price ?? null;
+  if (spot === null) throw new Error(`${symbol}: no underlying price from TWS (market data subscription?) and none stored in the engine`);
 
   if (live && (server?.available() ?? true)) {
     try {
       const r = await listedContracts(ctx, und, conId, shape, saved);
       server?.answered();
-      return { underlying: quote, spot, contracts: selectContracts(r.contracts, spot, shape.moneyness), expiries: r.expiries, listedAt: r.listedAt };
+      return { underlying: quote, spot, reference, contracts: selectContracts(r.contracts, spot, shape.moneyness), expiries: r.expiries, listedAt: r.listedAt };
     } catch (e) { unanswered(e); }
   }
   const s = saved();
   if (!s) throw new ContractsUnavailable(symbol);
   const picks = s.expiries.slice(0, shape.expiries);
   return {
-    underlying: quote, spot, contracts: selectContracts(picks.flatMap((p) => p.contracts), spot, shape.moneyness),
+    underlying: quote, spot, reference, contracts: selectContracts(picks.flatMap((p) => p.contracts), spot, shape.moneyness),
     expiries: picks.map((p) => p.pick.expiry), listedAt: oldest(picks.map((p) => p.fetchedAt)),
   };
+}
+
+/**
+ * The engine's current price of `symbol` (ReferencePrice), for a chain whose underlying TWS sent no price for (e.g. a
+ * CBOE index without that market-data subscription); null when the engine has none or cannot be asked.
+ */
+async function referencePrice(ctx: JobContext, symbol: string): Promise<ReferencePrice | null> {
+  try {
+    const r = (await ctx.ingest.referencePrice(symbol)) as Partial<ReferencePrice> | null;
+    return r && typeof r.price === "number" && r.price > 0 && typeof r.ts === "string"
+      ? { symbol, price: r.price, ts: r.ts, source: r.source ?? null } : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface ChainRequest { symbol: string; shape: ChainShape; final: boolean; sessionDate: string | null }
@@ -301,6 +328,8 @@ export interface ChainPushed {
   underlyingDelayed: boolean;
   /** When the saved contract list the chain was built from was fetched (IBKR's contract server unavailable), else null. */
   listedAt: string | null;
+  /** The engine's price the chain was centred on (TWS sent no underlying price), else null. */
+  reference: ReferencePrice | null;
 }
 
 /** A closing chain is archived only with at least this share of its requested contracts quoted. */
@@ -309,8 +338,8 @@ export const FINAL_MIN_COVERAGE = 0.95;
 const OPTION_TICKS: CollectOptions = { genericTicks: "101", complete: (a) => a.optionComplete() };
 
 /** Option quotes for `contracts`; contracts that got no usable data are asked for once more. */
-async function collectOptionQuotes(ctx: JobContext, contracts: TwsContract[], marketDataType: OptionDataType): Promise<QuoteSnapshot[]> {
-  const o: CollectOptions = { ...OPTION_TICKS, marketDataType };
+async function collectOptionQuotes(ctx: JobContext, contracts: TwsContract[], marketDataType: OptionDataType, errors?: Map<number, number>): Promise<QuoteSnapshot[]> {
+  const o: CollectOptions = { ...OPTION_TICKS, marketDataType, errors };
   const quotes = await collectQuotes(ctx, contracts, o);
   const missing = contracts.flatMap((_, i) => (isQuoted(quotes[i]) ? [] : [i]));
   if (missing.length > contracts.length * (1 - FINAL_MIN_COVERAGE)) {
@@ -327,12 +356,12 @@ const isSubscriptionRefusal = (e: unknown) => e instanceof TwsRequestError && NO
  * switches the feed to delayed-only: retried at once as delayed data where that applies (regular hours), else the
  * quotes are skipped (OptionQuotesClosed).
  */
-async function optionQuotes(ctx: JobContext, symbol: string, contracts: TwsContract[]): Promise<QuoteSnapshot[]> {
+async function optionQuotes(ctx: JobContext, symbol: string, contracts: TwsContract[], errors?: Map<number, number>): Promise<QuoteSnapshot[]> {
   const feed = ctx.optionsFeed;
   let type = feed?.dataType(ctx.now());
   let quotes: QuoteSnapshot[];
   try {
-    quotes = await collectOptionQuotes(ctx, contracts, type);
+    quotes = await collectOptionQuotes(ctx, contracts, type, errors);
   } catch (e) {
     if (!feed || !isSubscriptionRefusal(e)) throw e;
     feed.refused(ctx.now(), type);
@@ -340,7 +369,7 @@ async function optionQuotes(ctx: JobContext, symbol: string, contracts: TwsContr
     const next = feed.dataType(ctx.now());
     if (next === type) throw e;
     type = next;
-    quotes = await collectOptionQuotes(ctx, contracts, type);
+    quotes = await collectOptionQuotes(ctx, contracts, type, errors);
   }
   if (quotes.some(isQuoted)) feed?.quoted(ctx.now(), quotes.some((q) => q.delayed), type);
   return quotes;
@@ -383,14 +412,20 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
     await ctx.ingest.noOptions({ source: "ibkr", symbol: req.symbol });
     return null;
   }
-  const quotes = await optionQuotes(ctx, req.symbol, r.contracts);
+  const errors = new Map<number, number>();
+  const quotes = await optionQuotes(ctx, req.symbol, r.contracts, errors);
   const fetchedAt = ctx.now().toISOString();
-  const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose);
+  const underlying = assembleUnderlying(r.underlying, fetchedAt, rthClose, r.reference);
   if (!underlying) throw new Error(`${req.symbol}: no underlying price`);
   const rows = r.contracts.map((contract, i) => ({ contract, quote: quotes[i] }));
   const quoted = quotes.filter(isQuoted).length;
-  if (!quoted) throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)`);
-  const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed: r.underlying.delayed, listedAt: r.listedAt };
+  if (!quoted) {
+    const codes = errors.size ? `; IBKR errors: ${errorCodesText(errors)}` : "";
+    throw new Error(`${req.symbol}: TWS returned no option quotes (OPRA subscription?)${codes}`);
+  }
+  // A reference price is not current: the chain is marked delayed.
+  const underlyingDelayed = r.underlying.delayed || underlying.reference === true;
+  const meta = { symbol: req.symbol, fetchedAt, final: req.final, sessionDate: req.sessionDate, underlyingDelayed, listedAt: r.listedAt };
   const coverage = quoted / r.contracts.length;
   const incompleteFinal = req.final && coverage < FINAL_MIN_COVERAGE;
   const body: IngestChain = incompleteFinal
@@ -402,7 +437,7 @@ export async function pushChain(ctx: JobContext, req: ChainRequest): Promise<Cha
   }
   return {
     contracts: body.contracts.length, coverage, expiries: expiryCoverage(r.expiries, rows), listedAt: r.listedAt,
-    optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed,
+    optionsDelayed: quotes.some((q) => q.delayed), underlyingDelayed: r.underlying.delayed, reference: underlying.reference ? r.reference : null,
   };
 }
 

@@ -15,7 +15,8 @@
 - Splitting chain work (chain_universe, its after-hours fill, eod_chains): while a server-side source (Questrade)
   is healthy — available (connected, not needing attention) and not failing (jobs.source_health) — it sweeps the
   whole universe itself, so the bridge is asked only for the symbols that source did not cover: its last attempt
-  failed, or it does not list the symbol. When no server-side source is healthy the bridge gets the full lists.
+  failed, or it has no chain of the symbol (it lists no options for it or does not list it: another source may,
+  jobs/optionable.py). When no server-side source is healthy the bridge gets the full lists.
   IV/HV history, underlying stats, index data and option-bar catch-up stay the bridge's (only IBKR provides them).
 - option_bars: chain-universe symbols with recent sessions lacking an end-of-day archive (catch-up);
   each (session, symbol) is offered until the bridge has accepted it MAX_OFFERS times (POST
@@ -34,7 +35,7 @@ from ..repo import symbols as symbols_repo
 from ..repo import user as user_repo
 from ..repo import views as views_repo
 from ..sources import chain_source
-from . import catchup, source_health
+from . import catchup, optionable, source_health
 from ._util import eod_deadline, final_since, session_date
 
 EOD_INDICES = ("SPX", "NDX", "RUT", "XSP")
@@ -66,13 +67,14 @@ def _user_first(now: datetime) -> list[str]:
 
 def chain_universe(now: datetime | None = None) -> list[str]:
     """The bridge's chain universe (US listings, bridge_symbols): watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS, then the top
-    settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions; without
-    symbols a chain source confirmed list no options (opening one still asks the bridge on demand)."""
+    settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions; without the
+    symbols the bridge itself answered list no options (jobs/optionable.py; another source's answer does not count;
+    opening one still asks the bridge on demand)."""
     now = now or now_ny()
     n = getattr(get_settings(), "chain_universe_size", 150)
-    none = {r["symbol"] for r in symbols_repo.list_symbols(optionable=False)}
-    return [s for s in bridge_symbols(_unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []))
-            if s not in none]
+    syms = bridge_symbols(_unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []))
+    none = optionable.answered_none(chain_source.BRIDGE_TAG, syms)
+    return [s for s in syms if s not in none]
 
 
 def prioritized(symbols: list[str], now: datetime) -> list[str]:
@@ -84,14 +86,16 @@ def prioritized(symbols: list[str], now: datetime) -> list[str]:
 
 
 def server_covered(symbols: list[str]) -> set[str]:
-    """Of `symbols`, those a healthy server-side source sweeps (see module doc "Splitting chain work")."""
+    """Of `symbols`, those a healthy server-side source sweeps and has a chain of: its last attempt stored one, or it
+    was not asked yet (the sweep will) and has not answered "none" before (see module doc "Splitting chain work")."""
     out: set[str] = set()
     for src in chain_source.server_sources():
         if src.unavailable() is not None or source_health.failing(src.name):
             continue
+        none = optionable.answered_none(src.name, symbols)
         for s in symbols:
             a = source_health.last(src.name, s)
-            if a is None or a.result in ("ok", "no_options"):
+            if (a is None and s not in none) or (a is not None and a.result == "ok"):
                 out.add(s)
     return out
 

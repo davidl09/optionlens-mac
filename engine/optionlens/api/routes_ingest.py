@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
 from .. import live
@@ -39,6 +39,9 @@ class UnderlyingIn(_In):
     volume: Count | None = None
     ts: AwareDatetime | None = None
     rth_close: Annotated[float, Field(gt=0, allow_inf_nan=False)] | None = None   # regular-session close (final chains)
+    # `price` is the engine's reference price (GET /api/ingest/reference-price, `ts` its time): the client's feed sent
+    # none. It centres the chain and its computed IVs; it becomes the stored quote only when there is none.
+    reference: bool = False
 
 
 class ContractIn(_In):
@@ -309,6 +312,11 @@ class RefreshResultIn(_In):
 async def refresh_result(req: RefreshResultIn):
     """The bridge's outcome of an on-demand refresh (docs/INTEGRATION.md §7)."""
     return await respond(refresh.report, req.symbol, req.source, req.status, req.message, req.waiting_for)
+
+
+@router.get("/reference-price/{sym}")
+async def reference_price(sym: str = Depends(symbol_param)):
+    return await respond(ingest.reference_price, sym)
 
 
 @router.get("/wants")

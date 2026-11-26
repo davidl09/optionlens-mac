@@ -1,4 +1,5 @@
-"""symbols table: universe membership, kind, sector/industry, optionable flag (a symbol's market: analytics/markets.py)."""
+"""symbols table: universe membership, kind, sector/industry, optionable flag (a symbol's market: analytics/markets.py),
+and the chain sources' per-symbol "no options" answers behind that flag (chain_verdicts; the rule: jobs/optionable.py)."""
 from __future__ import annotations
 
 from typing import Iterable
@@ -54,17 +55,43 @@ def set_universe(symbols: Iterable[str], market: markets.Market = markets.US) ->
 
 
 def set_optionable(symbol: str, optionable: bool) -> None:
-    """Record whether CBOE lists options for the symbol."""
+    """Store the symbol's optionable flag (decided by jobs/optionable.py)."""
     with db.write() as cur:
         cur.execute("UPDATE symbols SET optionable = ? WHERE symbol = ? AND optionable IS DISTINCT FROM ?",
                     [optionable, symbol, optionable])
 
 
 def reprobe_not_optionable(symbols: Iterable[str]) -> None:
-    """Reset optionable=false to NULL (unknown) for these symbols so the next sweep probes them again."""
+    """Reset optionable=false to NULL (unknown) and forget every source's "none" answer for these symbols, so the
+    next sweeps probe them again."""
+    syms = sorted(set(symbols))
     with db.write() as cur:
         cur.execute("UPDATE symbols SET optionable = NULL WHERE optionable = false "
-                    "AND symbol IN (SELECT unnest(?::VARCHAR[]))", [sorted(set(symbols))])
+                    "AND symbol IN (SELECT unnest(?::VARCHAR[]))", [syms])
+        cur.execute("DELETE FROM chain_verdicts WHERE symbol IN (SELECT unnest(?::VARCHAR[]))", [syms])
+
+
+def record_verdict(symbol: str, source: str, verdict: str) -> None:
+    """`source` has no chain for `symbol`: verdict 'no_options' (it lists none) or 'not_listed' (it does not carry it)."""
+    with db.write() as cur:
+        cur.execute("INSERT OR REPLACE INTO chain_verdicts VALUES (?, ?, ?, ?)", [symbol, source, verdict, now_utc()])
+
+
+def clear_verdict(symbol: str, source: str) -> None:
+    """`source` delivered a chain of `symbol`: its earlier "none" answer no longer holds."""
+    with db.write() as cur:
+        cur.execute("DELETE FROM chain_verdicts WHERE symbol = ? AND source = ?", [symbol, source])
+
+
+def verdicts(symbol: str) -> dict[str, str]:
+    """{source: verdict} of the sources that answered "none" for `symbol`."""
+    return {r["source"]: r["verdict"] for r in query("SELECT source, verdict FROM chain_verdicts WHERE symbol = ?",
+                                                     [symbol])}
+
+
+def answered_none(source: str) -> set[str]:
+    """The symbols `source` answered "none" for (either verdict)."""
+    return {r["symbol"] for r in query("SELECT symbol FROM chain_verdicts WHERE source = ?", [source])}
 
 
 def get_symbol(symbol: str) -> dict | None:

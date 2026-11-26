@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { emptyMarket, FakeSession, contractId, memoryContractStore, type FakeMarket } from "./fake-tws.test-helper";
-import type { IngestApi } from "./ingest";
+import type { IngestApi, IngestChain } from "./ingest";
 import { ContractCache } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
 import { OptionsFeed } from "./options-feed";
@@ -14,7 +14,7 @@ import { CODE, TwsRequestError, TwsTimeoutError, type TwsContract } from "./tws"
 function fakeIngest(): IngestApi & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = {};
   const rec = (name: string) => async (b: unknown) => { (calls[name] ??= []).push(b); return { stored: 1 }; };
-  return { calls, wants: async () => ({}), liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), dividendHistory: rec("dividendHistory"), quotes: rec("quotes"),
+  return { calls, wants: async () => ({}), referencePrice: async () => { throw new Error("404 no price stored"); }, liveWants: async () => ({ symbols: [], interval_s: 5 }), chain: rec("chain"), noOptions: rec("noOptions"), volHistory: rec("volHistory"), indexBars: rec("indexBars"), dividendHistory: rec("dividendHistory"), quotes: rec("quotes"),
     underlyingStats: rec("underlyingStats"), optionBars: rec("optionBars"), intradayBars: rec("intradayBars"), ackWants: rec("ackWants"), heartbeat: rec("heartbeat"), refreshResult: rec("refreshResult"), positions: rec("positions") };
 }
 
@@ -225,6 +225,29 @@ describe("pushChain", () => {
     m.ticks = (id) => (id === "AAPL:STK" ? [] : base(id));
     await expect(pushChain(ctxFor(new FakeSession(m)), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))
       .rejects.toThrow(/no underlying price/);
+  });
+
+  it("centres the chain on the engine's price when TWS sends no underlying price (any symbol), marked as such", async () => {
+    const m = aaplMarket();
+    const base = m.ticks;
+    m.ticks = (id) => (id === "AAPL:STK" ? [] : base(id));      // e.g. no market-data subscription for the underlying
+    const ctx = ctxFor(new FakeSession(m));
+    const asked: string[] = [];
+    ctx.ingest.referencePrice = async (symbol) => { asked.push(symbol); return { symbol, price: 100, ts: "2026-11-19T21:00:00Z", source: "ibkr" }; };
+    const r = await pushChain(ctx, { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null });
+    expect(asked).toEqual(["AAPL"]);
+    expect(r?.reference).toEqual({ symbol: "AAPL", price: 100, ts: "2026-11-19T21:00:00Z", source: "ibkr" });
+    const body = ctx.ingest.calls.chain[0] as IngestChain;
+    expect(body.underlying).toMatchObject({ price: 100, ts: "2026-11-19T21:00:00Z", reference: true });
+    expect(body.delayed).toBe(true);                             // the underlying price is not current
+    expect(body.contracts.map((c) => c.strike)).toEqual([90, 90, 95, 95, 100, 100, 105, 105, 110, 110]);   // ±10% of 100
+  });
+
+  it("names IBKR's error codes when no option quote arrives", async () => {
+    const m = aaplMarket();
+    m.streamErrors = (id) => (id.split(":").length === 4 ? new TwsRequestError(10091, "Part of requested market data requires additional subscription") : undefined);
+    await expect(pushChain(ctxFor(new FakeSession(m)), { symbol: "AAPL", shape: { expiries: 1, moneyness: 0.1 }, final: false, sessionDate: null }))
+      .rejects.toThrow(/TWS returned no option quotes \(OPRA subscription\?\); IBKR errors: 10091 ×20/);   // 10 contracts, each asked twice
   });
 });
 

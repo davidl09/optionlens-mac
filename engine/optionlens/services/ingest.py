@@ -13,7 +13,7 @@ from ..analytics import computed_iv, markets
 from ..analytics import dividends as divs_a
 from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
 from ..analytics.chain import ChainArrays
-from ..jobs import bridge_plan, catchup, chains, hooks
+from ..jobs import bridge_plan, catchup, chains, hooks, optionable
 from ..jobs._util import eod_deadline, session_close, session_date
 from ..jobs.marketdata import VIX_FAMILY
 from ..models import Bar, ChainSnapshot, Dividend, OptionContract, Quote, normalize_symbol
@@ -29,7 +29,7 @@ from ..repo import vol_history as vol_history_repo
 from ..sources.osi import format_osi
 from .. import live
 from . import context as ctx
-from .errors import BadRequest
+from .errors import BadRequest, NotFound
 
 MAX_CONTRACTS = 50_000          # per chain post
 MAX_BARS = 20_000               # per history post (~80 years of daily bars)
@@ -127,7 +127,8 @@ def chain(body: dict, now: datetime | None = None) -> dict:
         raise BadRequest("contracts_listed_at is required when contracts_from_cache is true")
     snap = complete_chain(ChainSnapshot(quote, tuple(_contract(sym, c) for c in body["contracts"]), fetched,
                                         body["delayed"], listed), source)
-    chains.store_chain(snap, fetched, final=day is not None, source=source)
+    chains.store_chain(snap, fetched, final=day is not None, source=source,
+                       reference_quote=bool(body["underlying"].get("reference")))
     if day is not None:
         ctx.invalidate()
     _sweep_done(session_date(fetched), [sym])
@@ -135,15 +136,28 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     return {"stored": len(snap.contracts), "symbol": sym}
 
 
+def reference_price(symbol: str) -> dict:
+    """GET /api/ingest/reference-price/{symbol} (docs/INTEGRATION.md §6 "Reference price"): the engine's own current
+    price of a symbol (context.quote_dict: the newest stored quote, else the latest daily close), for a client that got
+    no price of the underlying from its feed (IBKR without that market-data subscription, e.g. a CBOE index) and still
+    needs a strike band for the chain. -> {symbol, price, ts, source}; 404 when none is stored or for unknown symbols."""
+    sym = ctx.ensure_known(symbol)["symbol"]
+    q = ctx.quote_dict(sym)
+    if q is None or not q.get("price"):
+        raise NotFound(f"no price stored for {sym}")
+    return {"symbol": sym, "price": q["price"], "ts": q["ts"], "source": q["source"]}
+
+
 def no_options(body: dict, now: datetime | None = None) -> dict:
     """POST /api/ingest/no-options: the client's chain source (IBKR: no option parameters for the
-    underlying) lists no options for the symbol -> optionable false, so the UI says so instead of
-    waiting for a chain. A later stored chain sets it true again; stored data is kept. 404 for unknown
-    symbols."""
+    underlying) lists no options for the symbol. Recorded as that source's answer (jobs/optionable.py):
+    optionable becomes false once every chain source serving the symbol answered so, and the UI then says
+    so instead of waiting for a chain. A later stored chain sets it true again; stored data is kept.
+    -> {symbol, optionable (true / false / null = not known yet)}; 404 for unknown symbols."""
     sym = ctx.ensure_known(body["symbol"])["symbol"]
-    symbols_repo.set_optionable(sym, False)
+    flag = optionable.confirm_none(sym, body["source"], "no_options")
     bridge_repo.record_push(now or datetime.now(timezone.utc))
-    return {"symbol": sym, "optionable": False}
+    return {"symbol": sym, "optionable": flag}
 
 
 # ----------------------------------------------------------------------------- series

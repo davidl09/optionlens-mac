@@ -581,6 +581,9 @@ export class Bridge {
       const r = await pushChain(ctx, { symbol, shape, final, sessionDate });
       if (r === null) { this.noOptions.add(symbol); this.pushed(); return; }
       this.noOptions.delete(symbol);
+      if (r.reference) {
+        this.d.log.info(`bridge: ${symbol} chain centred on the engine's price ${r.reference.price} of ${r.reference.ts} (${r.reference.source ?? "stored"}): TWS sent no underlying price`);
+      }
       const gaps = chainGaps(symbol, r);
       if (gaps) {
         this.chainGaps = gaps;

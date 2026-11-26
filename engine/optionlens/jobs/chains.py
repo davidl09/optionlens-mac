@@ -38,7 +38,7 @@ from ..repo import vol_history as vol_history_repo
 from ..repo._sql import utc_naive
 from ..sources import chain_source
 from ..sources.chain_source import ChainSource, NotListed
-from . import bridge_plan, hooks, precedence, source_health
+from . import bridge_plan, hooks, optionable, precedence, source_health
 from ._util import after_session, eod_deadline, final_since, report_progress, run_bounded, session_close, session_date
 
 log = logging.getLogger(__name__)
@@ -135,14 +135,16 @@ def _chain_row(snap: ChainSnapshot, day: date, now: datetime, existing: dict | N
     return row
 
 
-def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, source: str | None = None) -> bool:
+def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, source: str | None = None,
+                reference_quote: bool = False) -> bool:
     """Persist a chain from `source` ('ibkr', 'questrade', ...; None = unknown) observed at `now`, each part per
     jobs/precedence.py:
     - the served chain (option_latest), when the chain wins against the served one; when it loses, the served
       chain takes this chain's source IVs where its own are computed (adopt_source_iv: any source's IV before a
       computed one);
-    - the underlying's quote (quotes_latest) when it is the newest one;
-    - the optionable flag;
+    - the underlying's quote (quotes_latest) when it is the newest one; with `reference_quote` (the chain's
+      underlying price is the engine's own reference price, not an observation) only when none is stored;
+    - the optionable flag (jobs/optionable.py: a chain from any source makes the symbol optionable);
     - the session's metrics row per the module doc's precedence (writes_metrics: the session's own data, else
       an after-hours fill; time to expiry measured at `now`, or at the close once it passed);
     - `final` (a closing snapshot, `now` after the close): the session's end-of-day archive.
@@ -153,10 +155,14 @@ def store_chain(snap: ChainSnapshot, now: datetime, final: bool = False, *, sour
     wins = precedence.replaces(served, quality)
     if wins:
         options_repo.replace_option_latest(snap, source, final)
-    if wins or served is None or served.fetched_at is None or snap.fetched_at >= served.fetched_at:
-        quotes_repo.upsert_quotes([snap.quote], source)   # the stock quote: the newest one
-    record_halt(snap.quote, source)
-    symbols_repo.set_optionable(symbol, True)
+    if reference_quote:
+        if quotes_repo.get_quote(symbol) is None:
+            quotes_repo.upsert_quotes([snap.quote], source)
+    else:
+        if wins or served is None or served.fetched_at is None or snap.fetched_at >= served.fetched_at:
+            quotes_repo.upsert_quotes([snap.quote], source)   # the stock quote: the newest one
+        record_halt(snap.quote, source)
+    optionable.chain_stored(symbol, source)
     _store_session(snap, now, final, source, quality)
     if not wins and served is not None and served.session == quality.session and served.source != source:
         adopt_source_iv(symbol, served, snap)
@@ -281,12 +287,14 @@ def _prepare(snap: ChainSnapshot, source: str) -> ChainSnapshot:
 
 async def refresh_chain(src: ChainSource, symbol: str, final: bool = False) -> ChainSnapshot | None:
     """Fetch one symbol's chain from `src`, complete it (hooks.chain_preparers: IV / greeks) and store it
-    (`final`: closing snapshot). None (and optionable=false) when the source lists no options. Raises NotListed
-    when the source does not carry the symbol, net.FetchError on failure. Every outcome is recorded in
-    jobs.source_health (failure reasons, per-symbol coverage)."""
+    (`final`: closing snapshot). None when the source lists no options. Raises NotListed when the source does not
+    carry the symbol, net.FetchError on failure. Every outcome is recorded in jobs.source_health (failure reasons,
+    per-symbol coverage); a "none" answer also as this source's verdict (jobs/optionable.py: the symbol is marked
+    unoptionable only once every source serving it answered so)."""
     try:
         snap = await src.fetch_chain(symbol, final)
     except NotListed:
+        await asyncio.to_thread(optionable.confirm_none, symbol, src.name, "not_listed")
         source_health.record(src.name, symbol, "not_listed", now=now_ny())
         raise
     except Exception as e:
@@ -295,7 +303,7 @@ async def refresh_chain(src: ChainSource, symbol: str, final: bool = False) -> C
     if not snap.contracts:
         await asyncio.to_thread(quotes_repo.upsert_quotes, [snap.quote], src.name)
         await asyncio.to_thread(record_halt, snap.quote, src.name)
-        await asyncio.to_thread(symbols_repo.set_optionable, symbol, False)
+        await asyncio.to_thread(optionable.confirm_none, symbol, src.name, "no_options")
         source_health.record(src.name, symbol, "no_options", now=now_ny())
         return None
     now = now_ny()
@@ -382,7 +390,8 @@ async def _fire_sweep_complete(now: datetime, done: set[str]) -> None:
 async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
     """Refresh chains of the universe + the cash indices (bridge_plan.EOD_INDICES; or the given symbols) from every
     available server-side ChainSource, then fire on_sweep_complete. Without `symbols`, only the markets trading
-    today are swept (a TSX holiday leaves the Canadian symbols out, and the other way round). `final`: the closing
+    today are swept (a TSX holiday leaves the Canadian symbols out, and the other way round), each source without
+    the symbols it answered "none" for (jobs/optionable.py). `final`: the closing
     snapshot (archived per jobs/precedence.py). A configured source that is not available (e.g. Questrade not
     connected, or it needs attention) is reported, not swept. RuntimeError without any server-side source."""
     srcs = server_sources()
@@ -401,7 +410,10 @@ async def sweep(symbols: list[str] | None = None, final: bool = False) -> str:
         if why is not None:
             details.append(f"{src.name}: {why}")
             continue
-        got, detail = await _sweep_source(src, syms, final)
+        none = set() if symbols else await asyncio.to_thread(optionable.answered_none, src.name, syms)
+        got, detail = await _sweep_source(src, [s for s in syms if s not in none], final)
+        if none:
+            detail += f"; {len(none)} it answered none for not asked"
         done.update(got)
         details.append(detail)
     if done:

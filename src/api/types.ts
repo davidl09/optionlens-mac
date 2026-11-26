@@ -202,7 +202,7 @@ export interface KeyStats {
 export interface SymbolSummary extends MarketFields {
   symbol: string; name: string; kind: SymbolKind; sector: string | null; industry: string | null;
   market_cap: number | null; in_universe: boolean;
-  optionable: boolean | null;   // true: a chain is stored; false: a chain source (IBKR) confirmed no listed options; null: unknown (not fetched yet)
+  optionable: boolean | null;   // true: a chain is stored; false: every chain source serving it confirmed no listed options; null: unknown (not fetched yet)
   quote: Quote | null;
   key_stats: KeyStats;
   avg_volume_30d: number | null; rel_volume: number | null;
