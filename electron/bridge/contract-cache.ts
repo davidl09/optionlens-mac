@@ -42,19 +42,24 @@ export class ContractCache {
     } catch { return null; }
   }
 
-  /** Today's (New York day) option parameters of the underlying `conId`, else null. */
-  todaysParams(symbol: string, conId: number, now: Date): OptionParams[] | null {
+  /** The symbol's conId and parameters, read from the store once. */
+  private loaded(symbol: string): { conId: number; paramsAt: string | null; params: OptionParams[] } | null {
     if (!this.params.has(symbol)) {
       const e = this.read(symbol);
       this.params.set(symbol, e ? { conId: e.conId, paramsAt: e.paramsAt, params: e.params } : null);
     }
-    const p = this.params.get(symbol);
+    return this.params.get(symbol) ?? null;
+  }
+
+  /** Today's (New York day) option parameters of the underlying `conId`, else null. */
+  todaysParams(symbol: string, conId: number, now: Date): OptionParams[] | null {
+    const p = this.loaded(symbol);
     return p && p.conId === conId && p.paramsAt !== null && nyDate(new Date(p.paramsAt)) === nyDate(now) && p.params.length ? p.params : null;
   }
 
   /** The underlying's conId as IBKR resolved it before (it never changes), else null. */
   conId(symbol: string): number | null {
-    return this.params.get(symbol)?.conId ?? this.read(symbol)?.conId ?? null;
+    return this.loaded(symbol)?.conId ?? null;
   }
 
   /** IBKR knows no listing of `symbol` (asked in this run). */
