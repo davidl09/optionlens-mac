@@ -60,12 +60,23 @@ def store_bars(bars: list[Bar]) -> int:
             + bars_repo.upsert_bars([b for b, c in zip(bars, close_only) if not c]))
 
 
+THIN_HISTORY_BARS = 60   # fewer stored bars than this: the history was never fetched (or the listing is this new)
+
+
+def lacks_history(cov: dict | None) -> bool:
+    """No stored bars, or only the few stored before a history was ever fetched (see plan_backfill)."""
+    return cov is None or cov["count"] < THIN_HISTORY_BARS
+
+
 def plan_backfill(symbols: list[dict], coverage: dict[str, dict], today: date, last_session: date) -> list[tuple[dict, date]]:
-    """(symbol row, fetch start) for symbols without history (10y) or whose last bar predates last_session."""
+    """(symbol row, fetch start) for symbols without a history (10y) or whose last bar predates last_session. A
+    symbol with only a few bars has no history either: the EOD job or a source's daily bar can store a symbol's first
+    bars before its backfill runs (a listing new to the universe), and those must not pass for a fetched history.
+    A listing younger than THIN_HISTORY_BARS sessions is asked in full each day until it has that many (one request)."""
     plan = []
     for row in symbols:
         cov = coverage.get(row["symbol"])
-        if cov is None:
+        if lacks_history(cov):
             plan.append((row, history_start(today)))
         elif cov["last"] < last_session:
             plan.append((row, cov["last"] - timedelta(days=CATCH_UP_OVERLAP_DAYS)))

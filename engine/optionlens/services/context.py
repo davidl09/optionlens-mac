@@ -33,7 +33,7 @@ from ..analytics.strategies import close_dt
 from ..analytics.dividends import (PARITY_BAND, PARITY_DTE, TRAILING_COVERAGE_DAYS, covers_trailing_year,
                                    implied_yield_from_chain, trailing_yield)
 from ..config import get_settings
-from ..jobs import hooks, ondemand
+from ..jobs import hooks, ondemand, prices
 from ..jobs._util import after_session, session_close, session_date
 from ..jobs.bridge_plan import EOD_INDICES as INDEX_SYMBOLS
 from ..models import Bar, Dividend, EarningsEvent, OptionContract, Quote, normalize_symbol
@@ -105,7 +105,7 @@ def ensure_known(symbol: str) -> dict:
     Raises ondemand.UnknownSymbol."""
     sym = normalize_symbol(symbol)
     row = symbols_repo.get_symbol(sym)
-    if row is None or not bars_repo.coverage([sym]):
+    if row is None or prices.lacks_history(bars_repo.coverage([sym]).get(sym)):
         run_async(ondemand.ensure_history, sym)
         row = symbols_repo.get_symbol(sym)
     if row is None:

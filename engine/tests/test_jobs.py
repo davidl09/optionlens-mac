@@ -330,16 +330,41 @@ async def test_fetch_cached_keeps_older_real_payload_over_no_data(tmpdb, monkeyp
 
 # ----------------------------------------------------------------------------- prices
 def test_plan_backfill_and_split_detection():
-    rows = [{"symbol": "NEW", "kind": "stock"}, {"symbol": "OLD", "kind": "stock"}, {"symbol": "OK", "kind": "etf"}]
-    cov = {"OLD": {"count": 10, "first": date(2016, 1, 1), "last": date(2026, 11, 10)},
-           "OK": {"count": 10, "first": date(2016, 1, 1), "last": date(2026, 11, 18)}}
+    rows = [{"symbol": "NEW", "kind": "stock"}, {"symbol": "OLD", "kind": "stock"}, {"symbol": "OK", "kind": "etf"},
+            {"symbol": "XIU.TO", "kind": "etf"}]
+    cov = {"OLD": {"count": 2500, "first": date(2016, 1, 1), "last": date(2026, 11, 10)},
+           "OK": {"count": 2500, "first": date(2016, 1, 1), "last": date(2026, 11, 18)},
+           # only the bars the EOD job stored since the listing joined the universe: its history was never fetched
+           "XIU.TO": {"count": 3, "first": date(2026, 11, 16), "last": date(2026, 11, 18)}}
     plan = prices.plan_backfill(rows, cov, date(2026, 11, 19), date(2026, 11, 18))
-    assert [(r["symbol"], s) for r, s in plan] == [("NEW", date(2016, 11, 18)), ("OLD", date(2026, 11, 3))]
+    assert [(r["symbol"], s) for r, s in plan] == [("NEW", date(2016, 11, 18)), ("OLD", date(2026, 11, 3)),
+                                                   ("XIU.TO", date(2016, 11, 18))]
     stored = {"date": np.array(["2026-11-17", "2026-11-18"], dtype="datetime64[D]"), "close": np.array([100.0, 102.0])}
     same = [Bar("X", date(2026, 11, 17), None, None, None, 100.0, None), Bar("X", date(2026, 11, 18), None, None, None, 102.1, None)]
     split = [Bar("X", date(2026, 11, 17), None, None, None, 50.0, None), Bar("X", date(2026, 11, 18), None, None, None, 51.0, None)]
     assert not prices.adjusted_since_stored(stored, same)
     assert prices.adjusted_since_stored(stored, split)
+
+
+async def test_opening_a_symbol_with_only_a_few_bars_fetches_its_history_once_a_day(tmpdb, monkeypatch):
+    """The EOD job can store a new listing's first bars before its backfill runs: those few bars are not a history."""
+    monkeypatch.setattr(ondemand, "now_ny", lambda: ny(2026, 11, 19, 12, 0))
+    monkeypatch.setattr(ondemand, "_history_asked", {})
+    bars_repo.upsert_bars([Bar("THIN", date(2026, 11, d), 1.0, 1.0, 1.0, 1.0, 10) for d in (17, 18)])
+    calls: list[str] = []
+
+    async def fake(row, start=None):
+        calls.append(row["symbol"])
+        return 0   # e.g. the source had nothing more: not asked again today
+
+    monkeypatch.setattr(prices, "backfill_symbol", fake)
+    row = {"symbol": "THIN", "kind": "stock"}
+    await ondemand.ensure_history("THIN", row)
+    await ondemand.ensure_history("THIN", row)
+    assert calls == ["THIN"]
+    bars_repo.upsert_bars([Bar("FULL", date(2026, 1, 1) + timedelta(days=i), 1.0, 1.0, 1.0, 1.0, 10) for i in range(prices.THIN_HISTORY_BARS)])
+    await ondemand.ensure_history("FULL", {"symbol": "FULL", "kind": "stock"})
+    assert calls == ["THIN"]
 
 
 # ----------------------------------------------------------------------------- earnings backfill

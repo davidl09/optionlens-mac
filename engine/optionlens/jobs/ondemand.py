@@ -4,7 +4,7 @@ services.refresh's."""
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from ..analytics import markets
@@ -55,13 +55,21 @@ async def visit(symbol: str) -> dict:
         return row
 
 
+_history_asked: dict[str, date] = {}   # symbol -> New York day its history was last asked for here
+
+
 async def ensure_history(symbol: str, row: dict | None = None) -> int:
-    """Backfill 10y of daily bars if the symbol has none. Returns bars stored (0 if already present)."""
+    """Backfill 10y of daily bars if the symbol has no history (prices.lacks_history: none, or only a few bars
+    stored before one was fetched); asked at most once per New York day per symbol, so a listing that really is
+    that new is not refetched on every view. Returns bars stored (0 if already present)."""
     symbol = normalize_symbol(symbol)
     async with _lock(f"history:{symbol}"):
-        if await asyncio.to_thread(bars_repo.coverage, [symbol]):
+        cov = (await asyncio.to_thread(bars_repo.coverage, [symbol])).get(symbol)
+        today = now_ny().date()
+        if not prices.lacks_history(cov) or (cov is not None and _history_asked.get(symbol) == today):
             return 0
         row = row or await ensure_symbol(symbol)
+        _history_asked[symbol] = today
         return await prices.backfill_symbol(row)
 
 
