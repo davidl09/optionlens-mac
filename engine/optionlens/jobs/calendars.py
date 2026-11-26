@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import date, timedelta
+from typing import Awaitable, Callable
 
 from ..analytics.calendar import now_ny
 from ..config import get_settings
+from ..models import EarningsEvent
 from ..repo import dividends as dividends_repo
 from ..repo import earnings as earnings_repo
 from ..repo import jobs as jobs_repo
@@ -64,9 +66,9 @@ class BackfillInterrupted(RuntimeError):
     """Raised with the JSON progress as message so a failed run still records its cursor."""
 
 
-def _backfill_cursor() -> date | None:
-    """Oldest date already backfilled (from the latest run that recorded one)."""
-    for run in jobs_repo.recent_runs(limit=20, job=BACKFILL_JOB):
+def _backfill_cursor(job: str = BACKFILL_JOB) -> date | None:
+    """Oldest date already backfilled (from the latest run of `job` that recorded one)."""
+    for run in jobs_repo.recent_runs(limit=20, job=job):
         detail = run["detail"] or ""
         try:
             return date.fromisoformat(json.loads(detail[detail.index("{"):])["cursor"])
@@ -75,11 +77,11 @@ def _backfill_cursor() -> date | None:
     return None
 
 
-def earnings_backfill_progress(today: date | None = None) -> float:
-    """Fraction 0..1 of the 3-year earnings backfill completed (for Status)."""
+def earnings_backfill_progress(today: date | None = None, job: str = BACKFILL_JOB) -> float:
+    """Fraction 0..1 of the 3-year earnings backfill `job` completed (for Status)."""
     today = today or now_ny().date()
     start, end = _backfill_window(today)
-    cursor = _backfill_cursor()
+    cursor = _backfill_cursor(job)
     if cursor is None:
         return 0.0
     days = days_between(start, end, weekdays_only=True)
@@ -87,11 +89,11 @@ def earnings_backfill_progress(today: date | None = None) -> float:
     return min(1.0, done / len(days)) if days else 1.0
 
 
-async def earnings_backfill() -> str:
-    """Resumable: fetch every weekday from the backfill cursor back to 3 years ago (newest first)."""
+async def _backfill(job: str, fetch_day: Callable[[date], Awaitable[list[EarningsEvent]]]) -> str:
+    """Resumable: fetch every weekday from `job`'s cursor back to 3 years ago (newest first) and upsert it."""
     today = now_ny().date()
     start, end = _backfill_window(today)
-    cursor = await asyncio.to_thread(_backfill_cursor)
+    cursor = await asyncio.to_thread(_backfill_cursor, job)
     todo = [d for d in reversed(days_between(start, end, weekdays_only=True)) if cursor is None or d < cursor]
     total, done = 0, cursor or end + timedelta(days=1)
 
@@ -100,7 +102,7 @@ async def earnings_backfill() -> str:
 
     for i, d in enumerate(todo, 1):
         try:
-            n = await asyncio.to_thread(earnings_repo.upsert_earnings, await nasdaq.fetch_earnings(d))
+            n = await asyncio.to_thread(earnings_repo.upsert_earnings, await fetch_day(d))
             total += n
         except Exception as e:
             raise BackfillInterrupted(f"{type(e).__name__}: {e} {progress()}") from e
@@ -108,6 +110,11 @@ async def earnings_backfill() -> str:
         if i % PROGRESS_EVERY == 0:
             await report_progress(progress())
     return progress()
+
+
+async def earnings_backfill() -> str:
+    """Nasdaq's earnings calendar (US listings), 3 years back (resumable)."""
+    return await _backfill(BACKFILL_JOB, nasdaq.fetch_earnings)
 
 
 async def dividends(start: date | None = None, end: date | None = None) -> str:
