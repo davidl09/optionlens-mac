@@ -19,11 +19,6 @@ from .osi import INDEX_ROOTS, parse_osi, standard_roots  # noqa: F401  (re-expor
 
 BASE_HOST = "cdn.cboe.com"
 BASE = f"https://{BASE_HOST}/api/global"
-# Tickers CBOE serves with a leading underscore (cash-settled indices).
-INDEX_SYMBOLS = frozenset({
-    "SPX", "NDX", "RUT", "XSP", "DJX", "OEX", "XEO", "MRUT",
-    "VIX", "VIX1D", "VIX9D", "VIX3M", "VIX6M",
-})
 
 
 def _f(v: Any) -> float | None:

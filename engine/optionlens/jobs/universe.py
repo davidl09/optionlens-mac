@@ -11,7 +11,7 @@ from ..config import get_settings
 from ..models import normalize_symbol
 from ..net import FetchError
 from ..repo import symbols as symbols_repo
-from ..sources import cboe, nasdaq
+from ..sources import nasdaq
 from . import universe_ca
 
 INDICES = {"SPX": "S&P 500 Index", "NDX": "Nasdaq-100 Index", "RUT": "Russell 2000 Index",
@@ -100,7 +100,7 @@ async def ensure_symbol(raw: str) -> dict:
         if row is None:
             raise UnknownSymbol(symbol)
         return row
-    if symbol in cboe.INDEX_SYMBOLS:
+    if markets.is_index(symbol):
         new = {"symbol": symbol, "name": INDICES.get(symbol, symbol), "kind": "index"}
     else:
         new = None

@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from .calendar import NYSE, TSX, TradingCalendar
 
 CA_SUFFIXES = {".TO": "TSX", ".VN": "TSXV"}
+# The cash-settled indices (and the VIX family) OptionLens knows: symbols of kind "index" (no shares, no dividends;
+# venues list them apart from stocks, e.g. Questrade's securityType "Index", IBKR's secType IND).
+INDEX_SYMBOLS = frozenset({
+    "SPX", "NDX", "RUT", "XSP", "DJX", "OEX", "XEO", "MRUT",
+    "VIX", "VIX1D", "VIX9D", "VIX3M", "VIX6M",
+})
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,10 @@ MARKETS = {m.code: m for m in (US, CA)}
 def _suffix(symbol: str) -> str | None:
     s = symbol.upper()
     return next((x for x in CA_SUFFIXES if s.endswith(x) and len(s) > len(x)), None)
+
+
+def is_index(symbol: str) -> bool:
+    return symbol.upper() in INDEX_SYMBOLS
 
 
 def is_canadian(symbol: str) -> bool:
