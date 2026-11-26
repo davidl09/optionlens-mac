@@ -52,7 +52,7 @@ function fromIb(d: ContractDetails): TwsContract | null {
   if (secType !== "STK" && secType !== "IND" && secType !== "OPT") return null;
   const right = String(c.right ?? "").toUpperCase().startsWith("C") ? "C" : String(c.right ?? "").toUpperCase().startsWith("P") ? "P" : undefined;
   return {
-    symbol: c.symbol, secType, exchange: c.exchange ?? "SMART", currency: "USD", conId: c.conId, primaryExchange: c.primaryExch,
+    symbol: c.symbol, secType, exchange: c.exchange ?? "SMART", currency: c.currency === "CAD" ? "CAD" : "USD", conId: c.conId, primaryExchange: c.primaryExch,
     lastTradeDateOrContractMonth: detailsExpiry(c as { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }), strike: c.strike, right, tradingClass: c.tradingClass,
     multiplier: c.multiplier === undefined ? undefined : String(c.multiplier),
   };
@@ -68,6 +68,7 @@ export function positionOf(account: string, c: Contract, pos: number, avgCost: n
       symbol: String(c.symbol ?? ""), secType: String(c.secType ?? ""), currency: c.currency ? String(c.currency) : null, conId: num(c.conId),
       expiry: detailsExpiry(c as { lastTradeDateOrContractMonth?: string; lastTradeDate?: string }) ?? null, strike: num(c.strike),
       right: r.startsWith("C") ? "C" : r.startsWith("P") ? "P" : null, multiplier: num(c.multiplier), tradingClass: c.tradingClass ? String(c.tradingClass) : null,
+      ...(c.exchange || c.primaryExch ? { exchange: String(c.exchange || c.primaryExch) } : {}),
     },
   };
 }

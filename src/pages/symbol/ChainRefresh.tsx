@@ -10,7 +10,6 @@ import { AsyncErrorView, type ErrorView, Popover, SourceBadge } from "../../comp
 import { desktop } from "../../desktop";
 import { summarize, type RefreshSummary } from "../../lib/refresh";
 import { useBridgeStatus } from "../../state/desktop";
-import { bridgeServes } from "../../lib/markets";
 
 export const POLL_MS = 1500;
 
@@ -52,9 +51,8 @@ function useRefreshRound(sym: string): { summary: RefreshSummary; status: Refres
     const poll = () => { void api.refreshStatus(sym).then(apply, () => { if (alive) timer = window.setTimeout(poll, POLL_MS * 2); }); };
     api.startRefresh(sym).then((st) => {
       apply(st);
-      // The bridge reports pending / its outcome to the round itself; read the round again once it answered. It serves
-      // US listings only (a Canadian chain comes from Questrade).
-      if (!desktop || !alive || !bridgeServes(sym)) return;
+      // The bridge reports pending / its outcome to the round itself; read the round again once it answered.
+      if (!desktop || !alive) return;
       setBridgeAsked(true);
       const answered = () => { if (alive) { setBridgeAsked(false); poll(); } };
       void desktop.refreshSymbol(sym).then(answered, answered);

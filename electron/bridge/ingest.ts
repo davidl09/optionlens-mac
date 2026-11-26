@@ -80,6 +80,8 @@ export interface Heartbeat {
 export interface IngestPosition {
   account: string; sec_type: string; symbol: string; currency: string; qty: number; avg_cost: N;
   multiplier: N; expiry: string | null; strike: N; right: "C" | "P" | null; trading_class: string | null; con_id: N;
+  /** The exchange TWS names for the contract (a stock's listing venue: TSE, VENTURE), when it names one. */
+  exchange?: string;
 }
 /** The accounts' summary (base currency) and exchange rates (`rate`: base-currency value of 1 `currency`). */
 export interface IngestAccountSummary { account: string; currency: string; net_liquidation: N; cash: N; buying_power: N }

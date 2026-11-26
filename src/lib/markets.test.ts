@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { mixedCurrencies, rowMoney } from "../components/Money";
 import { fmt, USD_STYLE } from "./format";
-import { bridgeServes, currencyOf, exchangeOf, marketOf, moneyStyleOf } from "./markets";
+import { currencyOf, exchangeOf, marketOf, moneyStyleOf } from "./markets";
 
 describe("markets", () => {
   it("keys a US listing and its Toronto listing apart", () => {
     expect([marketOf("RY"), currencyOf("RY"), exchangeOf("RY")]).toEqual(["US", "USD", null]);
     expect([marketOf("RY.TO"), currencyOf("RY.TO"), exchangeOf("RY.TO")]).toEqual(["CA", "CAD", "TSX"]);
     expect([marketOf("RCI.B.TO"), exchangeOf("ABC.VN"), marketOf("BRK.B"), marketOf("TO")]).toEqual(["CA", "TSXV", "US", "US"]);
-    expect([bridgeServes("AAPL"), bridgeServes("TD.TO")]).toEqual([true, false]);
   });
 });
 

@@ -20,7 +20,6 @@ import { withLiveBar } from "../../live/merge";
 import { useQueryValue, useSym } from "./shared";
 import { useMoney } from "../../components/Money";
 import { gapText, layoutGaps, spread, type GapLayout } from "../../lib/chartGaps";
-import { bridgeServes } from "../../lib/markets";
 
 /** The candles with today's bar following the live price (at most once a second; only while quotes flow). */
 function LiveDailyCandles({ sym, bars, smas, markers }: { sym: string; bars: Bar[]; smas: SmaLength[]; markers: ChartMarker[] }) {
@@ -65,8 +64,7 @@ function useBridgeFill(sym: string, data: IntradayBars | null, reload: () => voi
   const key = data ? `${sym}|${data.interval}|${data.range}` : null;
   useEffect(() => { setState(null); }, [key]);
   useEffect(() => {
-    // The IBKR bridge serves US listings only: Canadian bars come from Questrade alone.
-    if (!desktop || !data || !key || !data.missing.length || asked.current.has(key) || !bridgeServes(sym)) return undefined;
+    if (!desktop || !data || !key || !data.missing.length || asked.current.has(key)) return undefined;
     asked.current.add(key);
     let alive = true;
     setState("fetching");

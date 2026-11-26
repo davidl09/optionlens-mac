@@ -1,6 +1,7 @@
 // Option-chain planning and assembly (pure): which underlying contract, which expiries and strikes,
 // and how accumulated ticks become the POST /api/ingest/chain body (INTEGRATION.md §6).
 import type { IngestChain, IngestContract, IngestUnderlying, ReferencePrice } from "./ingest";
+import { listingOf } from "./markets";
 import { nyYmd } from "./ny";
 import { bestPrice, quoteSides, type QuoteSnapshot } from "./ticks";
 import type { OptionParams, TwsContract } from "./tws";
@@ -10,12 +11,35 @@ const INDEX_EXCHANGE: Record<string, string> = {
   SPX: "CBOE", XSP: "CBOE", NDX: "NASDAQ", RUT: "RUSSELL", VIX: "CBOE", VIX9D: "CBOE", VIX3M: "CBOE", VIX6M: "CBOE", DJX: "CBOE",
 };
 
+/** The underlying of the engine's `symbol` as IBKR names it (markets.ts: US and Canadian listings; the indices). */
 export function underlyingContract(symbol: string): TwsContract {
   const sym = symbol.toUpperCase();
   const idx = INDEX_EXCHANGE[sym];
   if (idx) return { symbol: sym, secType: "IND", exchange: idx, currency: "USD" };
-  // IBKR writes share classes with a space (BRK B); the engine uses BRK.B.
-  return { symbol: sym.replace(".", " "), secType: "STK", exchange: "SMART", currency: "USD" };
+  const l = listingOf(sym);
+  return { symbol: l.ticker, secType: "STK", exchange: "SMART", currency: l.currency, ...(l.primaryExchange ? { primaryExchange: l.primaryExchange } : {}) };
+}
+
+/** The contracts to ask IBKR's contract server for `symbol`'s underlying, in order: the first it knows is the listing. */
+export function underlyingCandidates(symbol: string): TwsContract[] {
+  const und = underlyingContract(symbol);
+  return und.secType === "STK" ? [und, ...listingOf(symbol).tickerAliases.map((t) => ({ ...und, symbol: t }))] : [und];
+}
+
+/** The request for the option contracts of one expiry of `symbol`: on its market's option exchange, in its currency. */
+export function optionContractsRequest(symbol: string, und: TwsContract, e: ExpiryPick): TwsContract {
+  const l = listingOf(symbol);
+  return {
+    symbol: und.symbol, secType: "OPT", exchange: l.optionExchange, currency: l.currency,
+    lastTradeDateOrContractMonth: e.expiry, tradingClass: e.tradingClass, multiplier: e.multiplier,
+  };
+}
+
+/** The option parameters of `symbol`'s option exchange (SMART for OPRA, CDE for the Montréal Exchange), else all: the other exchanges repeat them. */
+export function optionRows(params: OptionParams[], symbol: string): OptionParams[] {
+  const exchange = listingOf(symbol).optionExchange;
+  const rows = params.filter((p) => p.exchange === exchange);
+  return rows.length ? rows : params;
 }
 
 export interface ChainShape { expiries: number; moneyness: number }
@@ -25,19 +49,19 @@ export const FULL_CHAIN: ChainShape = { expiries: 8, moneyness: 0.25 };
 export interface ExpiryPick { expiry: string; tradingClass: string; multiplier: string }
 
 /**
- * First `count` expiries on or after `now`'s New York date (YYYYMMDD compare) from the SMART listing. When an expiry is
- * listed under several trading classes (SPX monthly AM vs SPXW PM) the class named like the symbol wins.
+ * First `count` expiries of the engine's `symbol` on or after `now`'s New York date (YYYYMMDD compare) from the rows
+ * of its option exchange (optionRows). When an expiry is listed under several trading classes (SPX monthly AM vs
+ * SPXW PM; an adjusted Montréal Exchange class) the standard class of the listing wins.
  */
 export function pickExpiries(params: OptionParams[], symbol: string, now: Date, count: number): ExpiryPick[] {
-  const smart = params.filter((p) => p.exchange === "SMART");
-  const rows = smart.length ? smart : params;
+  const standard = listingOf(symbol).optionClass;
   const todayKey = nyYmd(now);
   const best = new Map<string, ExpiryPick>();
-  for (const p of rows) {
+  for (const p of optionRows(params, symbol)) {
     for (const e of p.expirations) {
       if (!/^\d{8}$/.test(e) || e < todayKey) continue;
       const cur = best.get(e);
-      if (!cur || (p.tradingClass === symbol && cur.tradingClass !== symbol)) best.set(e, { expiry: e, tradingClass: p.tradingClass, multiplier: p.multiplier });
+      if (!cur || (p.tradingClass === standard && cur.tradingClass !== standard)) best.set(e, { expiry: e, tradingClass: p.tradingClass, multiplier: p.multiplier });
     }
   }
   return [...best.values()].sort((a, b) => a.expiry.localeCompare(b.expiry)).slice(0, count);

@@ -36,6 +36,7 @@ export function positionRow(p: TwsPosition): IngestPosition {
   return {
     account: p.account, sec_type: c.secType, symbol: c.symbol, currency: (c.currency ?? "USD").toUpperCase(), qty: p.pos, avg_cost: p.avgCost,
     multiplier: c.multiplier, expiry: iso(c.expiry), strike: c.strike, right: c.right, trading_class: c.tradingClass, con_id: c.conId,
+    ...(c.exchange ? { exchange: c.exchange } : {}),
   };
 }
 

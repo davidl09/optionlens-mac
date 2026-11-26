@@ -24,11 +24,6 @@ export function exchangeOf(symbol: string): "TSX" | "TSXV" | null {
   return s ? CA_SUFFIXES[s] : null;
 }
 
-/** The IBKR bridge serves US listings only (INTEGRATION.md §6); Canadian ones come from Questrade. */
-export function bridgeServes(symbol: string): boolean {
-  return marketOf(symbol) === "US";
-}
-
 /** How a symbol's money values are labelled (format.ts): C$ for Canadian listings, plain $ for US ones. */
 export function moneyStyleOf(symbol: string): MoneyStyle {
   const currency = currencyOf(symbol);

@@ -1,13 +1,15 @@
 // The bridge's view of TWS / IB Gateway: a narrow, promise-based contract. The @stoqey/ib adapter
 // (ib-adapter.ts) implements it; tests use a fake. Nothing else in the bridge imports @stoqey/ib.
 
+import type { Currency } from "./markets";
+
 export type SecType = "STK" | "IND" | "OPT";
 
 export interface TwsContract {
   symbol: string;
   secType: SecType;
   exchange: string;
-  currency: "USD";
+  currency: Currency;
   conId?: number;
   primaryExchange?: string;
   /** OPT: expiry YYYYMMDD. */
@@ -66,7 +68,11 @@ export interface TwsSystemMessage { code: number; message: string }
  */
 export interface TwsPosition {
   account: string; pos: number; avgCost: number | null;
-  contract: { symbol: string; secType: string; currency: string | null; conId: number | null; expiry: string | null; strike: number | null; right: "C" | "P" | null; multiplier: number | null; tradingClass: string | null };
+  contract: {
+    symbol: string; secType: string; currency: string | null; conId: number | null; expiry: string | null; strike: number | null; right: "C" | "P" | null; multiplier: number | null; tradingClass: string | null;
+    /** The exchange TWS names (a stock's listing venue, e.g. TSE; an option's own exchange), when it names one. */
+    exchange?: string;
+  };
 }
 /** One account-summary value (reqAccountSummary): e.g. NetLiquidation 50000 USD, ExchangeRate 0.72 CAD. */
 export interface AccountValue { account: string; tag: string; value: string; currency: string }

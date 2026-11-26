@@ -7,7 +7,7 @@
 //   - a task whose gate is closed (historical tasks wait for the pacer) is skipped until it opens;
 //   - a pre-emptible task (historical requests) running when on-demand work arrives is aborted and re-queued;
 //   - FIFO within a kind.
-// Tasks are de-duplicated by key, cancellable by kind / key / group, and may ask to be retried later
+// Tasks are de-duplicated by key, cancellable by kind / key / group / scope, and may ask to be retried later
 // (RetryLater) up to their attempt limit, or be parked behind a gate (Parked: no attempt used, not run again
 // before that gate opens; recheck() when a gate opens without a known time).
 import { JOB_KINDS, type JobKind } from "../shared/api";
@@ -19,6 +19,8 @@ export interface Task {
   label: string;
   /** Tasks that stand or fall together (e.g. all option-bar requests of one symbol). */
   group?: string;
+  /** The market-data group the task's data belongs to (markets.ts DataGroup id: every stock of one exchange). */
+  scope?: string;
   gate?: Gate;
   maxAttempts?: number;
   /**
@@ -61,7 +63,7 @@ export const WEIGHT: Record<Exclude<JobKind, typeof URGENT>, number> = {
   live: 6, "eod-chains": 8, "chain-universe": 4, "underlying-stats": 3, index: 2, "option-bars": 1, "dividend-history": 2, "iv-history": 1,
 };
 
-export interface CancelFilter { kind?: JobKind; key?: string; group?: string; /** Leave running / suspended tasks alone. */ queuedOnly?: boolean }
+export interface CancelFilter { kind?: JobKind; key?: string; group?: string; scope?: string; /** Leave running / suspended tasks alone. */ queuedOnly?: boolean }
 
 /** Lexicographic a < b. */
 function before(a: readonly number[], b: readonly number[]): boolean {
@@ -119,7 +121,7 @@ export class Scheduler {
   /** Drops matching queued tasks (all when no filter) and aborts matching running / suspended ones. */
   cancel(f: CancelFilter = {}): void {
     const match = (e: Entry) => (f.kind === undefined || e.task.kind === f.kind) && (f.key === undefined || e.task.key === f.key)
-      && (f.group === undefined || e.task.group === f.group);
+      && (f.group === undefined || e.task.group === f.group) && (f.scope === undefined || e.task.scope === f.scope);
     const dropped = this.queue.filter(match);
     this.queue = this.queue.filter((e) => !match(e));
     for (const e of dropped) this.finish(e, { ok: false, cancelled: true, error: "cancelled" });

@@ -172,7 +172,8 @@ async function main(): Promise<void> {
     ledger: new Ledger(jsonFile(join(userData, "bridge-ledger.json"))),
     // Saved IBKR contract definitions (option chains while IBKR's contract server is down), one file per symbol.
     contractStore: { read: (symbol) => contractFile(symbol).read(), write: (symbol, v) => contractFile(symbol).write(v) },
-    optionsFeedStore: jsonFile(join(userData, "bridge-options-feed.json")),
+    // What the account's options market data allows, per market (the US file keeps its name).
+    optionsFeedStore: (market) => jsonFile(join(userData, market === "US" ? "bridge-options-feed.json" : `bridge-options-feed-${market.toLowerCase()}.json`)),
     settings: () => settings.bridge,
     clientName: `optionlens-mac ${app.getVersion()}`,
     log,

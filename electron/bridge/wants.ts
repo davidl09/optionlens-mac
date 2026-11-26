@@ -1,6 +1,8 @@
-// GET /api/ingest/wants (INTEGRATION.md §6): strict parsing (a malformed section is an error, an absent
+// GET /api/ingest/wants (INTEGRATION.md §6, version 2): strict parsing (a malformed section is an error, an absent
 // optional section is "nothing wanted") and planning (what to enqueue now, given freshness and the
 // attempt ledger so a symbol IBKR has no data for is not re-requested on every poll).
+// Work that depends on the trading session (underlying stats, chain universe, closing chains) comes as one plan per
+// market, each on its market's calendar; a single object (version 1) is read as one plan.
 import type { ChainShape } from "./chain";
 import { nyDate } from "./ny";
 import type { TwsContract } from "./tws";
@@ -11,14 +13,10 @@ export interface Wants {
   hvHistory: { symbol: string; from: string }[];
   /** How many symbols the engine keeps IV/HV history for (wanted or already current); null = not said. */
   historySymbols: number | null;
-  /**
-   * `asOfSession` (YYYY-MM-DD): an after-hours fill — outside market hours the session (the last completed one)
-   * lacks this data, and these symbols' frozen values are stored as that session's (INTEGRATION.md §6); null =
-   * the live session.
-   */
-  underlyingStats: { symbols: string[]; maxAgeS: number; asOfSession: string | null } | null;
-  chainUniverse: { symbols: string[]; maxAgeS: number; shape: ChainShape; asOfSession: string | null } | null;
-  eodChains: { sessionDate: string; symbols: string[]; notBefore: number; deadline: number } | null;
+  /** One plan per market (none: nothing wanted). */
+  underlyingStats: StatsWant[];
+  chainUniverse: UniverseWant[];
+  eodChains: EodWant[];
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
   indexSymbols: string[];
   /** Index daily history (SPX, NDX, ..., VIX family) the engine is missing, from `from` (YYYY-MM-DD). */
@@ -27,6 +25,15 @@ export interface Wants {
   dividendHistory: { symbol: string; from: string }[];
   onDemandMaxAgeS: number;
 }
+
+/**
+ * `asOfSession` (YYYY-MM-DD): an after-hours fill — outside the market's hours its session (the last completed one)
+ * lacks this data, and these symbols' frozen values are stored as that session's (INTEGRATION.md §6); null =
+ * the live session. `sessionDate`: the session the stats belong to (null: an engine that does not say).
+ */
+export interface StatsWant { symbols: string[]; maxAgeS: number; asOfSession: string | null; sessionDate: string | null }
+export interface UniverseWant { symbols: string[]; maxAgeS: number; shape: ChainShape; asOfSession: string | null }
+export interface EodWant { sessionDate: string; symbols: string[]; notBefore: number; deadline: number }
 
 export class WantsError extends Error {
   constructor(message: string) { super(`invalid wants: ${message}`); this.name = "WantsError"; }
@@ -76,12 +83,15 @@ function symbolsFrom(v: unknown, path: string): { symbol: string; from: string }
   }) : [];
 }
 
+/** The per-market plans of a section: a list (absent = none), or one object (version 1: a single plan). */
+function plans<T>(v: unknown, path: string, one: (o: Obj, path: string) => T): T[] {
+  if (!present(v)) return [];
+  return Array.isArray(v) ? v.map((x, i) => one(obj(x, `${path}[${i}]`), `${path}[${i}]`)) : [one(obj(v, path), path)];
+}
+
 export function parseWants(raw: unknown): Wants {
   const w = obj(raw, "wants");
   const ivHistory = symbolsFrom(w.iv_history, "iv_history");
-  const us = present(w.underlying_stats) ? obj(w.underlying_stats, "underlying_stats") : null;
-  const cu = present(w.chain_universe) ? obj(w.chain_universe, "chain_universe") : null;
-  const eod = present(w.eod_chains) ? obj(w.eod_chains, "eod_chains") : null;
   const optionBars = present(w.option_bars) ? arr(w.option_bars, "option_bars").map((x, i) => {
     const o = obj(x, `option_bars[${i}]`);
     return {
@@ -94,18 +104,19 @@ export function parseWants(raw: unknown): Wants {
     ivHistory,
     hvHistory: symbolsFrom(w.hv_history, "hv_history"),
     historySymbols: present(w.history_symbols) ? Math.round(num(w.history_symbols, "history_symbols", 0, 1e6)) : null,
-    underlyingStats: us ? {
-      symbols: symbols(us.symbols, "underlying_stats.symbols"), maxAgeS: num(us.max_age_s, "underlying_stats.max_age_s", 1, 86_400 * 7),
-      asOfSession: present(us.as_of_session) ? date(us.as_of_session, "underlying_stats.as_of_session") : null,
-    } : null,
-    chainUniverse: cu ? {
-      symbols: symbols(cu.symbols, "chain_universe.symbols"), maxAgeS: num(cu.max_age_s, "chain_universe.max_age_s", 1, 86_400 * 7), shape: shape(cu, "chain_universe"),
-      asOfSession: present(cu.as_of_session) ? date(cu.as_of_session, "chain_universe.as_of_session") : null,
-    } : null,
-    eodChains: eod ? {
-      sessionDate: date(eod.session_date, "eod_chains.session_date"), symbols: symbols(eod.symbols, "eod_chains.symbols"),
-      notBefore: time(eod.not_before, "eod_chains.not_before"), deadline: time(eod.deadline, "eod_chains.deadline"),
-    } : null,
+    underlyingStats: plans(w.underlying_stats, "underlying_stats", (us, p) => ({
+      symbols: symbols(us.symbols, `${p}.symbols`), maxAgeS: num(us.max_age_s, `${p}.max_age_s`, 1, 86_400 * 7),
+      asOfSession: present(us.as_of_session) ? date(us.as_of_session, `${p}.as_of_session`) : null,
+      sessionDate: present(us.session_date) ? date(us.session_date, `${p}.session_date`) : null,
+    })),
+    chainUniverse: plans(w.chain_universe, "chain_universe", (cu, p) => ({
+      symbols: symbols(cu.symbols, `${p}.symbols`), maxAgeS: num(cu.max_age_s, `${p}.max_age_s`, 1, 86_400 * 7), shape: shape(cu, p),
+      asOfSession: present(cu.as_of_session) ? date(cu.as_of_session, `${p}.as_of_session`) : null,
+    })),
+    eodChains: plans(w.eod_chains, "eod_chains", (eod, p) => ({
+      sessionDate: date(eod.session_date, `${p}.session_date`), symbols: symbols(eod.symbols, `${p}.symbols`),
+      notBefore: time(eod.not_before, `${p}.not_before`), deadline: time(eod.deadline, `${p}.deadline`),
+    })),
     optionBars,
     indexSymbols: present(w.index_symbols) ? symbols(w.index_symbols, "index_symbols") : [],
     indexBars: symbolsFrom(w.index_bars, "index_bars"),
@@ -131,11 +142,12 @@ export interface PlanContext {
 }
 
 export interface Plan {
-  eod: { sessionDate: string; symbols: string[] } | null;
-  /** `asOfSession`: an after-hours fill of that session (see Wants), else null. */
-  universe: { symbols: string[]; shape: ChainShape; asOfSession: string | null };
-  stats: string[];
-  statsAsOfSession: string | null;
+  /** Closing chains due now, per market in its closing window (none: no market is in it). */
+  eod: { sessionDate: string; symbols: string[] }[];
+  /** Per market. `asOfSession`: an after-hours fill of that session (see StatsWant), else null. */
+  universe: { symbols: string[]; shape: ChainShape; asOfSession: string | null }[];
+  /** Per market. `sessionDate`: the session the stats are pushed for (null: the engine did not say). */
+  stats: { symbols: string[]; asOfSession: string | null; sessionDate: string | null }[];
   indexQuotes: string[];
   indexBars: { symbol: string; from: string }[];
   optionBars: { symbol: string; sessions: string[]; shape: ChainShape }[];
@@ -156,22 +168,21 @@ export const ledgerKey = {
 const stale = (last: number | undefined, now: number, maxAgeS: number) => last === undefined || now - last >= maxAgeS * 1000;
 
 export function planWants(w: Wants, c: PlanContext): Plan {
-  const eodActive = w.eodChains !== null && c.now >= w.eodChains.notBefore && c.now <= w.eodChains.deadline;
-  const eod = eodActive && w.eodChains ? {
-    sessionDate: w.eodChains.sessionDate,
-    symbols: w.eodChains.symbols.filter((s) => !c.attemptedWithin(ledgerKey.eod(w.eodChains!.sessionDate, s), EOD_RETRY_MS)),
-  } : null;
-  const eodSet = new Set(eodActive && w.eodChains ? w.eodChains.symbols : []);
-  const cu = w.chainUniverse;
+  const eodActive = w.eodChains.filter((e) => c.now >= e.notBefore && c.now <= e.deadline);
+  const eodSet = new Set(eodActive.flatMap((e) => e.symbols));
   return {
-    eod,
-    universe: {
-      symbols: cu ? cu.symbols.filter((s) => !eodSet.has(s) && stale(c.lastChainPush(s), c.now, cu.maxAgeS)) : [],
-      shape: cu ? cu.shape : { expiries: 6, moneyness: 0.2 },
-      asOfSession: cu?.asOfSession ?? null,
-    },
-    stats: w.underlyingStats ? w.underlyingStats.symbols.filter((s) => stale(c.lastStatsPush(s), c.now, w.underlyingStats!.maxAgeS)) : [],
-    statsAsOfSession: w.underlyingStats?.asOfSession ?? null,
+    eod: eodActive.map((e) => ({
+      sessionDate: e.sessionDate,
+      symbols: e.symbols.filter((s) => !c.attemptedWithin(ledgerKey.eod(e.sessionDate, s), EOD_RETRY_MS)),
+    })),
+    universe: w.chainUniverse.map((cu) => ({
+      symbols: cu.symbols.filter((s) => !eodSet.has(s) && stale(c.lastChainPush(s), c.now, cu.maxAgeS)),
+      shape: cu.shape, asOfSession: cu.asOfSession,
+    })),
+    stats: w.underlyingStats.map((us) => ({
+      symbols: us.symbols.filter((s) => stale(c.lastStatsPush(s), c.now, us.maxAgeS)),
+      asOfSession: us.asOfSession, sessionDate: us.sessionDate,
+    })),
     indexQuotes: w.indexSymbols,
     indexBars: w.indexBars.filter((x) => !c.attemptedWithin(ledgerKey.indexBars(x.symbol), HIST_RETRY_MS)),
     optionBars: w.optionBars.filter((o) => o.sessions.length > 0 && !c.attemptedWithin(ledgerKey.optionBars(o.symbol, o.sessions), HIST_RETRY_MS)),

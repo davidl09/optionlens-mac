@@ -45,7 +45,7 @@ function harness(wants: unknown, sessionMarket = market(), o: { pacer?: Historic
     connector: new FakeConnector(new Map([[4001, session]])), ingest, ledger: new Ledger(null, () => NOW), settings: () => DEFAULT_BRIDGE,
     clientName: "optionlens-mac test", log: silentLogger, onStatus: (s) => statuses.push(s), now: () => Date.now(),
     pacer: o.pacer ?? new HistoricalPacer({ minSpacingMs: 0 }), batchTimeoutMs: "batchTimeoutMs" in o ? o.batchTimeoutMs : 50,
-    contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore,
+    contractStore: o.contractStore, optionsFeedStore: o.optionsFeedStore ? (m) => (m === "US" ? o.optionsFeedStore! : null) : undefined,
   });
   return { bridge, calls, session, statuses, statsBodies, chains, heartbeats, reports, quoteBodies, intraday, positionBodies };
 }

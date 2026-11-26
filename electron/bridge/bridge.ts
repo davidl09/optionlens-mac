@@ -4,7 +4,7 @@
 import type { BridgeSettings, BridgeStatus, IntradayRequest, IntradayResult, JobKind, RefreshResult } from "../shared/api";
 import type { Logger } from "../main/log";
 import { batchLines } from "../main/settings";
-import { FULL_CHAIN, underlyingContract, type ChainShape } from "./chain";
+import { FULL_CHAIN, type ChainShape } from "./chain";
 import { COMPETING_MESSAGE, COMPETING_PAUSE_MS, TwsSupervisor } from "./connection";
 import { ContractCache, type ContractStore } from "./contract-cache";
 import { ContractServer, SECDEF_PROBE_MS, type FarmState } from "./farms";
@@ -13,14 +13,16 @@ import type { IngestApi, RefreshResultBody } from "./ingest";
 import { CONTRACTS_UNAVAILABLE, ContractsUnavailable, FINAL_MIN_COVERAGE, OPTION_QUOTES_CLOSED, OptionQuotesClosed, pushChain, type ChainPushed, pushDividendHistory, pushIndexBars, pushIndexQuotes, pushIntradayBars, pushLiveQuotes, pushOptionBars, pushUnderlyingStats, pushVolHistory, resolveOptionContracts, type JobContext } from "./jobs";
 import type { Ledger } from "./ledger";
 import { LineBudget } from "./line-budget";
+import { interleave, listingOf, MARKET_CODES, marketOf, OPTION_DATA, type DataGroup, type MarketCode } from "./markets";
 import { nyDate } from "./ny";
 import { OptionsFeed, type OptionsFeedStore } from "./options-feed";
+import { Permissions } from "./permissions";
 import { PositionsFeed } from "./positions";
 import { chunks, durationOf } from "./intraday";
 import { HistoricalPacer, IntradayGate, type Gate } from "./pacer";
 import { Parked, RetryLater, Scheduler, URGENT, type Outcome, type Task } from "./scheduler";
 import { isCompetingSession, isPermissionError, type TwsConnector, type TwsContract, type TwsSession } from "./tws";
-import { HIST_RETRY_MS, ledgerKey, parseLiveWants, parseWants, planWants, type Wants } from "./wants";
+import { HIST_RETRY_MS, ledgerKey, parseLiveWants, parseWants, planWants, type Plan, type Wants } from "./wants";
 
 export interface BridgeDeps {
   connector: TwsConnector;
@@ -39,8 +41,8 @@ export interface BridgeDeps {
   batchTimeoutMs?: number;
   /** Where saved contract definitions live (one entry per symbol; none: kept nowhere). */
   contractStore?: ContractStore | null;
-  /** Where the account's options-feed state lives (none: re-learned each launch). */
-  optionsFeedStore?: OptionsFeedStore | null;
+  /** Where the account's options-feed state of a market lives (none: re-learned each launch). */
+  optionsFeedStore?: (market: MarketCode) => OptionsFeedStore | null;
 }
 
 /** Live fallback: the engine is asked this often for the symbols on screen (it answers none while Questrade is live). */
@@ -57,6 +59,24 @@ const group = {
   volHistory: (s: string): Group => ({ id: `iv-history:${s}`, label: `${s} IV/HV history` }),
   indexBars: (s: string): Group => ({ id: `index-bars:${s}`, label: `${s} daily bars` }),
   dividends: (s: string): Group => ({ id: `dividend-history:${s}`, label: `${s} dividend history` }),
+};
+
+/** The historical bars of a market's option contracts: their own data group (denied apart from the live quotes,
+ * which the market's OptionsFeed handles). */
+const OPTION_HISTORY = Object.fromEntries(MARKET_CODES.map((m) => [m, { ...OPTION_DATA[m], id: `option-bars:${m}`, label: `${OPTION_DATA[m].label}' historical bars` }])) as Record<MarketCode, DataGroup>;
+
+/** Status notes about the data a market's pushes carried (the US wording is the long-standing one). */
+const FEED_NOTES: Record<MarketCode, { optionsDelayed: string; stocksDelayed: string; optionTicksMissing: string }> = {
+  US: {
+    optionsDelayed: "IBKR delayed (no OPRA subscription)",
+    stocksDelayed: "IBKR delayed stock quotes (no real-time US stock subscription)",
+    optionTicksMissing: "IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown",
+  },
+  CA: {
+    optionsDelayed: "IBKR delayed Canadian option quotes (no Montréal Exchange subscription)",
+    stocksDelayed: "IBKR delayed Canadian stock quotes (no real-time TSX subscription)",
+    optionTicksMissing: "IBKR sends no option volume / open interest for Canadian underlyings (generic ticks 100/101); sent as unknown",
+  },
 };
 
 interface ChainGaps { symbol: string; coverage: number; noQuotes: string[]; noContracts: string[] }
@@ -93,7 +113,8 @@ export class Bridge {
   private readonly lines: LineBudget;
   private readonly contracts: ContractCache;
   private readonly contractServer: ContractServer;
-  private readonly optionsFeed: OptionsFeed;
+  /** What the account's options market data allows, per market (each exchange has its own subscription). */
+  private readonly optionsFeeds: Record<MarketCode, OptionsFeed>;
   /** The read-only positions feed (INTEGRATION.md §11), on while the engine wants it. */
   readonly positionsFeed: PositionsFeed;
   private readonly now: () => number;
@@ -111,14 +132,17 @@ export class Bridge {
   private polling = false;
   /** Historical tasks of this round (since the queues were last idle), counted as they are queued and finish. */
   private round = { obars: { total: 0, done: 0, failed: 0 }, vol: { total: 0, done: 0, failed: 0 } };
-  /** What the last pushes revealed about the account's market data (null = not seen yet). */
-  private feed = { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false };
+  /** What the last pushes of each market revealed about the account's market data (null = not seen yet). */
+  private readonly feed = Object.fromEntries(MARKET_CODES.map((m) => [m, { optionsDelayed: null as boolean | null, stocksDelayed: null as boolean | null, optionTicksMissing: false }])) as
+    Record<MarketCode, { optionsDelayed: boolean | null; stocksDelayed: boolean | null; optionTicksMissing: boolean }>;
   /** Accepted option-bar catch-up plans not finished yet, by plan ledger key. */
   private readonly obarsPlans = new Map<string, { symbol: string; sessions: string[]; shape: ChainShape }>();
   /** Option-bar plans (ledger keys) whose contract tasks are still queued or running. */
   private readonly obarsInFlight = new Set<string>();
-  /** Task groups (symbol + kind) TWS refused for lack of a market-data permission: when, and what. */
-  private readonly denied = new Map<string, { at: number; label: string }>();
+  /** What TWS refused for lack of a market-data permission (task groups: symbol + kind; markets.ts data groups). */
+  private readonly permissions: Permissions;
+  /** Markets a chain was pushed for in this run (the first one of each is logged). */
+  private readonly chainMarkets = new Set<MarketCode>();
   /** Symbols whose last chain attempt found that IBKR lists no options. */
   private readonly noOptions = new Set<string>();
   /** Last chain posted with gaps (status note): under FINAL_MIN_COVERAGE quoted, expiries without quotes or contracts. */
@@ -141,7 +165,8 @@ export class Bridge {
     this.scheduler = new Scheduler({ now: this.now, onChange: () => this.emit() });
     this.contracts = new ContractCache(d.contractStore ?? null);
     this.contractServer = new ContractServer(() => this.supervisor.state().farms.secDef.state, this.now);
-    this.optionsFeed = new OptionsFeed(d.optionsFeedStore ?? null);
+    this.optionsFeeds = Object.fromEntries(MARKET_CODES.map((m) => [m, new OptionsFeed(d.optionsFeedStore?.(m) ?? null)])) as Record<MarketCode, OptionsFeed>;
+    this.permissions = new Permissions(this.now, HIST_RETRY_MS);
     this.positionsFeed = new PositionsFeed({ ingest: d.ingest, log: d.log, now: this.now });
     this.failures = new FailureLog(this.now);
     this.supervisor = new TwsSupervisor({
@@ -194,8 +219,8 @@ export class Bridge {
       lastError: c.lastError ?? this.lastError, notes: this.notes(), lastPushAt: this.lastPushAt,
       current: this.scheduler.current(), queued: this.scheduler.counts(), backfill: this.backfill(),
       populate: this.populate ? { ...this.populate } : null,
-      farms: c.farms, contractsAvailable: this.contractServer.available(), optionsSubscription: this.optionsFeed.mode,
-      optionsDelayed: this.feed.optionsDelayed, lastChainAt: this.lastChainAt(), lastChainRound: this.lastChainRound,
+      farms: c.farms, contractsAvailable: this.contractServer.available(), optionsSubscription: this.optionsFeeds.US.mode,
+      optionsDelayed: this.feed.US.optionsDelayed, lastChainAt: this.lastChainAt(), lastChainRound: this.lastChainRound,
       failures: this.failures.top(), linesPerBatch: this.lines.size,
     };
   }
@@ -223,13 +248,16 @@ export class Bridge {
 
   private notes(): string[] {
     const out: string[] = [...this.serverNotes()];
-    if (this.optionsFeed.mode === "delayed_only") out.push("US options: delayed only (no OPRA subscription) — option quotes are collected during market hours (09:30–16:00 ET)");
-    else if (this.feed.optionsDelayed) out.push("IBKR delayed (no OPRA subscription)");
-    if (this.feed.stocksDelayed) out.push("IBKR delayed stock quotes (no real-time US stock subscription)");
-    if (this.feed.optionTicksMissing) out.push("IBKR sends no option volume / open interest for underlyings (generic ticks 100/101); sent as unknown");
+    for (const m of MARKET_CODES) {
+      const { label, subscription } = OPTION_DATA[m];
+      if (this.optionsFeeds[m].mode === "delayed_only") out.push(`${label}: delayed only (no ${subscription} subscription) — option quotes are collected during market hours (09:30–16:00 ET)`);
+      else if (this.feed[m].optionsDelayed) out.push(FEED_NOTES[m].optionsDelayed);
+      if (this.feed[m].stocksDelayed) out.push(FEED_NOTES[m].stocksDelayed);
+      if (this.feed[m].optionTicksMissing) out.push(FEED_NOTES[m].optionTicksMissing);
+    }
     const reduced = this.lines.reduced;
     if (reduced !== null) out.push(`IBKR market-data line limit reached: batches reduced to ${reduced} lines (Settings → Market data lines is ${this.d.settings().marketDataLines})`);
-    const denied = [...this.denied.values()].map((d) => d.label);
+    const denied = this.permissions.labels();
     if (denied.length) out.push(`No IBKR market-data permission (skipped): ${denied.slice(0, 3).join(", ")}${denied.length > 3 ? ` and ${denied.length - 3} more` : ""}`);
     if (this.chainGaps) out.push(chainGapsText(this.chainGaps));
     return out;
@@ -287,8 +315,8 @@ export class Bridge {
     if (last !== undefined && this.now() - last < (this.wants?.onDemandMaxAgeS ?? 120) * 1000) return { status: "fresh" };
     const marketHours = { status: "unavailable", message: OPTION_QUOTES_CLOSED, waitingFor: "market-hours" } as const;
     const contractServer = { status: "unavailable", message: CONTRACTS_UNAVAILABLE, waitingFor: "contract-server" } as const;
-    if (!this.optionsFeed.canQuote(new Date(this.now()))) return marketHours;
-    if (!this.contractServer.available() && !this.contracts.saved(underlyingContract(sym).symbol, new Date(this.now()))) return contractServer;
+    if (!this.optionsFeedOf(sym).canQuote(new Date(this.now()))) return marketHours;
+    if (!this.contractServer.available() && !this.contracts.saved(sym, new Date(this.now()))) return contractServer;
     const outcome = await this.scheduler.enqueue(this.chainTask("on-demand", onDemandKey(sym), sym, FULL_CHAIN, null));
     if (outcome.ok) return this.noOptions.has(sym) ? { status: "no-options" } : { status: "refreshed" };
     if (outcome.cancelled) return { status: "unavailable", message: "Refresh cancelled." };
@@ -311,9 +339,10 @@ export class Bridge {
       const gate = { readyAt: () => Math.max(this.pacer.readyAt(), this.intradayGate.readyAt(key)) };
       const outcome = await this.enqueue(this.task(URGENT, key, `${req.symbol} ${req.interval} bars`, async (ctx) => {
         this.intradayGate.begin(key);
-        bars += await pushIntradayBars(ctx, req.symbol, req.interval, c);
-        this.pushed();
-      }, { gate, symbol: req.symbol }));
+        const n = await pushIntradayBars(ctx, req.symbol, req.interval, c);
+        bars += n;
+        this.pushed(n > 0 ? listingOf(req.symbol).stockData : undefined);
+      }, { gate, symbol: req.symbol, scope: listingOf(req.symbol).stockData }));
       if (!outcome.ok) return { status: outcome.cancelled ? "unavailable" : "failed", message: outcome.cancelled ? "Cancelled." : outcome.error };
     }
     return { status: "fetched", bars };
@@ -361,7 +390,7 @@ export class Bridge {
       await this.d.ingest.heartbeat({
         client: this.d.clientName, ibkr_connected: c.tws === "connected", account_type: c.accountType,
         farms: c.tws === "connected" ? { market_data: f.marketData.state, historical: f.historical.state, sec_def: f.secDef.state } : null,
-        options_subscription: this.optionsFeed.mode,
+        options_subscription: this.optionsFeeds.US.mode,
       });
     } catch { /* engine not up yet: next beat */ }
   }
@@ -397,7 +426,8 @@ export class Bridge {
     }
     // Account data (read-only) is not market data: it flows even while market data is paused.
     this.positionsFeed.update(this.session, wants.positions);
-    const symbols = wants.symbols;
+    // Symbols of an exchange the account has no market data for are left out (they would hold a line for nothing).
+    const symbols = wants.symbols.filter((s) => !this.permissions.isDenied(listingOf(s).stockData?.id));
     if (this.supervisor.state().paused || this.scheduler.has(LIVE_KEY) || !symbols.length) return;
     void this.enqueue(this.task("live", LIVE_KEY, `live quotes (${symbols.length} symbols)`, async (ctx) => { if (await pushLiveQuotes(ctx, symbols)) this.pushed(); }));
   }
@@ -410,26 +440,22 @@ export class Bridge {
       lastStatsPush: (s) => this.lastStatsPush.get(s),
       attemptedWithin: (k, ms) => this.d.ledger.attemptedWithin(k, ms),
     });
-    // Option quotes the account cannot get now (no OPRA subscription, outside market hours) are not asked for.
-    const optionQuotes = this.optionsFeed.canQuote(new Date(now));
-    if (plan.eod && optionQuotes) {
-      const day = plan.eod.sessionDate;
-      for (const s of plan.eod.symbols) this.enqueue(this.chainTask("eod-chains", `eod:${day}:${s}`, s, FULL_CHAIN, day));
+    // Option quotes the account cannot get now in a market (no subscription, outside market hours) are not asked for.
+    const quotable = (symbols: string[]) => symbols.filter((sym) => this.optionsFeedOf(sym).canQuote(new Date(now)));
+    for (const eod of plan.eod) {
+      for (const s of quotable(eod.symbols)) this.enqueue(this.chainTask("eod-chains", `eod:${eod.sessionDate}:${s}`, s, FULL_CHAIN, eod.sessionDate));
     }
-    const queueStats = plan.stats.length > 0 && this.idle("underlying-stats");
+    // Markets take turns within a kind (FIFO), so one market's round never waits for the whole of another's.
+    const stats = interleave(plan.stats.map((p) => this.statsBatches(w, p, now)));
+    const queueStats = stats.length > 0 && this.idle("underlying-stats");
     // An after-hours fill collects the stats first (fast, and they rank the chain universe by liquidity): its chains
-    // are asked for again once no stats work is left.
-    const universe = optionQuotes ? plan.universe.symbols : [];
-    this.chainFillDeferred = plan.universe.asOfSession !== null && universe.length > 0 && (queueStats || !this.idle("underlying-stats"));
-    if (!this.chainFillDeferred) {
-      for (const s of universe) this.fillTask(plan.universe.asOfSession, this.chainTask("chain-universe", `universe:${s}`, s, plan.universe.shape, null), 1);
-    }
-    if (queueStats) {
-      const fill = plan.statsAsOfSession;
-      const day = fill ?? w.eodChains?.sessionDate ?? nyDate(new Date(now));
-      const n = this.lines.size;
-      for (let i = 0; i < plan.stats.length; i += n) this.fillTask(fill, this.statsTask(plan.stats.slice(i, i + n), day), Math.min(n, plan.stats.length - i));
-    }
+    // are asked for again once no stats work is left. A market in its live session is not held back by another's fill.
+    const statsBusy = queueStats || !this.idle("underlying-stats");
+    const universe = plan.universe.map((u) => ({ ...u, symbols: quotable(u.symbols), deferred: u.asOfSession !== null && statsBusy }));
+    this.chainFillDeferred = universe.some((u) => u.deferred && u.symbols.length > 0);
+    const chains = interleave(universe.filter((u) => !u.deferred).map((u) => u.symbols.map((s) => ({ s, u }))));
+    for (const { s, u } of chains) this.fillTask(u.asOfSession, this.chainTask("chain-universe", `universe:${s}`, s, u.shape, null), 1);
+    if (queueStats) for (const b of stats) this.fillTask(b.fill, this.statsTask(b.symbols, b.day, b.scope), b.symbols.length);
     if (this.populate && this.populate.done >= this.populate.total && !this.chainFillDeferred) this.populate = null;
     if (plan.indexQuotes.length) {
       this.enqueue(this.task("index", "index-quotes", "VIX family quotes", async (ctx) => { await pushIndexQuotes(ctx, plan.indexQuotes); this.pushed(); }));
@@ -441,7 +467,8 @@ export class Bridge {
     if (this.idle("option-bars") && this.idle("iv-history")) this.round = { obars: { total: 0, done: 0, failed: 0 }, vol: { total: 0, done: 0, failed: 0 } };
     // Accepted catch-up plans are kept until all their contracts are done, so a reconnect resumes them
     // (the engine does not offer an accepted plan again for hours).
-    const accepted = plan.optionBars.filter((o) => !this.obarsPlans.has(ledgerKey.optionBars(o.symbol, o.sessions)) && !this.isDenied(group.optionBars(o.symbol).id));
+    const accepted = plan.optionBars.filter((o) => !this.obarsPlans.has(ledgerKey.optionBars(o.symbol, o.sessions))
+      && !this.isDenied(group.optionBars(o.symbol).id) && !this.isDenied(OPTION_HISTORY[marketOf(o.symbol)].id));
     for (const o of accepted) this.obarsPlans.set(ledgerKey.optionBars(o.symbol, o.sessions), o);
     for (const [k, o] of this.obarsPlans) if (!this.obarsInFlight.has(k)) void this.enqueue(this.optionBarsPlanTask(o.symbol, o.sessions, o.shape));
     // Only accepted offers count on the engine's side (a want the bridge skipped is offered again).
@@ -450,22 +477,52 @@ export class Bridge {
         .catch((e: unknown) => this.d.log.warn(`bridge ack-wants: ${(e as Error).message}`));
     }
     for (const { symbol: s, from } of plan.dividendHistory) {
-      this.enqueue(this.task("dividend-history", `divs:${s}`, `${s} dividend history`, async (ctx) => { await pushDividendHistory(ctx, s, from); this.pushed(); },
-        { gate: this.pacer, ledgerKey: ledgerKey.dividends(s), maxAttempts: 6, group: group.dividends(s) }));
+      const scope = listingOf(s).stockData;
+      this.enqueue(this.task("dividend-history", `divs:${s}`, `${s} dividend history`, async (ctx) => { this.pushed(await pushDividendHistory(ctx, s, from) > 0 ? scope : undefined); },
+        { gate: this.pacer, ledgerKey: ledgerKey.dividends(s), maxAttempts: 6, group: group.dividends(s), scope }));
     }
     for (const v of plan.volHistory) {
+      const scope = listingOf(v.symbol).stockData;
       this.enqueue(this.task("iv-history", `vol:${v.kind}:${v.symbol}`, `${v.symbol} ${v.kind === "iv30" ? "IV" : "HV"} history`,
-        async (ctx) => { if (await pushVolHistory(ctx, v.symbol, v.from, v.kind)) this.pushed(); },
-        { gate: this.pacer, ledgerKey: ledgerKey.vol(v.kind, v.symbol), maxAttempts: 6, group: group.volHistory(v.symbol) }));
+        async (ctx) => { if (await pushVolHistory(ctx, v.symbol, v.from, v.kind)) this.pushed(scope); },
+        { gate: this.pacer, ledgerKey: ledgerKey.vol(v.kind, v.symbol), maxAttempts: 6, group: group.volHistory(v.symbol), scope }));
     }
   }
 
   /**
+   * The stats batches of one market's plan: its symbols by stock-data group (one exchange's subscription each, so a
+   * refused batch says something about that exchange alone), in slices of the line budget, pushed for the plan's
+   * session.
+   */
+  private statsBatches(w: Wants, p: Plan["stats"][number], now: number): { symbols: string[]; day: string; fill: string | null; scope: DataGroup | undefined }[] {
+    // An engine that names no session: the fill's, else the closing chains' (version 1 wants).
+    const day = p.sessionDate ?? p.asOfSession ?? w.eodChains[0]?.sessionDate ?? nyDate(new Date(now));
+    const byScope = new Map<string, { scope: DataGroup | undefined; symbols: string[] }>();
+    for (const s of p.symbols) {
+      const l = listingOf(s);
+      const scope = l.stockData;
+      if (this.permissions.isDenied(scope?.id)) continue;
+      const key = `${l.market}:${scope?.id ?? ""}`;   // one market per batch: its stats are pushed for its session
+      const g = byScope.get(key) ?? { scope, symbols: [] };
+      g.symbols.push(s);
+      byScope.set(key, g);
+    }
+    const n = this.lines.size;
+    return [...byScope.values()].flatMap(({ scope, symbols }) =>
+      Array.from({ length: Math.ceil(symbols.length / n) }, (_, i) => ({ symbols: symbols.slice(i * n, (i + 1) * n), day, fill: p.asOfSession, scope })));
+  }
+
+  private optionsFeedOf(symbol: string): OptionsFeed {
+    return this.optionsFeeds[marketOf(symbol)];
+  }
+
+  /**
    * Queues a task; with `fillSession` it is part of that session's after-hours fill: `items` (symbols) count towards
-   * the populate progress, and the last stats batch re-polls the wants for a deferred chain fill.
+   * the populate progress. The last stats batch (of any market) re-polls the wants for a deferred chain fill.
    */
   private fillTask(fillSession: string | null, t: Task, items: number): void {
-    if (fillSession === null) { void this.enqueue(t); return; }
+    const statsDone = () => { if (t.kind === "underlying-stats" && this.chainFillDeferred && this.idle("underlying-stats")) void this.pollWants(); };
+    if (fillSession === null) { void this.enqueue(t).then(statsDone); return; }
     if (this.scheduler.has(t.key)) return;
     if (this.populate?.sessionDate !== fillSession) this.populate = { sessionDate: fillSession, done: 0, total: 0 };
     const p = this.populate;
@@ -473,7 +530,7 @@ export class Bridge {
     void this.enqueue(t).then(() => {
       p.done += items;
       if (this.populate === p && p.done >= p.total && !this.chainFillDeferred) this.populate = null;
-      if (t.kind === "underlying-stats" && this.chainFillDeferred && this.idle("underlying-stats")) void this.pollWants();
+      statsDone();
       this.emit();
     });
   }
@@ -488,9 +545,9 @@ export class Bridge {
     return this.scheduler.counts()[kind] === 0 && this.scheduler.current()?.kind !== kind;
   }
 
-  /** Queues a task (or joins the queued one with its key); a task of a denied group fails at once. */
+  /** Queues a task (or joins the queued one with its key); a task of a denied group or data group fails at once. */
   private enqueue(t: Task): Promise<Outcome> {
-    if (this.isDenied(t.group)) return Promise.resolve({ ok: false, cancelled: false, error: "no market-data permission" });
+    if (this.isDenied(t.group) || this.isDenied(t.scope)) return Promise.resolve({ ok: false, cancelled: false, error: "no market-data permission" });
     if (this.scheduler.has(t.key)) return this.scheduler.enqueue(t);
     const counter = t.gate === undefined ? null : t.kind === "option-bars" ? this.round.obars : t.kind === "iv-history" ? this.round.vol : null;
     if (counter) counter.total += 1;
@@ -515,30 +572,42 @@ export class Bridge {
   }
 
   private isDenied(group: string | undefined): boolean {
-    const d = group === undefined ? undefined : this.denied.get(group);
-    if (d && this.now() - d.at >= HIST_RETRY_MS) this.denied.delete(group!);
-    return d !== undefined && this.denied.has(group!);
+    return this.permissions.isDenied(group);
   }
 
   /** A permission error stops the whole group (all its queued tasks fail the same way). */
   private deny(group: string, label: string, e: unknown): void {
-    if (!this.denied.has(group)) this.d.log.warn(`bridge: no market-data permission for ${label}; skipping it (${(e as Error).message})`);
-    this.denied.set(group, { at: this.now(), label });
+    if (this.permissions.deny({ id: group, label })) this.d.log.warn(`bridge: no market-data permission for ${label}; skipping it (${(e as Error).message})`);
     this.scheduler.cancel({ group, queuedOnly: true });   // the failing task itself reports its error
   }
 
-  private pushed(): void {
+  /**
+   * A permission error on data of a data group nothing was ever served of (permissions.ts): the account has no
+   * subscription for that exchange, so all its queued work is dropped and none is queued for HIST_RETRY_MS. Other
+   * data groups (the other market) are not touched.
+   */
+  private denyScope(scope: DataGroup, e: unknown): void {
+    if (this.permissions.hasServed(scope.id)) return;
+    if (this.permissions.deny(scope)) this.d.log.warn(`bridge: no market-data permission for ${scope.label} (no ${scope.subscription} subscription?); skipping them for ${Math.round(HIST_RETRY_MS / 3600_000)} h (${(e as Error).message})`);
+    this.scheduler.cancel({ scope: scope.id, queuedOnly: true });
+  }
+
+  /** Data was pushed; `served`: of this data group (its first data is logged). */
+  private pushed(served?: DataGroup): void {
     this.lastPushAt = new Date(this.now()).toISOString();
+    if (served && this.permissions.serve(served.id)) this.d.log.info(`bridge: IBKR serves ${served.label} market data`);
   }
 
   // ---------------- task factories ----------------
 
-  private context(signal: AbortSignal, checkpoint: () => Promise<void>): JobContext {
+  /** `symbol`: the task's symbol, whose market's options feed applies (none: the task quotes no options). */
+  private context(signal: AbortSignal, checkpoint: () => Promise<void>, symbol?: string): JobContext {
     const session = this.session;
     if (!session) throw new Error("not connected to IB Gateway / TWS");
     return {
       session, ingest: this.d.ingest, pacer: this.pacer, lines: this.lines, now: () => new Date(this.now()), signal, checkpoint, batchTimeoutMs: this.d.batchTimeoutMs,
-      contracts: this.contracts, contractServer: this.contractServer, optionsFeed: this.optionsFeed,
+      contracts: this.contracts, contractServer: this.contractServer, optionsFeed: symbol === undefined ? undefined : this.optionsFeedOf(symbol),
+      note: (m) => this.d.log.info(`bridge: ${m}`),
     };
   }
 
@@ -548,14 +617,14 @@ export class Bridge {
    * quotes the account cannot get now are skipped. An on-demand refresh reports both instead (refreshSymbol).
    */
   private task(kind: JobKind, key: string, label: string, work: (ctx: JobContext) => Promise<void>,
-    o: { gate?: Gate; ledgerKey?: string; maxAttempts?: number; group?: Group; symbol?: string } = {}): Task {
+    o: { gate?: Gate; ledgerKey?: string; maxAttempts?: number; group?: Group; symbol?: string; scope?: DataGroup } = {}): Task {
     return {
-      key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id,
+      key, kind, label, gate: o.gate, maxAttempts: o.maxAttempts, group: o.group?.id, scope: o.scope?.id,
       // Historical requests (the pacer-gated tasks) give way to an on-demand refresh at once: aborted, re-queued.
       preemptible: o.gate !== undefined && kind !== URGENT,
       run: async (signal, checkpoint) => {
         try {
-          await work(this.context(signal, checkpoint));
+          await work(this.context(signal, checkpoint, o.symbol));
           if (o.ledgerKey) this.d.ledger.mark(o.ledgerKey);
         } catch (e) {
           if (signal.aborted || e instanceof RetryLater) throw e;
@@ -565,6 +634,7 @@ export class Bridge {
           if (e instanceof OptionQuotesClosed) return;
           if (isCompetingSession(e)) this.supervisor.pause(COMPETING_MESSAGE, COMPETING_PAUSE_MS);
           if (o.group && isPermissionError(e)) this.deny(o.group.id, o.group.label, e);
+          if (o.scope && isPermissionError(e)) this.denyScope(o.scope, e);
           this.failures.record((e as Error).message, o.symbol);
           this.lastError = `${label}: ${(e as Error).message}`;
           this.d.log.warn(`bridge ${this.lastError}`);
@@ -589,25 +659,32 @@ export class Bridge {
         this.chainGaps = gaps;
         this.d.log.warn(`bridge: ${chainGapsText(gaps)}`);
       } else if (this.chainGaps?.symbol === symbol) this.chainGaps = null;
-      this.feed.optionsDelayed = r.optionsDelayed;
-      this.feed.stocksDelayed = r.underlyingDelayed;
+      const market = marketOf(symbol);
+      this.feed[market].optionsDelayed = r.optionsDelayed;
+      this.feed[market].stocksDelayed = r.underlyingDelayed;
       this.lastChainPush.set(symbol, this.now());
+      if (!this.chainMarkets.has(market)) {
+        this.chainMarkets.add(market);
+        this.d.log.info(`bridge: first ${OPTION_DATA[market].label} chain pushed: ${symbol}, ${r.contracts} contracts, ${Math.round(r.coverage * 100)}% quoted, options ${r.optionsDelayed ? "delayed" : "real-time"}, underlying ${r.reference ? "from the engine" : r.underlyingDelayed ? "delayed" : "real-time"}`);
+      }
       this.pushed();
     }, { ledgerKey: final ? ledgerKey.eod(sessionDate, symbol) : undefined, symbol });
   }
 
-  private statsTask(symbols: string[], sessionDate: string): Task {
+  /** One stats batch: symbols of one market and stock-data group (`scope`), pushed for their market's session `sessionDate`. */
+  private statsTask(symbols: string[], sessionDate: string, scope: DataGroup | undefined): Task {
     return this.task("underlying-stats", `stats:${symbols[0]}:${symbols.length}`, `stats ${symbols[0]}…${symbols[symbols.length - 1]}`, async (ctx) => {
       const done = await pushUnderlyingStats(ctx, symbols, sessionDate);
       const t = this.now();
       // Symbols without data are marked too, so they wait max_age like the rest instead of re-queuing.
       for (const s of symbols) this.lastStatsPush.set(s, t);
       if (done.symbols.length) {
-        this.feed.stocksDelayed = done.delayed;
-        this.feed.optionTicksMissing = !done.optionTicks;
-        this.pushed();
+        const feed = this.feed[marketOf(symbols[0])];
+        feed.stocksDelayed = done.delayed;
+        feed.optionTicksMissing = !done.optionTicks;
+        this.pushed(scope);
       }
-    });
+    }, { scope });
   }
 
   /**
@@ -642,7 +719,7 @@ export class Bridge {
   private optionBarsTask(symbol: string, c: TwsContract, sessions: string[]): Task {
     const label = `${symbol} ${c.lastTradeDateOrContractMonth} ${c.strike}${c.right} bars`;
     return this.task("option-bars", `obars:${symbol}:${c.conId ?? `${c.lastTradeDateOrContractMonth}${c.right}${c.strike}`}`, label,
-      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(); },
-      { gate: this.pacer, maxAttempts: 6, group: group.optionBars(symbol), ledgerKey: ledgerKey.optionBar(c, sessions) });
+      async (ctx) => { if (await pushOptionBars(ctx, symbol, c, sessions)) this.pushed(OPTION_HISTORY[marketOf(symbol)]); },
+      { gate: this.pacer, maxAttempts: 6, group: group.optionBars(symbol), ledgerKey: ledgerKey.optionBar(c, sessions), scope: OPTION_HISTORY[marketOf(symbol)] });
   }
 }

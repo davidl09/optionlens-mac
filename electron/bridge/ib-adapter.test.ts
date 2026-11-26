@@ -38,7 +38,7 @@ vi.mock("@stoqey/ib", async (importOriginal) => {
 });
 
 import { EventName, IBApi } from "@stoqey/ib";
-import { detailsExpiry, ibConnector, toIb } from "./ib-adapter";
+import { detailsExpiry, positionOf, ibConnector, toIb } from "./ib-adapter";
 import { TwsRequestError, TwsTimeoutError, type TwsSession } from "./tws";
 
 type Fake = IBApi & { calls: string[] };
@@ -134,6 +134,17 @@ describe("ibConnector", () => {
     expect(detailsExpiry({ lastTradeDateOrContractMonth: "", lastTradeDate: "20261217" })).toBe("20261217");
     expect(detailsExpiry({ lastTradeDateOrContractMonth: "2026" })).toBeUndefined();
     expect(toIb({ symbol: "SPX", secType: "IND", exchange: "CBOE", currency: "USD" })).toMatchObject({ symbol: "SPX", secType: "IND", exchange: "CBOE" });
+  });
+
+  it("sends a Canadian listing with its primary exchange and currency, and reads both from positions", () => {
+    expect(toIb({ symbol: "RY", secType: "STK", exchange: "SMART", currency: "CAD", primaryExchange: "TSE" }))
+      .toMatchObject({ symbol: "RY", secType: "STK", exchange: "SMART", currency: "CAD", primaryExch: "TSE" });
+    expect(toIb({ symbol: "RY", secType: "OPT", exchange: "CDE", currency: "CAD", lastTradeDateOrContractMonth: "20261218", tradingClass: "RY", multiplier: "100" }))
+      .toMatchObject({ symbol: "RY", secType: "OPT", exchange: "CDE", currency: "CAD", lastTradeDateOrContractMonth: "20261218", tradingClass: "RY", multiplier: 100 });
+    expect(toIb({ symbol: "RY", secType: "OPT", exchange: "CDE", currency: "CAD", conId: 700001 })).toEqual({ conId: 700001, exchange: "CDE" });
+    const stock = positionOf("U1", { symbol: "RY", secType: "STK" as never, currency: "CAD", conId: 4458964, exchange: "TSE" }, 100, 100);
+    expect(stock.contract).toMatchObject({ symbol: "RY", currency: "CAD", exchange: "TSE" });
+    expect(positionOf("U1", { symbol: "AAPL", secType: "STK" as never, currency: "USD", conId: 265598 }, 1, 1).contract).not.toHaveProperty("exchange");
   });
 
   it("forwards connection-level messages, which @stoqey/ib emits as `info` (farm status 21xx), including those of the handshake", async () => {

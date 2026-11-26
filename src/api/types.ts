@@ -582,7 +582,7 @@ export interface PortfolioPosition {
   /** Position greeks: delta in shares, delta_dollars, gamma (shares per $1), theta ($/day), vega ($/vol pt). */
   delta: number | null; delta_dollars: number | null; gamma: number | null; theta: number | null; vega: number | null;
   beta: number | null; bwd_delta_spy: number | null;
-  /** A US-listed stock / option: its symbol page, live quotes and the calculator apply. */
+  /** A stock / option of a listing OptionLens follows (US, or Canadian in CAD): its symbol page, live quotes and the calculator apply. */
   linkable: boolean;
 }
 /** Sums per currency; `unknown` counts the rows a value was unknown for (left out of the sum). */

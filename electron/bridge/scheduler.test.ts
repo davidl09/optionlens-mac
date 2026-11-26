@@ -211,4 +211,23 @@ describe("Scheduler", () => {
     expect(runs).toBe(2);
     expect(s.parked()).toBe(0);
   });
+
+  it("drops the queued tasks of one data scope and keeps every kind's fair share for the rest", async () => {
+    // Canadian work the account has no market data for is cancelled as a scope; US work of the same kinds runs on,
+    // each kind still getting its turn.
+    const s = new Scheduler();
+    s.pause();
+    const order: string[] = [];
+    const mk = (kind: JobKind, key: string, scope?: string) => task(kind, key, async () => { order.push(key); await new Promise((r) => setTimeout(r, 5)); }, { scope });
+    const us = [s.enqueue(mk("iv-history", "iv:AAPL")), s.enqueue(mk("underlying-stats", "st:US")), s.enqueue(mk("iv-history", "iv:MSFT")), s.enqueue(mk("dividend-history", "div:KO"))];
+    const ca = [s.enqueue(mk("iv-history", "iv:RY.TO", "stocks:TSX")), s.enqueue(mk("underlying-stats", "st:TSX", "stocks:TSX")), s.enqueue(mk("dividend-history", "div:RY.TO", "stocks:TSX"))];
+    const venture = s.enqueue(mk("underlying-stats", "st:TSXV", "stocks:TSXV"));
+    s.cancel({ scope: "stocks:TSX", queuedOnly: true });
+    expect(s.counts()).toMatchObject({ "iv-history": 2, "underlying-stats": 2, "dividend-history": 1 });
+    s.resume();
+    await vi.runAllTimersAsync();
+    for (const o of await Promise.all(ca)) expect(o).toMatchObject({ ok: false, cancelled: true });
+    for (const o of await Promise.all([...us, venture])) expect(o).toEqual({ ok: true });
+    expect(order).toEqual(["st:US", "div:KO", "iv:AAPL", "st:TSXV", "iv:MSFT"]);
+  });
 });

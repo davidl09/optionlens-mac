@@ -12,8 +12,9 @@ export interface FakeMarket {
   historical: (c: TwsContract, r: HistoricalRequest) => HistBar[] | Error;
 }
 
+/** "AAPL:STK", "AAPL:20261127:100:C"; a contract in another currency carries it in front ("CAD/RY:STK"). */
 export const contractId = (c: TwsContract) =>
-  c.secType === "OPT" ? `${c.symbol}:${c.lastTradeDateOrContractMonth}:${c.strike}:${c.right}` : `${c.symbol}:${c.secType}`;
+  `${c.currency === "USD" ? "" : `${c.currency}/`}${c.secType === "OPT" ? `${c.symbol}:${c.lastTradeDateOrContractMonth}:${c.strike}:${c.right}` : `${c.symbol}:${c.secType}`}`;
 
 /** Real TWS rejects a request whose expiry is not YYYYMMDD / YYYYMM (error 321); so does the fake. */
 export function twsValidationError(c: TwsContract): TwsRequestError | null {
