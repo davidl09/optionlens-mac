@@ -142,9 +142,15 @@ test("chain → calculator flow", async ({ page }) => {
   await expect(page.locator("button.quote-btn.ask").nth(12)).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("button.quote-btn.bid").nth(16)).toHaveClass(/selected/);
   await expect(page.locator("button.quote-btn.selected")).toHaveCount(2);
+  // clicking a marked quote takes that contract out of the calculator; clicking again puts it back
+  await page.locator("button.quote-btn.ask").nth(12).click();
+  await expect(page.getByText(/Removed .* · 1 leg in calculator/)).toBeVisible();
+  await expect(page.locator("button.quote-btn.selected")).toHaveCount(1);
+  await page.locator("button.quote-btn.ask").nth(12).click();
+  await expect(page.getByText("2 legs in calculator")).toBeVisible();
   await page.getByRole("link", { name: "Open calculator →" }).click();
   await expect(page.locator(".legs-table tbody tr")).toHaveCount(2);
-  await page.locator(".legs-table tbody tr").first().getByRole("button", { name: "Remove leg" }).click();
+  await page.locator(".legs-table tbody tr").last().getByRole("button", { name: "Remove leg" }).click();   // the re-added ask
   await page.getByRole("link", { name: "Chain", exact: true }).click();      // a removed leg loses its mark
   await expect(page.locator("button.quote-btn.selected")).toHaveCount(1);
   await expect(page.locator("button.quote-btn.bid").nth(16)).toHaveClass(/selected/);

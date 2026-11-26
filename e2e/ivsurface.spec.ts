@@ -96,6 +96,14 @@ test("IV surface: a click adds the contract to the calculator and outlines its c
   const after = await pixel(chart(page), c.edge);
   expect(after.reduce((a, b) => a + b, 0)).toBeGreaterThan(before.reduce((a, b) => a + b, 0));   // the light outline (dark theme)
   await page.mouse.move(c.cx, c.cy - 200);
+  await page.mouse.move(c.cx, c.cy);
+  await expect(tooltip(page)).toContainText("In the calculator — click to remove it");
+  await page.mouse.click(c.cx, c.cy);                                    // an outlined cell: the contract comes out
+  await expect(page.getByRole("status").filter({ hasText: "Removed" })).toContainText(`Removed +1 P ${strike} 2026-12-18 · 0 legs in calculator`);
+  await expect.poll(async () => (await pixel(chart(page), c.edge)).join(",")).toBe(before.join(","));
+  await page.mouse.click(c.cx, c.cy);                                    // and back in
+  await expect(toast).toContainText("1 leg in calculator");
+  await page.mouse.move(c.cx, c.cy - 200);
 
   const unreliable = await cellAt(chart(page), 0, 0, DELTA_ROWS);
   await page.mouse.click(unreliable.cx, unreliable.cy);                 // greyed: not added

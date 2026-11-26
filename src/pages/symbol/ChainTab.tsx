@@ -12,7 +12,7 @@ import { nearest } from "../../lib/indicators";
 import { Flash, isFlowing, useLive, useLiveOption, useLiveQuote, useLiveStatus } from "../../live";
 import { withLiveOption } from "../../live/merge";
 import { contractKey, heldQty, useLegs } from "../../state/legs";
-import { ExpiryPills, LegAddedToast, useQueryValue, useSym } from "./shared";
+import { ExpiryPills, LegToast, useQueryValue, useSym, type LegChange } from "./shared";
 import { moneyStyleOf } from "../../lib/markets";
 
 type Side = "both" | "calls" | "puts";
@@ -126,11 +126,12 @@ function chainCell(chain: Chain, row: OptionRow | undefined, c: Col, live: boole
     if ((c.key === "bid" || c.key === "ask") && !isMissing(v) && (v as number) > 0) {
       const qty = c.key === "bid" ? -1 : 1;
       const selected = qty * held > 0;
-      const inCalc = selected ? ` (in calculator: ${held > 0 ? "+" : ""}${held})` : "";
       return (
         <td key={c.key} className={`${base} quote-cell`}>
           <button className={`quote-btn ${c.key}${selected ? " selected" : ""}`} aria-pressed={selected}
-            title={`${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money", moneyStyleOf(chain.symbol))} → calculator${inCalc}`}
+            title={selected
+              ? `In calculator: ${held > 0 ? "+" : ""}${held} — click to remove ${row.right === "C" ? "call" : "put"} ${row.strike} from the calculator`
+              : `${qty > 0 ? "Buy" : "Sell"} 1 ${row.right === "C" ? "call" : "put"} ${row.strike} @ ${fmt(v, "money", moneyStyleOf(chain.symbol))} → calculator`}
             onClick={() => onLeg(row, qty, v as number)}>{fl(fmt(v, "num2"))}</button>
         </td>
       );
@@ -187,18 +188,24 @@ export default function ChainTab() {
   const [side, setSide] = useState<Side>("both");
   const [range, setRange] = useState<RangeOpt>("10");
   const [greeks, setGreeks] = useState(false);
-  const { legs, addLeg } = useLegs();
+  const { legs, addLeg, removeContract } = useLegs();
   const held = useMemo(() => heldQty(legs), [legs]);
-  const [lastAdded, setLastAdded] = useState<Leg | null>(null);
+  const [lastChange, setLastChange] = useState<LegChange | null>(null);
   const st = useApi(() => api.chain(sym, expiry), [sym, expiry]);
   // For agents (current view): the expiry shown and what part of the chain is on screen.
   useViewDetails({ expiry: st.data?.expiry ?? expiry ?? null, side, strikes_around_atm: range, greeks });
 
   const onLeg = (row: OptionRow, qty: number, price: number) => {
+    const inCalc = held.get(contractKey(row.expiry, row.strike, row.right)) ?? 0;
+    if (qty * inCalc > 0) {   // the marked side of a contract in the calculator: clicking it takes the contract out
+      removeContract(row.expiry, row.strike, row.right);
+      setLastChange({ leg: { kind: "option", right: row.right, strike: row.strike, expiry: row.expiry, qty: inCalc }, removed: true });
+      return;
+    }
     // the clicked bid / ask is the user's price (pinned in the calculator); the IV is not chosen: it follows live data
     const leg: Leg = { kind: "option", right: row.right, strike: row.strike, expiry: row.expiry, qty, price, iv: null };
     addLeg(leg);
-    setLastAdded(leg);
+    setLastChange({ leg });
   };
 
   return (
@@ -228,7 +235,7 @@ export default function ChainTab() {
               <span className="muted small legend-inline"><span className="swatch itm" /> in the money · <span className="swatch hot" /> volume &gt; OI · click bid to sell / ask to buy</span>
             </div>
           </Card>
-          {lastAdded && <LegAddedToast sym={sym} leg={lastAdded} count={legs.length} onDismiss={() => setLastAdded(null)} />}
+          {lastChange && <LegToast sym={sym} change={lastChange} count={legs.length} onDismiss={() => setLastChange(null)} />}
           <Card className="flush">
             <ChainTable chain={chain} side={side} range={range} greeks={greeks} onLeg={onLeg} held={held} />
           </Card>

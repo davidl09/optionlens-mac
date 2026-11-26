@@ -59,7 +59,8 @@ export function surfaceCells(s: IvSurface, held: (c: SurfaceCell, expiry: string
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** Tooltip HTML of cell (x, y): expiry (DTE), row, the nearest contract, IV, value, bid / ask, OI, why greyed. */
-export function tooltipHtml(s: IvSurface, x: number, y: number, expiryLabel: string): string {
+/** `inCalc`: the cell's contract is in the calculator (a click then removes it). */
+export function tooltipHtml(s: IvSurface, x: number, y: number, expiryLabel: string, inCalc = false): string {
   const c = s.cells[y][x];
   const e = s.expiries[x];
   const lines = [`<b>${esc(expiryLabel)}</b> (${e.dte} DTE) · ${esc(rowLabel(s.rows_by, s.rows[y]))}`];
@@ -69,6 +70,6 @@ export function tooltipHtml(s: IvSurface, x: number, y: number, expiryLabel: str
   if (c.osi !== null) lines.push(`Bid / ask ${fmt(c.bid, "num2")} / ${fmt(c.ask, "num2")} · OI ${fmt(c.oi, "int")}`);
   if (!c.reliable && c.reason) lines.push(`<span style="color:var(--warn)">Unreliable: ${esc(c.reason)}</span>`);
   else if (c.value === null && s.mode === "chg_1d") lines.push(`<span style="opacity:.8">No prior-day IV for this cell</span>`);
-  if (isClickable(c)) lines.push(`<span style="opacity:.7">Click to add to the calculator</span>`);
+  if (isClickable(c)) lines.push(`<span style="opacity:.7">${inCalc ? "In the calculator — click to remove it" : "Click to add to the calculator"}</span>`);
   return lines.join("<br/>");
 }

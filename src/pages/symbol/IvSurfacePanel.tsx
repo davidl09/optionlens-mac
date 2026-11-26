@@ -1,6 +1,6 @@
 // Skew page: the IV surface (expiry × delta / moneyness / strike) as a heatmap. A click on a reliable cell adds its
 // contract to the calculator; cells whose contract is in the calculator are outlined.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { IvSurface, Leg, SurfaceMode, SurfaceRows } from "../../api/types";
 import { useApi } from "../../api/useApi";
@@ -11,29 +11,43 @@ import { AsOf, Async, Card, InfoBox, Segmented, SourceBadge } from "../../compon
 import { cellText, isClickable, MODE_OPTIONS, ROW_OPTIONS, rowLabel, scaleKind, surfaceCells, tooltipHtml } from "../../lib/ivSurface";
 import { contractKey, heldQty, useLegs } from "../../state/legs";
 import { useViewDetails } from "../../state/view";
-import { LegAddedToast, shortDate } from "./shared";
+import { LegToast, shortDate, type LegChange } from "./shared";
 
 const rowHeight = (n: number) => (n <= 20 ? 24 : 18);
 
 function SurfaceBody({ s, sym }: { s: IvSurface; sym: string }) {
-  const { legs, addLeg } = useLegs();
+  const { legs, addLeg, removeContract } = useLegs();
   const held = useMemo(() => heldQty(legs), [legs]);
-  const [lastAdded, setLastAdded] = useState<Leg | null>(null);
+  const [lastChange, setLastChange] = useState<LegChange | null>(null);
   const xLabels = useMemo(() => s.expiries.map((e) => shortDate(e.expiry)), [s.expiries]);
   const yLabels = useMemo(() => s.rows.map((v) => rowLabel(s.rows_by, v)), [s.rows, s.rows_by]);
   const cells = useMemo(() => surfaceCells(s, (c, expiry) => c.strike !== null && c.right !== null && held.has(contractKey(expiry, c.strike, c.right))), [s, held]);
   const earningsCol = s.expiries.findIndex((e) => e.earnings_expiry);
   const xMarks = useMemo(() => (earningsCol >= 0 ? [{ index: earningsCol, badge: "E" }] : []), [earningsCol]);
-  const tooltip = useCallback((c: HeatCell) => tooltipHtml(s, c.x, c.y, xLabels[c.x]), [s, xLabels]);
+  // read through a ref: a new tooltip function would re-set the chart while the pointer is over it
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  const tooltip = useCallback((hc: HeatCell) => {
+    const c = s.cells[hc.y][hc.x];
+    const inCalc = c.strike !== null && c.right !== null && heldRef.current.has(contractKey(s.expiries[hc.x].expiry, c.strike, c.right));
+    return tooltipHtml(s, hc.x, hc.y, xLabels[hc.x], inCalc);
+  }, [s, xLabels]);
   const text = useCallback((v: number) => cellText(s.mode, v), [s.mode]);
   const onCell = useCallback((hc: HeatCell) => {
     const c = s.cells[hc.y][hc.x];
     if (!isClickable(c)) return;
+    const expiry = s.expiries[hc.x].expiry;
+    const inCalc = heldRef.current.get(contractKey(expiry, c.strike!, c.right!));
+    if (inCalc) {   // an outlined cell: clicking it takes the contract out of the calculator
+      removeContract(expiry, c.strike!, c.right!);
+      setLastChange({ leg: { kind: "option", right: c.right!, strike: c.strike!, expiry, qty: inCalc }, removed: true });
+      return;
+    }
     // no price: the leg follows the live mid (and IV) in the calculator
-    const leg: Leg = { kind: "option", right: c.right!, strike: c.strike!, expiry: s.expiries[hc.x].expiry, qty: 1, price: null, iv: null };
+    const leg: Leg = { kind: "option", right: c.right!, strike: c.strike!, expiry, qty: 1, price: null, iv: null };
     addLeg(leg);
-    setLastAdded(leg);
-  }, [s, addLeg]);
+    setLastChange({ leg });
+  }, [s, addLeg, removeContract]);
   const t = s.thresholds;
   return (
     <>
@@ -52,7 +66,7 @@ function SurfaceBody({ s, sym }: { s: IvSurface; sym: string }) {
               </span>
             )}
           </>} />}
-      {lastAdded && <LegAddedToast sym={sym} leg={lastAdded} count={legs.length} onDismiss={() => setLastAdded(null)} />}
+      {lastChange && <LegToast sym={sym} change={lastChange} count={legs.length} onDismiss={() => setLastChange(null)} />}
     </>
   );
 }

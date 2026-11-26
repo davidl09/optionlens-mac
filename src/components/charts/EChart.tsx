@@ -79,7 +79,9 @@ export function EChart({ option, height = 260, onClick, ariaLabel, keepZoom = fa
     const c = chart.current;
     if (!c) return;
     const zoom = keepZoom ? (c.getOption() as { dataZoom?: { start?: number; end?: number }[] } | undefined)?.dataZoom?.[0] : undefined;
-    c.setOption(option, { notMerge: true, lazyUpdate: true });
+    // rendered at once: with lazyUpdate the replaced series' old elements stay under the pointer until the next frame,
+    // and a mousemove there reads data that no longer exists (ECharts: "getRawIndex" of undefined)
+    c.setOption(option, { notMerge: true });
     if (zoom && zoom.start !== undefined && zoom.end !== undefined && (zoom.start > 0 || zoom.end < 100)) {
       c.dispatchAction({ type: "dataZoom", start: zoom.start, end: zoom.end });
     }

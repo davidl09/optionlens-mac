@@ -61,6 +61,7 @@ describe("IV surface helpers", () => {
     expect(t).toContain("Unreliable: spread 60% of mid (&gt; 40%)");
     expect(t).not.toContain("Click to add");
     expect(tooltipHtml(s, 0, 0, "Dec 18")).toContain("Click to add to the calculator");
+    expect(tooltipHtml(s, 0, 0, "Dec 18", true)).toContain("In the calculator — click to remove it");
     expect(tooltipHtml(s, 0, 0, "Dec 18")).toContain("vs ATM <b>+30.0 vol pts</b>");
   });
 });
