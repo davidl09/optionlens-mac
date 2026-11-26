@@ -1,9 +1,11 @@
 """Shared async HTTP client with per-host rate limiting and retries.
 
-Each rate-limited host has a gate: token bucket (NASDAQ_RPS / CBOE_RPS), an optional concurrency cap
-(CBOE_CONCURRENCY) and a host-wide cooldown that a 429 triggers (Retry-After, else escalating 30 s ->
-240 s) so every pending request to that host pauses instead of hammering it.
-Retries with exponential backoff on 5xx/timeouts/connection errors (3x) and on 429 (6x). Raises FetchError.
+Each rate-limited host has a gate: token bucket (NASDAQ_RPS / CBOE_RPS; POLITE_RPS for the unofficial earnings
+sources of Canadian listings, TMX Money and Yahoo Finance), an optional concurrency cap (CBOE_CONCURRENCY) and a
+host-wide cooldown that a 429 triggers (Retry-After, else escalating 30 s -> 240 s) so every pending request to that
+host pauses instead of hammering it.
+Retries with exponential backoff on 5xx/timeouts/connection errors (3x) and on 429 (6x, or `max_throttles`). Raises
+FetchError. Requests may set their own headers: the TMX / Yahoo sources identify as OptionLens (HONEST_USER_AGENT).
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
+from importlib import metadata
 
 from .config import get_settings
 
@@ -24,6 +27,17 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/130.0.0.0 Safari/537.36"
 )
+
+
+def _version() -> str:
+    try:
+        return metadata.version("optionlens")
+    except metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+# How OptionLens names itself to sources that are asked politely (sources/tmx.py, sources/yahoo.py): never a browser.
+HONEST_USER_AGENT = f"OptionLens/{_version()} (+https://github.com/davidl09/optionlens-mac)"
 RETRIES = 3
 RETRIES_429 = 6
 BACKOFF_S = 0.5
@@ -33,7 +47,8 @@ COOLDOWN_MAX_S = 240.0
 # traffic to that host family (fail fast) for a long pause, doubling while blocks persist.
 BLOCK_PAUSE_S = 3600.0
 BLOCK_PAUSE_MAX_S = 6 * 3600.0
-RATE_LIMITED_HOSTS = ("nasdaq.com", "cboe.com")
+RATE_LIMITED_HOSTS = ("nasdaq.com", "cboe.com", "tmx.com", "yahoo.com")
+POLITE_RPS = 1.0   # TMX Money / Yahoo Finance: unofficial endpoints, asked at most once a second
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
@@ -189,7 +204,8 @@ class _Net:
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
         self.gates = {"nasdaq.com": _Gate(s.nasdaq_rps),
-                      "cboe.com": _Gate(s.cboe_rps, s.cboe_concurrency)}
+                      "cboe.com": _Gate(s.cboe_rps, s.cboe_concurrency),
+                      "tmx.com": _Gate(POLITE_RPS, 1), "yahoo.com": _Gate(POLITE_RPS, 1)}
 
     def gate(self, host: str) -> _Gate | None:
         return next((g for suffix, g in self.gates.items() if host.endswith(suffix)), None)
@@ -234,21 +250,24 @@ def _retryable(status: int) -> bool:
     return status == 429 or status >= 500
 
 
-async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
-    """GET with rate limiting + retries; returns a 2xx response or raises FetchError."""
+async def request(method: str, url: str, params: dict[str, Any] | None = None, *, json_body: Any = None,
+                  headers: dict[str, str] | None = None, max_throttles: int = RETRIES_429) -> httpx.Response:
+    """A request with rate limiting + retries; returns a 2xx response or raises FetchError. `headers` add to (or
+    replace) the client's defaults; `max_throttles`: how many 429 answers are waited out before giving up (0 = fail
+    on the first: for a source that throttles an honest client, the fallback is better than waiting)."""
     net = _net()
     host = httpx.URL(url).host
     gate = net.gate(host)
     last: FetchError | None = None
     attempt = throttles = 0
-    while attempt <= RETRIES and throttles <= RETRIES_429:
+    while attempt <= RETRIES and throttles <= max_throttles:
         if blocked_until(host):
             raise FetchError(url, 403, "host suspended after a CDN block", blocked=True)
         if attempt:
             await asyncio.sleep(BACKOFF_S * 2 ** (attempt - 1))
         try:
             async with net.slot(host):
-                r = await net.client.get(url, params=params)
+                r = await net.client.request(method, url, params=params, json=json_body, headers=headers)
                 await r.aread()
         except (httpx.TimeoutException, httpx.TransportError) as e:
             last = FetchError(url, None, type(e).__name__)
@@ -263,12 +282,12 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
         if _is_block_page(r):
             _register_block(host)
             raise FetchError(str(r.url), 403, "CDN block page", blocked=True)
-        last = FetchError(str(r.url), r.status_code)
+        last = FetchError(str(r.url), r.status_code, _reason(r))
         if r.status_code == 429:
             throttles += 1
             if gate:
                 gate.throttled(r.headers.get("Retry-After"))  # next slot() waits out the cooldown
-            else:
+            elif throttles <= max_throttles:
                 await asyncio.sleep(BACKOFF_S * 2 ** throttles)
             continue
         if not _retryable(r.status_code):
@@ -278,13 +297,33 @@ async def get(url: str, params: dict[str, Any] | None = None) -> httpx.Response:
     raise last
 
 
-async def get_json(url: str, params: dict[str, Any] | None = None) -> Any:
+def _reason(r: httpx.Response) -> str:
+    """A short reason from a failed response's body when it is plain text (Yahoo: "Too Many Requests"), else ''."""
+    ctype = r.headers.get("content-type", "").lower()
+    text = r.text.strip() if "text/plain" in ctype else ""
+    return text[:80] if text and "\n" not in text else ""
+
+
+async def get(url: str, params: dict[str, Any] | None = None, **opts: Any) -> httpx.Response:
+    """GET (request(); `opts`: headers, max_throttles)."""
+    return await request("GET", url, params, **opts)
+
+
+async def get_json(url: str, params: dict[str, Any] | None = None, **opts: Any) -> Any:
     """GET and decode JSON (FetchError on bad JSON)."""
-    r = await get(url, params)
+    return _decoded(await get(url, params, **opts))
+
+
+async def post_json(url: str, body: Any, **opts: Any) -> Any:
+    """POST a JSON body and decode the JSON answer (FetchError on bad JSON; `opts`: headers, max_throttles)."""
+    return _decoded(await request("POST", url, json_body=body, **opts))
+
+
+def _decoded(r: httpx.Response) -> Any:
     try:
         return r.json()
     except ValueError as e:
-        raise FetchError(url, r.status_code, f"invalid JSON: {e}") from e
+        raise FetchError(str(r.url), r.status_code, f"invalid JSON: {e}") from e
 
 
 async def get_text(url: str, params: dict[str, Any] | None = None) -> str:
