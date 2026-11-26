@@ -93,7 +93,7 @@ const SOURCES: Record<DataSource, { label: string; tone: "pos" | "warn" | "neutr
   model: { label: "model", tone: "warn", title: "Priced with a Black-Scholes model" },
   cboe: { label: "CBOE", tone: "neutral", title: "CBOE" },
   nasdaq: { label: "Nasdaq", tone: "neutral", title: "Nasdaq public data" },
-  tmx: { label: "TMX Money", tone: "neutral", title: "TMX Money (unofficial endpoint): earnings of Canadian listings" },
+  tmx: { label: "TMX Money", tone: "neutral", title: "TMX Money (unofficial endpoint): earnings and dividends of Canadian listings (dividend amounts in today's shares)" },
   yahoo: { label: "Yahoo Finance", tone: "neutral", title: "Yahoo Finance (unofficial endpoint): earnings dates of Canadian listings when TMX Money has none" },
   live: { label: "live quotes", tone: "neutral", title: "Built from live quotes: the latest minutes, until the source's own bars for them arrive" },
   "ibkr-adjusted": { label: "IBKR adj.", tone: "neutral", title: "Derived from IBKR's dividend-adjusted vs raw daily closes (amounts in today's shares)" },

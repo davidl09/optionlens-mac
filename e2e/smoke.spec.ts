@@ -231,6 +231,32 @@ test("Canadian listings: About, News and Insiders show TMX Money's data, and a p
   clean(p);
 });
 
+test("Canadian listings: dividend history from TMX Money; Fundamentals says what is not available", async ({ page }) => {
+  const p = await setup(page);
+  await page.goto("/s/RY.TO/dividends");
+  const history = page.locator("section.card", { has: page.getByRole("heading", { name: "History", exact: true }) });
+  await expect(history.locator("tbody tr")).toHaveCount(8);
+  await expect(history.locator(".source-badge").first()).toHaveText("TMX Money");
+  await expect(page.getByText("Not available:")).toHaveCount(0);
+  // a listing that pays in US dollars: the reason, not an empty tab
+  const usd = "This listing pays its dividends in USD, not in CAD: its history is not shown (amounts are not converted). Shown: what the other sources have (IBKR's dividend-adjusted prices, Questrade's current dividend).";
+  await page.route("**/api/symbol/RY.TO/dividends", (route) => route.fulfill({ json: {
+    symbol: "RY.TO", annual_rate: null, yield: null, frequency: null, growth_1y: null, growth_3y: null, growth_5y: null, next: null, history: [],
+    capture: [], capture_stats: { count: 0, avg_total_return: null, win_rate: null, avg_recovery_days: null }, unavailable: usd,
+  } }));
+  await page.reload();
+  await expect(page.getByText(usd)).toBeVisible();
+  await page.goto("/s/RY.TO/fundamentals");
+  await expect(page.getByRole("heading", { name: "Key figures" })).toBeVisible();
+  await expect(page.getByText("Financial statements and the other key statistics are not available for Canadian listings: no free source has them.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Financial statements" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Peer comparison" })).toBeVisible();
+  await page.goto("/s/AAPL/fundamentals");
+  await expect(page.getByRole("heading", { name: "Financial statements" })).toBeVisible();
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  clean(p);
+});
+
 test("Canadian earnings carry their source (TMX Money); Status lists the Canadian earnings sources", async ({ page }) => {
   const p = await setup(page);
   await page.goto("/s/RY.TO/earnings");

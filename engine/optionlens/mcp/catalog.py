@@ -115,7 +115,7 @@ CURATED: dict[str, Curated] = {
                                                "(price / EPS), EPS, market cap (price × shares), shares outstanding, "
                                                "52-week high/low, 20-day and 3-month average volume, sector / industry "
                                                "group / sub-group, dividend yield (fraction); `sources` names each "
-                                               "figure's source (questrade, nasdaq, ibkr-adjusted, computed), `asof` the "
+                                               "figure's source (questrade, nasdaq, tmx, ibkr-adjusted, computed), `asof` the "
                                                f"snapshot date. {U_PRICE}"),
     "GET /api/symbol/{sym}/bars": Curated("symbol_bars", "Daily OHLCV bars (oldest first) with SMA20/50/200; with "
                                           "interval=1m|5m|15m|1h and range=1d|5d|1m|3m, intraday bars instead (ts = bar "
@@ -167,9 +167,11 @@ CURATED: dict[str, Curated] = {
     "GET /api/symbol/{sym}/earnings/strategies/{strategy}/trades": Curated(
         "symbol_earnings_strategy_trades", f"The individual trades of one earnings strategy backtest. {U_FRAC}"),
     "GET /api/symbol/{sym}/dividends": Curated("symbol_dividends", "Dividends: annual rate, yield, frequency, growth, "
-                                               "next ex-date, history (each row's `source`: nasdaq, ibkr-adjusted = "
-                                               "derived from IBKR's dividend-adjusted closes, questrade = its current "
-                                               "dividend; `discrepancy` = the sources differ by > $0.01) and "
+                                               "next ex-date, history (each row's `source`: nasdaq (US listings), tmx "
+                                               "= TMX Money (Canadian listings: CAD payments, in today's shares), "
+                                               "ibkr-adjusted = derived from IBKR's dividend-adjusted closes, "
+                                               "questrade = its current dividend; `discrepancy` = the sources differ "
+                                               "by > $0.01; `unavailable` = why a history is missing) and "
                                                f"dividend-capture results. {U_FRAC}"),
     "GET /api/symbol/{sym}/seasonality": Curated("symbol_seasonality", f"Monthly / weekday return seasonality. {U_FRAC}"),
     "GET /api/symbol/{sym}/events": Curated("symbol_events", "Upcoming and past events: earnings, ex-dividend dates, "
@@ -180,7 +182,8 @@ CURATED: dict[str, Curated] = {
                                            "calendars...) ranked by edge and by win rate: cost / max profit / max loss "
                                            "in $ per position, probability of profit (fraction)."),
     "GET /api/symbol/{sym}/fundamentals": Curated("symbol_fundamentals", "Key stats and income / balance / cash-flow / "
-                                                  "ratio tables (annual or quarterly), values as reported (text)."),
+                                                  "ratio tables (annual or quarterly), values as reported (text). US "
+                                                  "listings only: for Canadian ones `unavailable` says so."),
     "GET /api/symbol/{sym}/peers": Curated("symbol_peers", f"Peers comparison table. {U_TABLE}"),
     "GET /api/symbol/{sym}/insiders": Curated(
         "symbol_insiders", "Insider trading summary (3 and 12 months) and trades. source nasdaq (US listings): "

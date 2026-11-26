@@ -1,0 +1,144 @@
+{
+ "data": {
+  "dividendHistory": {
+   "pageNumber": null,
+   "hasNextPage": false,
+   "dividends": [
+    {
+     "exDate": "2026-12-30",
+     "amount": 0,
+     "currency": "CAD",
+     "payableDate": null,
+     "declarationDate": "2026-11-25",
+     "recordDate": "2026-12-30"
+    },
+    {
+     "exDate": "2026-11-25",
+     "amount": 0.3,
+     "currency": "CAD",
+     "payableDate": "2026-11-30",
+     "declarationDate": "2026-11-18",
+     "recordDate": "2026-11-25"
+    },
+    {
+     "exDate": "2026-08-26",
+     "amount": 0.287,
+     "currency": "CAD",
+     "payableDate": "2026-08-31",
+     "declarationDate": "2026-08-19",
+     "recordDate": "2026-08-26"
+    },
+    {
+     "exDate": "2026-05-21",
+     "amount": 0.272,
+     "currency": "CAD",
+     "payableDate": "2026-05-29",
+     "declarationDate": "2026-05-13",
+     "recordDate": "2026-05-21"
+    },
+    {
+     "exDate": "2026-02-24",
+     "amount": 0.277,
+     "currency": "CAD",
+     "payableDate": "2026-02-27",
+     "declarationDate": "2026-02-17",
+     "recordDate": "2026-02-24"
+    },
+    {
+     "exDate": "2025-11-28",
+     "amount": 0.3,
+     "currency": "CAD",
+     "payableDate": null,
+     "declarationDate": null,
+     "recordDate": null
+    },
+    {
+     "exDate": "2025-11-19",
+     "amount": 0.3,
+     "currency": "CAD",
+     "payableDate": "2025-11-28",
+     "declarationDate": "2025-11-12",
+     "recordDate": "2025-11-19"
+    },
+    {
+     "exDate": "2009-03-26",
+     "amount": 0.10315,
+     "currency": "CAD",
+     "payableDate": "2009-03-31",
+     "declarationDate": "2009-03-19",
+     "recordDate": "2009-03-30"
+    },
+    {
+     "exDate": "2008-12-24",
+     "amount": 0,
+     "currency": "CAD",
+     "payableDate": "2008-12-31",
+     "declarationDate": "2008-12-24",
+     "recordDate": "2008-12-30"
+    },
+    {
+     "exDate": "2008-09-25",
+     "amount": 0.12976,
+     "currency": "CAD",
+     "payableDate": "2008-09-30",
+     "declarationDate": "2008-09-18",
+     "recordDate": "2008-09-29"
+    },
+    {
+     "exDate": "2008-06-25",
+     "amount": 0.49049,
+     "currency": "CAD",
+     "payableDate": "2008-06-30",
+     "declarationDate": "2008-06-18",
+     "recordDate": "2008-06-27"
+    },
+    {
+     "exDate": "2008-03-26",
+     "amount": 0.40403,
+     "currency": "CAD",
+     "payableDate": "2008-03-31",
+     "declarationDate": "2008-03-18",
+     "recordDate": "2008-03-28"
+    },
+    {
+     "exDate": "2007-12-24",
+     "amount": 0,
+     "currency": "CAD",
+     "payableDate": "2007-12-31",
+     "declarationDate": "2007-12-24",
+     "recordDate": "2007-12-28"
+    },
+    {
+     "exDate": "2003-12-29",
+     "amount": 0,
+     "currency": "CAD",
+     "payableDate": "2003-12-31",
+     "declarationDate": "2003-12-18",
+     "recordDate": "2003-12-31"
+    },
+    {
+     "exDate": "2003-12-29",
+     "amount": 0.19565,
+     "currency": "CAD",
+     "payableDate": "2003-12-31",
+     "declarationDate": "2003-12-18",
+     "recordDate": "2003-12-31"
+    },
+    {
+     "exDate": "2003-12-29",
+     "amount": 0,
+     "currency": "CAD",
+     "payableDate": "2003-12-31",
+     "declarationDate": "2003-12-18",
+     "recordDate": "2003-12-31"
+    }
+   ]
+  },
+  "splits": [
+   {
+    "splitDate": "2008-08-06",
+    "ratio": 0.25
+   }
+  ]
+ }
+}

@@ -162,6 +162,7 @@ def build_jobs() -> dict[str, Job]:
         Job("earnings_backfill_ca", calendars.earnings_backfill_ca, daily(time(4, 15))),  # no-op once complete
         Job("dividends", calendars.dividends, daily(time(5, 45))),
         Job("dividends_history", calendars.dividends_history, daily(time(6, 30), {SUN})),
+        Job("dividends_ca", calendars.dividends_ca, daily(time(5, 50))),
         Job("vix", marketdata.vix, manual(), catch_up=False),
         Job("rates", marketdata.rates, daily(time(17, 5))),
         Job("rates_cad", marketdata.rates_cad, daily(time(17, 10))),

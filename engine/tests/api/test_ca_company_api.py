@@ -146,3 +146,13 @@ def test_us_listings_stay_on_nasdaq(client, tmx_answers):
     p = get(client, "/api/symbol/AAPL/profile")
     assert p["website"] == "https://www.apple.com" and p["exchange"] == "NASDAQ-GS"
     assert tmx_answers == []
+
+
+def test_fundamentals_of_a_canadian_listing_say_what_is_missing(canadian, tmx_answers):
+    f = get(canadian, f"{S}/fundamentals")
+    assert f["unavailable"] == ("Financial statements and the other key statistics are not available for Canadian "
+                                "listings: no free source has them. The key figures above are Questrade's.")
+    assert f["key_stats"] == [] and f["income"] is None and f["payback_years"] is None
+    us = get(canadian, "/api/symbol/AAPL/fundamentals")
+    assert us["unavailable"] is None and us["income"]["rows"]
+    assert tmx_answers == []                                  # nothing is asked: TMX has no statements

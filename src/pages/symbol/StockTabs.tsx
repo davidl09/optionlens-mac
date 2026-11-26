@@ -302,8 +302,8 @@ export function DividendsTab() {
     <Async state={st}>{(d) => (
       <div className="stack">
         {d.unavailable && <InfoBox title="Not available:">{d.unavailable}</InfoBox>}
-        {!d.history.length && !d.unavailable && <InfoBox>No dividends stored for {sym} yet. They come from Nasdaq, from IBKR's dividend-adjusted price history (collected by the IBKR bridge in the desktop app) and from Questrade's daily symbol info; a symbol that pays none stays empty.</InfoBox>}
-        {d.history.some((h) => h.discrepancy) && <InfoBox>Some ex-dates have amounts that differ between sources by more than $0.01 (marked below); the amount shown is Nasdaq's, else IBKR's, else Questrade's.</InfoBox>}
+        {!d.history.length && !d.unavailable && <InfoBox>No dividends stored for {sym} yet. They come from Nasdaq (US listings), from TMX Money (Canadian listings), from IBKR's dividend-adjusted price history (collected by the IBKR bridge in the desktop app) and from Questrade's daily symbol info; a symbol that pays none stays empty.</InfoBox>}
+        {d.history.some((h) => h.discrepancy) && <InfoBox>Some ex-dates have amounts that differ between sources by more than $0.01 (marked below); the amount shown is Nasdaq's or TMX Money's, else IBKR's, else Questrade's.</InfoBox>}
         <Card title="Dividend profile">
           <StatGrid items={[
             { label: "Annual rate", value: d.annual_rate, fmt: "money" },

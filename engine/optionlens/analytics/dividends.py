@@ -3,9 +3,10 @@
 Regular dividends exclude one-offs: a `kind` mentioning "special"/"extra"/"liquidat"/"return of capital", or
 an amount far above the symbol's usual payment (one_offs). Pure functions.
 
-Sources (docs/INTEGRATION.md §6 "Dividends"): per (symbol, ex-date) the merged set takes Nasdaq's row when there is one,
-else the one derived from IBKR's adjusted closes (from_adjusted_closes), else Questrade's current dividend
-(SOURCE_PRIORITY); amounts that differ between the sources by more than DISCREPANCY_TOLERANCE are flagged.
+Sources (docs/INTEGRATION.md §6 "Dividends"): per (symbol, ex-date) the merged set takes Nasdaq's row when there is one
+(US listings), else TMX Money's (Canadian listings), else the one derived from IBKR's adjusted closes
+(from_adjusted_closes), else Questrade's current dividend (SOURCE_PRIORITY); amounts that differ between the sources
+by more than DISCREPANCY_TOLERANCE are flagged.
 """
 from __future__ import annotations
 
@@ -20,7 +21,8 @@ from optionlens.analytics.stats import bar_arrays
 from optionlens.models import Bar, Dividend
 
 _IRREGULAR = ("special", "extra", "liquidat", "return of capital")
-SOURCE_PRIORITY = ("nasdaq", "ibkr-adjusted", "questrade")   # per (symbol, ex-date): the first source present wins
+# per (symbol, ex-date): the first source present wins (the declared dividends of each market's source, then estimates)
+SOURCE_PRIORITY = ("nasdaq", "tmx", "ibkr-adjusted", "questrade")
 DISCREPANCY_TOLERANCE = 0.01   # $/share: sources disagreeing by more than this flag the merged row
 DERIVED_MIN_AMOUNT = 0.001     # $/share: smaller steps of the adjustment ratio are noise
 DERIVED_MAX_STEP = 0.25        # a ratio step removing a quarter of the price or more is a split one series lacks

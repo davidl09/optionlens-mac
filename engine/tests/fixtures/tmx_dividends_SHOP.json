@@ -1,0 +1,15 @@
+{
+ "data": {
+  "dividendHistory": {
+   "pageNumber": null,
+   "hasNextPage": false,
+   "dividends": []
+  },
+  "splits": [
+   {
+    "splitDate": "2022-06-29",
+    "ratio": 0.1
+   }
+  ]
+ }
+}

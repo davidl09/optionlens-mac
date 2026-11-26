@@ -1,0 +1,24 @@
+{
+ "errors": [
+  {
+   "message": "Cannot read properties of undefined (reading 'map')",
+   "locations": [
+    {
+     "line": 6,
+     "column": 3
+    }
+   ],
+   "path": [
+    "splits"
+   ]
+  }
+ ],
+ "data": {
+  "dividendHistory": {
+   "pageNumber": null,
+   "hasNextPage": false,
+   "dividends": []
+  },
+  "splits": null
+ }
+}

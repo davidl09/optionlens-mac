@@ -13,8 +13,9 @@ from ..models import normalize_symbol
 from ..net import FetchError
 from ..repo import bars as bars_repo
 from ..repo import cache as cache_repo
+from ..repo import dividends as dividends_repo
 from ..repo import views as views_repo
-from ..sources import nasdaq, tmx, tmx_company
+from ..sources import nasdaq, tmx, tmx_company, tmx_dividends
 from . import prices
 from .universe import UnknownSymbol, ensure_symbol
 
@@ -78,6 +79,7 @@ H = 3600
 CACHE_TTL_S: dict[str, int] = {
     "info": 24 * H, "summary": 24 * H, "financials": 24 * H, "earnings_surprise": 24 * H,
     "profile": 7 * 24 * H, "insiders": 12 * H, "news": 30 * 60, "extended": 5 * 60,
+    "dividends": 20 * H,     # under a day: the daily job (calendars.dividends_ca) asks every listing again
 }
 SPLITS_LOOKBACK_DAYS = 30
 CALENDAR_TTL_S = 6 * H     # universe-wide Nasdaq calendars (splits, IPOs)
@@ -101,7 +103,20 @@ _FROM_NASDAQ: dict[str, Callable[[str, str, dict], Awaitable[Any]]] = {
     "news": lambda s, asset, p: nasdaq.fetch_news(s, asset),
     "extended": lambda s, asset, p: nasdaq.fetch_extended(s, p.get("market", "pre"), asset),
 }
+async def _tmx_dividends(symbol: str) -> dict:
+    """Fetch a Canadian listing's dividend history from TMX Money and store it as TMX's rows of the merged dividends
+    (repo.dividends): what TMX lists now replaces what it listed before; an answer without any dividend leaves the
+    stored rows alone (it may be a glitch). The cached payload is the outcome: {dividends: rows stored,
+    other_currency: {currency: rows left out because they are not in the listing's currency}}."""
+    divs, other = await tmx_dividends.fetch_history(symbol)
+    if divs:
+        now = datetime.now(timezone.utc)
+        await asyncio.to_thread(dividends_repo.replace_derived, symbol, tmx.NAME, date.min, date.max, divs, now)
+    return {"dividends": len(divs), "other_currency": other}
+
+
 _FROM_TMX: dict[str, Callable[[str, str, dict], Awaitable[Any]]] = {
+    "dividends": lambda s, asset, p: _tmx_dividends(s),
     "profile": lambda s, asset, p: tmx_company.fetch_profile(s),
     "news": lambda s, asset, p: tmx_company.fetch_news(s),
     "insiders": lambda s, asset, p: tmx_company.fetch_insiders(s),
@@ -149,8 +164,9 @@ def _fresh(hit: tuple[Any, datetime] | None, ttl: float) -> bool:
     return (datetime.now(timezone.utc) - hit[1]).total_seconds() <= max_age
 
 
-async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> Any:
-    """http_cache read-through with TTL, a per-key lock and stale-on-FetchError fallback."""
+async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]], stale_ok: bool = True) -> Any:
+    """http_cache read-through with TTL, a per-key lock and stale-on-FetchError fallback (`stale_ok` False: the
+    FetchError is raised even when an older payload is stored)."""
     hit = await asyncio.to_thread(cache_repo.cache_get_any, key)
     if _fresh(hit, ttl):
         return hit[0]
@@ -161,7 +177,7 @@ async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> 
         try:
             payload = await fetch()
         except FetchError:
-            if hit is None:
+            if hit is None or not stale_ok:
                 raise
             return hit[0]
         if payload is None and hit is not None and hit[0] is not None:
@@ -170,18 +186,19 @@ async def _cached(key: str, ttl: float, fetch: Callable[[], Awaitable[Any]]) -> 
         return payload
 
 
-async def fetch_cached(kind: str, symbol: str, **params: Any) -> Any:
+async def fetch_cached(kind: str, symbol: str, *, stale_ok: bool = True, **params: Any) -> Any:
     """Normalized payload of `kind` (see CACHE_TTL_S) for symbol from the source of its market (_fetcher), via
     http_cache with TTL; None without a request when no source covers the symbol.
     A None answer (the source has no such data for the symbol) is cached too, for NEGATIVE_TTL_S.
-    params: financials quarterly=bool; extended market='pre'|'post'. On fetch failure returns the stale
-    cached payload if any, else raises FetchError. Unknown kind -> KeyError."""
+    params: financials quarterly=bool; extended market='pre'|'post'. Kind 'dividends' (Canadian listings) stores the
+    history in the dividends tables and answers with the outcome (_tmx_dividends). On fetch failure returns the
+    stale cached payload if any (and `stale_ok`), else raises FetchError. Unknown kind -> KeyError."""
     ttl = CACHE_TTL_S[kind]
     symbol = normalize_symbol(symbol)
     fetch = _fetcher(kind, symbol, params)
     if fetch is None:
         return None
-    return await _cached(cache_key(kind, symbol, **params), ttl, fetch)
+    return await _cached(cache_key(kind, symbol, **params), ttl, fetch, stale_ok)
 
 
 async def fetch_calendar(kind: str, **params: Any) -> list[dict]:

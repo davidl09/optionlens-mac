@@ -83,9 +83,42 @@ def test_aggregates_never_mix_markets(ca_seeded):
 
 
 def test_us_only_sources_have_no_market_param_and_no_canadian_rows(ca_seeded):
-    for rid in ("dividend-calendar", "splits-calendar", "premarket-movers"):
+    for rid in ("splits-calendar", "premarket-movers", "event-driven"):
         assert "market" not in {p["key"] for p in registry.get(rid).as_dict()["params"]}, rid
-    assert CA not in _syms(registry.run_sync("best-dividends"))
+
+
+def test_dividend_reports_cover_both_markets(ca_seeded):
+    """Canadian listings' dividend histories come from TMX Money: the dividend reports have the market filter (US by
+    default) and name each row's source."""
+    from datetime import timedelta
+    from optionlens.models import Dividend
+    from optionlens.repo import dividends
+    from optionlens.services.reports.base import today
+    t = today()
+    ex = t + timedelta(days=7)
+    past = [Dividend(CA, t - timedelta(days=91 * k), 1.54 if k > 2 else 1.76, None, None, None, "cash", "tmx")
+            for k in range(1, 9)]
+    dividends.upsert_derived([*past, Dividend(CA, ex, 1.76, ex + timedelta(days=28), ex, t - timedelta(days=2), "cash",
+                                              "tmx")], datetime.now(timezone.utc))
+    _clear_caches()
+    try:
+        for rid in ("dividend-calendar", "future-ex-dates", "dividend-announcements", "best-dividends"):
+            assert "market" in {p["key"] for p in registry.get(rid).as_dict()["params"]}, rid
+        assert CA not in _syms(registry.run_sync("future-ex-dates")) | _syms(registry.run_sync("best-dividends"))
+        ca = registry.run_sync("future-ex-dates", {"market": "CA"})
+        assert _syms(ca) == {CA}
+        row = ca["rows"][0]
+        assert (row["ex_date"], row["amount"], row["source"], row["currency"]) == (ex.isoformat(), 1.76, "tmx", "CAD")
+        assert row["declared_date"] == (t - timedelta(days=2)).isoformat() and row["annual_rate"] == pytest.approx(7.04)
+        assert _syms(registry.run_sync("dividend-announcements", {"market": "CA"})) == {CA}   # by declared date
+        best = registry.run_sync("best-dividends", {"market": "CA"})
+        assert _syms(best) == {CA}
+        assert CA in _syms(registry.run_sync("future-ex-dates", {"market": "all"}))
+    finally:
+        from optionlens import db
+        with db.write() as cur:
+            cur.execute("DELETE FROM dividends_derived WHERE symbol = ?", [CA])
+        _clear_caches()
 
 
 def test_earnings_reports_cover_both_markets(ca_seeded):
@@ -143,7 +176,8 @@ def test_canadian_symbol_pages(ca_seeded, api):
     assert "TMX Money, else Yahoo Finance" in e["next_missing"] and s["next_earnings_missing"] == e["next_missing"]
     assert api.get("/api/symbol/AAPL/earnings").json()["unavailable"] is None
     d = api.get(f"/api/symbol/{CA}/dividends").json()
-    assert d["history"] == [] and "current dividend Questrade reports" in d["unavailable"]
+    # (TMX Money is offline in tests)
+    assert d["history"] == [] and d["unavailable"].startswith("The dividend history could not be loaded right now.")
     ch = api.get(f"/api/symbol/{CA}/chain").json()
     assert ch["symbol"] == CA and ch["calls"] and all(r["osi"].startswith("RY.TO") for r in ch["calls"] + ch["puts"])
 

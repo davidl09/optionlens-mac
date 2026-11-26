@@ -386,11 +386,11 @@ export interface Dividends {
   next: NextDividend | null;
   history: { ex_date: ISODate; amount: number; pay_date: ISODate | null; record_date: ISODate | null; declared_date: ISODate | null; kind: string;
     one_off?: boolean;       // special / one-off: left out of annual_rate, yield, frequency and growth
-    source: DataSource | null;   // nasdaq | ibkr-adjusted (derived from IBKR adjusted closes) | questrade
+    source: DataSource | null;   // nasdaq | tmx (Canadian listings, in today's shares) | ibkr-adjusted (derived from IBKR adjusted closes) | questrade
     discrepancy: boolean }[];    // the sources' amounts for this ex-date differ by more than $0.01
   capture: { ex_date: ISODate; amount: number; pre_close: number | null; ex_close: number | null; price_return: number | null; total_return: number | null; recovery_days: number | null }[];
   capture_stats: { count: number; avg_total_return: number | null; win_rate: number | null; avg_recovery_days: number | null };
-  unavailable: string | null;   // why the dividend history is not available (Canadian listings); yield may then be Questrade's
+  unavailable: string | null;   // why a Canadian listing's history is missing or incomplete (TMX Money unreachable, paid in another currency); yield may then be Questrade's
 }
 export interface Seasonality {
   symbol: string;
@@ -426,6 +426,7 @@ export interface Fundamentals {
   key_stats: { label: string; value: string | null }[];
   income: FinTable | null; balance: FinTable | null; cashflow: FinTable | null; ratios: FinTable | null;
   payback_years: number | null; fetched_at: ISODateTime | null;
+  unavailable: string | null;      // why there are no statements / key statistics (Canadian listings), else null
 }
 export interface Insiders {
   symbol: string;

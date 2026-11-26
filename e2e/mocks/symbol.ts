@@ -356,7 +356,16 @@ export function keyStats(sym: string): KeyStats {
   };
 }
 
+const CANADIAN = (sym: string) => /\.(TO|VN)$/.test(sym);
+
 export function dividends(sym: string): Dividends {
+  if (CANADIAN(sym)) {          // TMX Money's history: amounts in today's shares, every date
+    const history = Array.from({ length: 8 }, (_, i) => ({ ex_date: addDays("2026-10-26", -91 * i), amount: i < 2 ? 1.76 : 1.64, pay_date: addDays("2026-11-24", -91 * i), record_date: addDays("2026-10-26", -91 * i), declared_date: addDays("2026-08-26", -91 * i), kind: "cash", one_off: false, source: "tmx" as const, discrepancy: false }));
+    return {
+      symbol: sym, annual_rate: 7.04, yield: 0.026, frequency: 4, growth_1y: 0.073, growth_3y: 0.06, growth_5y: 0.055,
+      next: null, history, capture: [], capture_stats: { count: 0, avg_total_return: null, win_rate: null, avg_recovery_days: null }, unavailable: null,
+    };
+  }
   const history = Array.from({ length: 12 }, (_, i) => ({ ex_date: addDays("2026-08-11", -91 * i), amount: round(0.26 - Math.floor(i / 4) * 0.01), pay_date: addDays("2026-08-14", -91 * i), record_date: addDays("2026-08-11", -91 * i), declared_date: addDays("2026-07-31", -91 * i), kind: "Cash", source: "nasdaq" as const, discrepancy: false }));
   return {
     symbol: sym, annual_rate: 1.04, yield: 0.0045, frequency: 4, growth_1y: 0.04, growth_3y: 0.042, growth_5y: 0.051,
@@ -405,6 +414,7 @@ export function ideas(sym: string): TradeIdeas {
 }
 
 export function fundamentals(sym: string, period: "annual" | "quarterly"): Fundamentals {
+  if (CANADIAN(sym)) return { symbol: sym, period, fetched_at: null, payback_years: null, key_stats: [], income: null, balance: null, cashflow: null, ratios: null, unavailable: "Financial statements and the other key statistics are not available for Canadian listings: no free source has them. The key figures above are Questrade's." };
   const periods = period === "annual" ? ["FY2026", "FY2025", "FY2024", "FY2023"] : ["Q4 26", "Q3 26", "Q2 26", "Q1 26"];
   const table = (title: string, labels: string[]) => ({ title, periods, rows: labels.map((l, i) => ({ label: l, values: periods.map((_, j) => (i === 2 && j === 3 ? null : `$${(390 - i * 60 - j * 12).toFixed(0)}B`)) })) });
   return {
@@ -413,7 +423,7 @@ export function fundamentals(sym: string, period: "annual" | "quarterly"): Funda
     income: table("Income statement", ["Total revenue", "Gross profit", "Operating income", "Net income"]),
     balance: table("Balance sheet", ["Total assets", "Total liabilities", "Shareholder equity"]),
     cashflow: table("Cash flow", ["Operating cash flow", "Capital expenditures", "Free cash flow"]),
-    ratios: null,
+    ratios: null, unavailable: null,
   };
 }
 
@@ -424,8 +434,6 @@ export function peers(sym: string): ReportResult {
   ];
   return { id: "peers", title: `${sym} peers`, asof: NOW, params: {}, columns, rows: rowsFor(columns, 8, 2), truncated: false, notes: [] };
 }
-
-const CANADIAN = (sym: string) => /\.(TO|VN)$/.test(sym);
 
 export function insiders(sym: string): Insiders {
   reseed(37);

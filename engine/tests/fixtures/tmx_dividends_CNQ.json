@@ -1,0 +1,192 @@
+{
+ "data": {
+  "dividendHistory": {
+   "pageNumber": null,
+   "hasNextPage": false,
+   "dividends": [
+    {
+     "exDate": "2026-12-15",
+     "amount": 0.625,
+     "currency": "CAD",
+     "payableDate": "2027-01-05",
+     "declarationDate": "2026-11-04",
+     "recordDate": "2026-12-15"
+    },
+    {
+     "exDate": "2026-09-11",
+     "amount": 0.625,
+     "currency": "CAD",
+     "payableDate": "2026-10-02",
+     "declarationDate": "2026-08-05",
+     "recordDate": "2026-09-11"
+    },
+    {
+     "exDate": "2026-06-23",
+     "amount": 0.625,
+     "currency": "CAD",
+     "payableDate": "2026-07-07",
+     "declarationDate": "2026-05-06",
+     "recordDate": "2026-06-23"
+    },
+    {
+     "exDate": "2026-03-20",
+     "amount": 0.625,
+     "currency": "CAD",
+     "payableDate": "2026-04-07",
+     "declarationDate": "2026-03-05",
+     "recordDate": "2026-03-20"
+    },
+    {
+     "exDate": "2025-12-12",
+     "amount": 0.5875,
+     "currency": "CAD",
+     "payableDate": "2026-01-06",
+     "declarationDate": "2025-11-05",
+     "recordDate": "2025-12-12"
+    },
+    {
+     "exDate": "2025-09-19",
+     "amount": 0.5875,
+     "currency": "CAD",
+     "payableDate": "2025-10-03",
+     "declarationDate": "2025-08-07",
+     "recordDate": "2025-09-19"
+    },
+    {
+     "exDate": "2025-06-13",
+     "amount": 0.5875,
+     "currency": "CAD",
+     "payableDate": "2025-07-03",
+     "declarationDate": "2025-05-08",
+     "recordDate": "2025-06-13"
+    },
+    {
+     "exDate": "2025-03-21",
+     "amount": 0.5875,
+     "currency": "CAD",
+     "payableDate": "2025-04-04",
+     "declarationDate": "2025-03-06",
+     "recordDate": "2025-03-21"
+    },
+    {
+     "exDate": "2024-12-13",
+     "amount": 0.5625,
+     "currency": "CAD",
+     "payableDate": "2025-01-03",
+     "declarationDate": "2024-10-04",
+     "recordDate": "2024-12-13"
+    },
+    {
+     "exDate": "2024-09-13",
+     "amount": 0.525,
+     "currency": "CAD",
+     "payableDate": "2024-10-04",
+     "declarationDate": "2024-07-31",
+     "recordDate": "2024-09-13"
+    },
+    {
+     "exDate": "2024-06-17",
+     "amount": 0.525,
+     "currency": "CAD",
+     "payableDate": "2024-07-05",
+     "declarationDate": "2024-05-01",
+     "recordDate": "2024-06-17"
+    },
+    {
+     "exDate": "2024-03-14",
+     "amount": 1.05,
+     "currency": "CAD",
+     "payableDate": "2024-04-05",
+     "declarationDate": "2024-02-28",
+     "recordDate": "2024-03-15"
+    },
+    {
+     "exDate": "2023-12-07",
+     "amount": 1,
+     "currency": "CAD",
+     "payableDate": "2024-01-05",
+     "declarationDate": "2023-11-01",
+     "recordDate": "2023-12-08"
+    },
+    {
+     "exDate": "2023-09-14",
+     "amount": 0.9,
+     "currency": "CAD",
+     "payableDate": "2023-10-05",
+     "declarationDate": "2023-08-02",
+     "recordDate": "2023-09-15"
+    },
+    {
+     "exDate": "2023-06-15",
+     "amount": 0.9,
+     "currency": "CAD",
+     "payableDate": "2023-07-05",
+     "declarationDate": "2023-05-03",
+     "recordDate": "2023-06-16"
+    },
+    {
+     "exDate": "2023-03-16",
+     "amount": 0.9,
+     "currency": "CAD",
+     "payableDate": "2023-04-05",
+     "declarationDate": "2023-03-01",
+     "recordDate": "2023-03-17"
+    },
+    {
+     "exDate": "2022-12-15",
+     "amount": 0.85,
+     "currency": "CAD",
+     "payableDate": "2023-01-05",
+     "declarationDate": "2022-11-02",
+     "recordDate": "2022-12-16"
+    },
+    {
+     "exDate": "2022-09-15",
+     "amount": 0.75,
+     "currency": "CAD",
+     "payableDate": "2022-10-05",
+     "declarationDate": "2022-08-03",
+     "recordDate": "2022-09-16"
+    },
+    {
+     "exDate": "2022-08-22",
+     "amount": 1.5,
+     "currency": "CAD",
+     "payableDate": "2022-08-31",
+     "declarationDate": "2022-08-03",
+     "recordDate": "2022-08-23"
+    },
+    {
+     "exDate": "2022-06-16",
+     "amount": 0.75,
+     "currency": "CAD",
+     "payableDate": "2022-07-05",
+     "declarationDate": "2022-05-04",
+     "recordDate": "2022-06-17"
+    }
+   ]
+  },
+  "splits": [
+   {
+    "splitDate": "2024-06-11",
+    "ratio": 0.5
+   },
+   {
+    "splitDate": "2010-05-19",
+    "ratio": 0.5
+   },
+   {
+    "splitDate": "2005-05-18",
+    "ratio": 0.5
+   },
+   {
+    "splitDate": "2004-05-19",
+    "ratio": 0.5
+   },
+   {
+    "splitDate": "1993-06-04",
+    "ratio": 0.5
+   }
+  ]
+ }
+}

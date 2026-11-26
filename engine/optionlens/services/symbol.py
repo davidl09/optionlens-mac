@@ -8,7 +8,9 @@ import numpy as np
 
 from ..analytics import dividends as divs_a
 from ..analytics import markets, stats, vol
+from ..jobs import ondemand
 from ..models import normalize_symbol
+from ..net import FetchError
 from ..repo import dividends as div_repo
 from ..repo import earnings as earn_repo
 from ..repo import metrics as metrics_repo
@@ -58,16 +60,39 @@ def seasonality(symbol: str) -> dict:
 
 
 # ----------------------------------------------------------------------------- dividends / events
+OTHER_DIVIDEND_SOURCES = ("Shown: what the other sources have (IBKR's dividend-adjusted prices, Questrade's current "
+                          "dividend).")
+
+
+def _dividend_history_gap(sym: str) -> str | None:
+    """A Canadian listing's dividend history comes from TMX Money on demand (jobs.ondemand kind "dividends": fetched
+    and stored at most once per cache time). Returns why the history is missing or incomplete, else None; None for
+    the listings of a market whose histories are collected by jobs only (US: Nasdaq)."""
+    if ondemand.source_of("dividends", sym) is None:
+        return None
+    try:
+        got = ctx.run_async(ondemand.fetch_cached, "dividends", sym)
+    except FetchError:
+        return f"The dividend history could not be loaded right now. {OTHER_DIVIDEND_SOURCES}"
+    other = " and ".join(sorted(got["other_currency"]))
+    if not other:
+        return None
+    if got["dividends"]:
+        return f"Some of this listing's dividends were paid in {other}: they are left out (amounts are not converted)."
+    return (f"This listing pays its dividends in {other}, not in {markets.currency_of(sym)}: its history is not shown "
+            f"(amounts are not converted). {OTHER_DIVIDEND_SOURCES}")
+
+
 def dividends(symbol: str) -> dict:
-    """Dividends (types.ts). A Canadian listing has no dividend history (`unavailable` says why): what is shown is the
-    current dividend Questrade reports."""
-    sym = ctx.ensure_known(symbol)["symbol"]
+    """Dividends (types.ts). `unavailable`: why a Canadian listing's history is missing or incomplete, when it is."""
+    row = ctx.ensure_known(symbol)
+    sym = row["symbol"]
+    gap = None if row["kind"] == "index" else _dividend_history_gap(sym)   # stores the history: before it is read
     bars_ = ctx.load_bars(sym, live=False)
     q = ctx.quote_dict(sym)   # the price every page's dividend yield uses (key stats too)
     price = q["price"] if q else None
     out = divs_a.dividend_summary(sym, div_repo.for_symbol(sym), bars_, price, ctx.today())
-    gap = ctx.nasdaq_gap(sym, "Dividend histories")
-    return {**out, "unavailable": gap and gap + " Shown: the current dividend Questrade reports, when it reports one."}
+    return {**out, "unavailable": gap}
 
 
 EVENT_HISTORY = 8      # past earnings / ex-dates shown

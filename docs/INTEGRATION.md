@@ -220,7 +220,8 @@ Unchanged from the API contract in optionlens-mac `src/api/types.ts` (same paths
 - **Markets** (SPEC §3 "Symbols and markets"): `SymbolRef`, `SymbolSummary` and profile peers carry `market` ("US" |
   "CA"), `exchange` ("TSX" | "TSXV" | null) and `currency` ("USD" | "CAD"); report and watchlist rows of a symbol carry
   `currency`. Universe reports take `market` (US default / CA / all; aggregates US / CA; US-only sources none, SPEC §7).
-  `Earnings.unavailable` / `Dividends.unavailable`: why that data is missing for a Canadian listing (null otherwise);
+  `Earnings.unavailable` / `Dividends.unavailable` / `Fundamentals.unavailable`: why that data is missing for a
+  Canadian listing (null otherwise);
   Canadian listings' earnings come from TMX Money, else Yahoo Finance (§12), so earnings reports take `market` too.
   The renderer labels money by currency (`src/lib/format.ts` MoneyStyle: C$; US$ where a view mixes currencies). A
   stock backtest takes symbols of one market (422 otherwise).
@@ -463,9 +464,10 @@ work makes progress in every cycle (dividend_history 2, between option_bars and 
   "dividend_history": [ {"symbol": "KO", "from": "2016-11-01"} ],     // daily adjusted + raw closes (§ Dividends)
   "chains_on_demand_max_age_s": 120 }
 ```
-**Dividends** (every listing; Nasdaq has per-symbol histories for Nasdaq listings only, none for Canadian ones). Three sources, merged per
-(symbol, ex-date) on read (`repo/dividends.py`): **Nasdaq** (calendar + histories, table `dividends`) when it has the
-row, else **IBKR-derived** (`ibkr-adjusted`), else **Questrade's current dividend** (`questrade`); the merged row takes
+**Dividends** (every listing; Nasdaq has per-symbol histories for Nasdaq listings only, none for Canadian ones, whose
+histories come from TMX Money: §12.2). Four sources, merged per (symbol, ex-date) on read (`repo/dividends.py`):
+**Nasdaq** (calendar + histories, table `dividends`) when it has the row, else **TMX Money** (`tmx`, Canadian
+listings), else **IBKR-derived** (`ibkr-adjusted`), else **Questrade's current dividend** (`questrade`); the merged row takes
 its missing pay / record / declared dates from the other sources, and `discrepancy` is true when the sources' amounts
 for the ex-date differ by more than $0.01. Every dividend consumer reads the merged set (`Dividends.history[].source` /
 `discrepancy`, the dividend calendar, future ex-dates, announcements, increases, best dividends, capture, REITs, the
@@ -1173,3 +1175,44 @@ Caching: the on-demand `http_cache` with the TTLs of the Nasdaq-backed data (pro
 fails and nothing is stored the endpoint answers 502 with a plain sentence (`{"detail": "News could not be loaded
 right now. Try again in a few minutes."}`; likewise "Insider data …", "The company profile …", for US listings
 too), which the tab shows in its error box with Retry.
+
+### 12.2 Dividend histories of Canadian listings; what TMX Money does not have
+
+Source `sources/tmx_dividends.py`: one request per listing asks two fields of the same endpoint,
+`getDividendsForSymbol(symbol, page 1, batch 500)` (`exDate`, `amount`, `currency`, `payableDate`,
+`declarationDate`, `recordDate`; newest first, declared future ex-dates included) and `getSplitsForSymbol(symbol)`
+(`splitDate`, `ratio` = old shares per new share: 0.5 for 2:1; an error and null for a listing that never split).
+Stored as source `tmx` in `dividends_derived` (which carries record and declared dates since this version) and read
+through the merged set like every other dividend (§6 "Dividends"), so the Dividends tab, the dividend reports, the
+chart's ex-dividend markers, the event lists and the yield used as q see them without knowing the source:
+
+- **Today's shares.** TMX lists amounts as declared (CNQ: 1.05 before its 2:1 split of 2024-06-11, 0.525 after); an
+  amount declared before a split is multiplied by the ratios of the splits after its ex-date, so the history compares
+  with the split-adjusted prices (rate, growth, capture). Nasdaq's US amounts stay as Nasdaq lists them.
+- **The listing's currency only.** A row paid in another currency (MG, NTR, BAM: USD) is left out and counted, never
+  converted; `Dividends.unavailable` then says "This listing pays its dividends in USD, not in CAD: its history is not
+  shown …" (or that some payments are left out).
+- Rows without a positive amount (a fund's non-cash year-end distribution, a date declared without an amount) are not
+  stored; two payments with one ex-date are one row (their sum); `kind` is "cash" (TMX does not type payments;
+  one-offs are found by amount as for Nasdaq).
+- A fetch replaces TMX's earlier rows of the listing; an answer without any dividend leaves them (it may be a glitch).
+
+When: on demand, when a Canadian symbol's Dividends tab is opened (`ondemand.fetch_cached("dividends", sym)`: the
+outcome `{dividends, other_currency}` is cached 20 h in `http_cache`, the rows live in the dividends tables), and the
+job `dividends_ca` (daily 05:50) for every known Canadian stock and ETF, the universe first, skipping listings
+answered in the last 20 h. A failing request ends the job's run (what it stored stays; it fails only when its first
+request does). On a failure the tab shows what is stored and "The dividend history could not be loaded right now. …".
+Dividend reports take `market` like the others (US by default). The IBKR-derived rows and Questrade's current
+dividend stay the fallbacks (and flag a `discrepancy` when their amount differs from TMX's).
+
+**Financial statements**: TMX Money has none of its own. Its Financials page embeds QuoteMedia's licensed widget
+(`qmod.quotemedia.com`, loaded with TMX's own customer id), and the GraphQL schema has no statement field
+(checked 2026-11-26), so OptionLens does not fetch any: `Fundamentals` of a Canadian listing has empty tables and
+`unavailable` ("Financial statements and the other key statistics are not available for Canadian listings: no free
+source has them. The key figures above are Questrade's."), which the Fundamentals tab shows between the key figures
+(Questrade) and the peer comparison.
+
+**Not used yet, but there** (same endpoint, checked 2026-11-26): `getSplitsForSymbol` (used above only to adjust
+dividend amounts; it could feed a Canadian splits calendar and the bars' split check), and index quotes:
+`getQuoteBySymbol("^TSX")` / `("^TX60")` answer price, change and previous close (15-minute delayed on the site), and
+`getIndexPriceHistory(symbol, start, end)` daily bars.

@@ -1,6 +1,7 @@
 """Earnings and dividend calendars: rolling windows, resumable 3-year earnings backfills, weekly per-symbol dividend
 histories. US listings from Nasdaq; Canadian listings' earnings from TMX Money, else Yahoo Finance
-(sources/ca_earnings.py, docs/INTEGRATION.md §12 "Earnings sources")."""
+(sources/ca_earnings.py, docs/INTEGRATION.md §12 "Earnings sources"), and their dividend histories from TMX Money
+(dividends_ca, §12.2)."""
 from __future__ import annotations
 
 import asyncio
@@ -256,3 +257,30 @@ async def dividends_history(symbols: list[str] | None = None) -> str:
 
     ok, failed = await run_bounded(rows, one, _rps(), "dividend history")
     return f"{total} dividends for {ok}/{len(rows)} symbols"
+
+
+async def dividends_ca() -> str:
+    """TMX Money's dividend history of every known Canadian stock and ETF, the universe first (one request each; a
+    listing answered within ondemand's cache time, e.g. opened by the user today, is not asked again). A failing
+    request makes TMX unavailable for the rest of the run: what was stored stays. Fails when the first request
+    does."""
+    rows = [r for r in await asyncio.to_thread(symbols_repo.list_symbols)
+            if markets.is_canadian(r["symbol"]) and r["kind"] != "index"]
+    symbols = [r["symbol"] for r in sorted(rows, key=lambda r: not r["in_universe"])]
+    if not symbols:
+        return NO_CA
+    done = paying = other = 0
+    for i, s in enumerate(symbols):
+        try:
+            got = await ondemand.fetch_cached("dividends", s, stale_ok=False)
+        except FetchError as e:
+            if not done:
+                raise
+            return f"{paying} of {done} listings with dividends; TMX Money unavailable after {done}/{len(symbols)}: {e}"
+        done += 1
+        paying += bool(got["dividends"])
+        other += bool(got["other_currency"]) and not got["dividends"]
+        if (i + 1) % PROGRESS_EVERY == 0:
+            await report_progress(f"{done}/{len(symbols)} listings")
+    return (f"{paying} of {done} listings with dividends"
+            + (f"; {other} pay in another currency (not stored)" if other else ""))

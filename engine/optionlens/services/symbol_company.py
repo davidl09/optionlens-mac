@@ -29,6 +29,10 @@ KEY_STAT_LABELS = {
     "DividendPaymentDate": "Dividend pay date", "Yield": "Dividend yield", "Beta": "Beta",
 }
 PEERS = 10
+# Fundamentals of a listing whose market has no statement source (TMX Money shows statements in a third party's
+# licensed widget, not through its own data: docs/INTEGRATION.md §12.2).
+NO_STATEMENTS = ("Financial statements and the other key statistics are not available for Canadian listings: no free "
+                 "source has them. The key figures above are Questrade's.")
 # Nasdaq summary figures with an OptionLens key stat (services.fundamentals) or a merged dividend: not repeated here,
 # so every page shows one value of each.
 OWN_FIGURES = frozenset({"MarketCap", "PERatio", "EarningsPerShare", "Yield", "FiftTwoWeekHighLow", "AverageVolume",
@@ -108,9 +112,11 @@ def fundamentals(symbol: str, period: str = "annual") -> dict:
     row = _company(symbol)
     sym = row["symbol"]
     out = {"symbol": sym, "period": period, "key_stats": [], "income": None, "balance": None, "cashflow": None,
-           "ratios": None, "payback_years": None, "fetched_at": None}
+           "ratios": None, "payback_years": None, "fetched_at": None, "unavailable": None}
     if row["kind"] == "index":
         return out
+    if ondemand.source_of("financials", sym) is None:
+        return {**out, "unavailable": NO_STATEMENTS}
     summ, fetched = _cached("summary", sym)
     fin, fin_fetched = _cached("financials", sym, quarterly=period == "quarterly")   # None for ETFs
     fetched = fin_fetched or fetched

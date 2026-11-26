@@ -268,8 +268,13 @@ second, once a day (docs/INTEGRATION.md §12). TMX Money also fills their **Abou
 industry, exchange, website), **News** (press releases, linked to the story on money.tmx.com) and **Insiders** tabs
 (TMX's 3- and 12-month totals and the SEDI insider reports of the last 12 months: shares are signed, negative =
 disposed; the company's own buybacks are left out), fetched when a tab is opened and cached like the Nasdaq data of US
-listings (§12.1). Not available for Canadian listings (no free source): dividend histories (only Questrade's current
-dividend is shown) and financial statements. Pre-market / after-hours
+listings (§12.1), and their **dividend histories** (ex-dates with declared, record and pay dates; the Dividends
+tab, the dividend reports with the Market filter, the chart's ex-dividend markers and the yields): amounts are in
+today's shares (adjusted for later splits) and only payments in Canadian dollars are kept — a listing that pays in US
+dollars says so instead of showing TMX's history (§12.2); the IBKR-derived dividends and Questrade's current
+dividend stay as the fallbacks. Not
+available for Canadian listings (no free source): financial statements — the Fundamentals tab says so under the key
+figures. Pre-market / after-hours
 quotes are US-only (the TSX has no extended-hours trading). The IBKR bridge covers Canadian listings too (see
 "Canadian listings on IBKR" under Connect IB Gateway).
 

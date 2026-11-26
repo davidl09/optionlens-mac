@@ -69,18 +69,22 @@ def _ticker_of(v: Any) -> str | None:
     return s or None
 
 
-def answer(payload: Any, op: str) -> Any:
-    """`data[op]` of a GraphQL answer; [] for TMX's empty-day error; Unexpected for any other error or shape."""
+def fields(payload: Any, what: str) -> dict:
+    """`data` of a GraphQL answer; Unexpected when it is not an object or carries any error but TMX's nothing-there
+    one (EMPTY_DAY: the fields it is about are null)."""
     if not isinstance(payload, dict):
-        raise Unexpected(f"{op}: not a JSON object")
-    errors = payload.get("errors") or []
-    value = (payload.get("data") or {}).get(op)
-    if errors:
-        msgs = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in errors]
-        if value is None and all(EMPTY_DAY in m for m in msgs):
-            return []
-        raise Unexpected(f"{op}: {'; '.join(msgs)[:200]}")
-    return value
+        raise Unexpected(f"{what}: not a JSON object")
+    msgs = [str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in payload.get("errors") or []]
+    if any(EMPTY_DAY not in m for m in msgs):
+        raise Unexpected(f"{what}: {'; '.join(msgs)[:200]}")
+    data = payload.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def answer(payload: Any, op: str) -> Any:
+    """`data[op]` of a GraphQL answer; [] for TMX's nothing-there error; Unexpected for any other error or shape."""
+    value = fields(payload, op).get(op)
+    return [] if value is None and payload.get("errors") else value
 
 
 def parse_earnings_day(payload: Any, on: date, to_symbol: ToSymbol) -> list[EarningsEvent]:

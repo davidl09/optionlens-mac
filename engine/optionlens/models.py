@@ -116,7 +116,7 @@ class Dividend:
     record_date: date | None
     declared_date: date | None
     kind: str
-    source: str | None = None    # 'nasdaq' | 'ibkr-adjusted' | 'questrade' (analytics.dividends.SOURCE_PRIORITY)
+    source: str | None = None    # 'nasdaq' | 'tmx' | 'ibkr-adjusted' | 'questrade' (analytics.dividends.SOURCE_PRIORITY)
     discrepancy: bool = False    # merged rows: the sources' amounts for this ex-date differ by > DISCREPANCY_TOLERANCE
 
 

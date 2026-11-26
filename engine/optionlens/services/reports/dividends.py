@@ -2,8 +2,6 @@
 increases, best yields, capture stats, REITs/MLPs/closed-end funds and a symbol comparison."""
 from __future__ import annotations
 
-from dataclasses import replace
-
 from datetime import date, timedelta
 from typing import Sequence
 
@@ -72,8 +70,9 @@ EVENT_COLS = (
                         Col("frequency", "Payments / yr", "int", default_hidden=True),
                         Col("declared_date", "Declared", "date"), Col("record_date", "Record", "date", default_hidden=True),
                         Col("pay_date", "Pay date", "date"), Col("days_to_ex", "Days to ex", "int"),
-                        Col("source", "Source", "text", description="Where the amount came from: Nasdaq, derived "
-                            "from IBKR's dividend-adjusted closes (ibkr-adjusted) or Questrade's current dividend"),
+                        Col("source", "Source", "text", description="Where the amount came from: Nasdaq (US "
+                            "listings), TMX Money (tmx: Canadian listings), derived from IBKR's dividend-adjusted "
+                            "closes (ibkr-adjusted) or Questrade's current dividend"),
                         Col("discrepancy", "Sources differ", "bool", default_hidden=True,
                             description="The sources' amounts for this ex-date differ by more than $0.01"))),
     Col("price", "Price", "money", C.G_QUOTE), Col("change_pct", "% Chg", "pct_signed", C.G_QUOTE),
@@ -326,4 +325,4 @@ COMPARISON = ReportDef(
     CMP_COLS, run_comparison, ("yield", "desc"), NOTES, method=METHOD)
 
 # US listings only: the data comes from the Nasdaq dividend calendars and histories (no free source covers Canadian listings).
-REPORTS = tuple(replace(d, markets="us") for d in (CALENDAR, FUTURE, ANNOUNCEMENTS, INCREASES, BEST, CAPTURE, REITS, COMPARISON))
+REPORTS = (CALENDAR, FUTURE, ANNOUNCEMENTS, INCREASES, BEST, CAPTURE, REITS, COMPARISON)

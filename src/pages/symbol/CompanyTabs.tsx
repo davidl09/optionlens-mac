@@ -6,7 +6,7 @@ import type { ColumnDef, FinTable, Insiders, KeyStats, ReportRow } from "../../a
 import { useApi } from "../../api/useApi";
 import { DataTable } from "../../components/DataTable";
 import { StatGrid, StatValue } from "../../components/StatGrid";
-import { AsOf, Async, Card, Empty, NullValue, Segmented, SourceBadge } from "../../components/ui";
+import { AsOf, Async, Card, Empty, InfoBox, NullValue, Segmented, SourceBadge } from "../../components/ui";
 import { fmtDateTime, fundamentalText } from "../../lib/format";
 import { insiderText, sellSplit } from "../../lib/insiders";
 import { useSym } from "./shared";
@@ -54,7 +54,7 @@ export function FundamentalsTab() {
   return (
     <div className="stack">
       <Async state={ks}>{(k) => <KeyStatsCard ks={k} />}</Async>
-      <Async state={st}>{(f) => (
+      <Async state={st}>{(f) => f.unavailable ? <InfoBox title="Not available:">{f.unavailable}</InfoBox> : (
         <>
           <Card title="Key statistics" subtitle={<>Nasdaq company data · <AsOf ts={f.fetched_at} label="fetched" /></>}>
             <p className="muted small">Nasdaq's other figures; market cap, P/E, EPS, yield, 52-week range, average volume and dividend dates are the key figures above (one value on every page).</p>

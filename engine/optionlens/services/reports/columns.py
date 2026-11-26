@@ -148,8 +148,9 @@ NOTE_CHAIN_UNIVERSE = ("Covers the chain universe only: watchlist symbols, recen
 NOTE_IV_RANK = "IV rank and IV percentile stay blank until 20 days of IV30 are stored."
 NOTE_OPT_AVG = ("Average option volume uses up to 20 prior collected days (fewer while history builds) and is blank "
                 "before the first one; it is never estimated.")
-NOTE_DIVS = ("Dividends of every US listing: Nasdaq's where it has them, else derived from IBKR's dividend-adjusted "
-             "closes, else Questrade's current dividend; blank until one of them has data.")
+NOTE_DIVS = ("Dividends of US listings: Nasdaq's where it has them, else derived from IBKR's dividend-adjusted "
+             "closes, else Questrade's current dividend; of Canadian listings: TMX Money's history (in today's shares, "
+             "CAD payments only), else Questrade's current dividend. Blank until a source has data.")
 NOTE_DELAY = ("Prices are IBKR quotes (real-time or 15-minute delayed, per your market-data subscriptions); "
               "outside the session, the last daily close.")
 

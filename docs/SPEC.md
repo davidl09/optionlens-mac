@@ -30,12 +30,12 @@ token (docs/INTEGRATION.md §1–§2). Times are America/New_York unless noted. 
    IV proxy for model pricing, in order: stored ATM IV for that symbol/date/tenor → stored IV30 →
    `HV30(date) * k` where k = median(IV30/HV30) over stored history for that symbol, else 1.15.
 4. Data is ~15 min delayed (CBOE delayed feed). Show "as of" timestamps everywhere.
-5. Canadian listings (§3 "Symbols and markets"): no free source of dividend histories or financial statements is
-   used for them (Nasdaq covers US listings only, and a Toronto ticker can name a different US company: T.TO is
-   TELUS, T is AT&T); Questrade's daily reference figures (P/E, EPS, market cap, current dividend) cover them like
-   US listings. Their earnings come from TMX Money, else Yahoo Finance, and their profile, news and insider reports
-   from TMX Money (unofficial endpoints, INTEGRATION.md §12 and §12.1). The engine never sends a Canadian symbol to Nasdaq; the symbol's Dividends answer (and its
-   Earnings answer when no source has a date) says why in `unavailable`; dividend reports cover US listings only.
+5. Canadian listings (§3 "Symbols and markets"): no free source of financial statements is used for them (Nasdaq
+   covers US listings only, and a Toronto ticker can name a different US company: T.TO is TELUS, T is AT&T);
+   Questrade's daily reference figures (P/E, EPS, market cap, current dividend) cover them like US listings. Their
+   earnings come from TMX Money, else Yahoo Finance, and their profile, news, insider reports and dividend histories
+   from TMX Money (unofficial endpoints, INTEGRATION.md §12, §12.1, §12.2). The engine never sends a Canadian symbol to Nasdaq; a symbol's Dividends / Fundamentals answer
+   (and its Earnings answer when no source has a date) says in `unavailable` why something is missing.
 
 ---------------------------------------------------------------------------------------------
 ## 1. Data sources (all free, verified reachable)
@@ -205,6 +205,7 @@ Christmas Eve only. Report snapshots and the EOD digest are the US market's.
 | earnings | daily 05:30; backfill once | calendar for today−10 … today+90 (one call/day). Backfill: every weekday for the past 3 years (resumable; store progress in job_runs). Store every row (not only universe). |
 | earnings_ca | daily 05:35; backfill daily 04:15 until complete | Canadian listings: TMX Money's calendar today−10 … today+90 (weekdays), then each stock's next date from TMX Money, else Yahoo Finance (INTEGRATION.md §12). Backfill: TMX's calendar, 3 years (resumable). |
 | dividends | daily 05:45 | calendar today−10 … today+60; weekly (Sun) per-universe-symbol dividend history |
+| dividends_ca | daily 05:50 | Canadian listings: TMX Money's dividend history of every known stock / ETF, one request each, the universe first (INTEGRATION.md §12.2); a listing answered in the last 20 h (e.g. opened by the user) is skipped |
 | vix | daily 17:00 | CBOE VIX family CSVs → index_bars |
 | rates | daily 17:05 | Treasury 13w bill |
 | rates_cad | daily 17:10 | Bank of Canada 3-month T-bill since the last stored day (11 years on first run) |
@@ -300,8 +301,9 @@ hidden columns), watchlist membership filter, row click → symbol page. Max 500
 
 **Markets.** Every report declares `ReportDef.markets`: `any` = a `market` param US (default) / CA / all; `one` =
 US / CA (aggregates: options-broad-view, performance-by-sector, performance-by-industry); `us` = a US-only source, no
-param (dividends, splits / IPO calendars, pre-market / after-hours movers, event-driven). Earnings reports are `any`
-(Canadian listings' events from TMX Money / Yahoo Finance), the upcoming-earnings summary `one`. The filter
+param (splits / IPO calendars, pre-market / after-hours movers, event-driven). Earnings and dividend reports are `any`
+(Canadian listings' events from TMX Money / Yahoo Finance, their dividends from TMX Money), the upcoming-earnings
+summary `one`. The filter
 applies before limits (universe frame, chain loads) and again to the result rows; an explicit `symbols` list is
 shown whatever its market, a watchlist is narrowed to it. Rows of a symbol carry `currency`.
 
