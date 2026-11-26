@@ -1,5 +1,5 @@
 """Canada in the collectors: the CAD risk-free rate (Bank of Canada), the Canadian universe selection, Questrade daily
-bars, per-market sweeps / closing snapshots / EOD, per-market live sessions, and the US-only IBKR bridge."""
+bars, per-market sweeps / closing snapshots / EOD, per-market live sessions, and the IBKR bridge's work lists."""
 from __future__ import annotations
 
 import json
@@ -261,20 +261,20 @@ def test_live_set_follows_each_market_s_session():
     assert premarket.symbols == {"AAPL"} and not premarket.contracts
 
 
-# ----------------------------------------------------------------------------- IBKR bridge: US only
-def test_bridge_is_never_asked_for_canadian_listings(tmpdb):
-    assert chain_source.bridge_serves("RY") and not chain_source.bridge_serves("RY.TO")
-    assert bridge_plan.bridge_symbols(["AAPL", "RY.TO", "SPX", "AP.UN.TO"]) == ["AAPL", "SPX"]
+# ----------------------------------------------------------------------------- IBKR bridge: every market
+def test_bridge_work_lists_cover_canadian_listings(tmpdb):
+    """The bridge serves US and Canadian listings alike (per-market plans: tests/test_bridge_canada.py)."""
     from optionlens.repo import user as user_repo
     user_repo.create_watchlist("w", ["RY.TO", "AAPL"])
-    assert "RY.TO" not in bridge_plan.chain_universe(ny(2026, 11, 24, 10, 0))
+    assert bridge_plan.chain_universe(ny(2026, 11, 24, 10, 0)) == ["AAPL", "RY.TO"]
+    assert bridge_plan.of_market(markets.CA, ["AAPL", "RY.TO", "SPX", "AP.UN.TO"]) == ["RY.TO", "AP.UN.TO"]
     symbols_repo.upsert_symbols([{"symbol": s, "kind": "stock"} for s in ("AAPL", "RY.TO")])
     symbols_repo.set_universe(["AAPL"])
     symbols_repo.set_universe(["RY.TO"], markets.CA)
     from optionlens.services import ingest
     for now in (ny(2026, 11, 24, 10, 0), ny(2026, 11, 24, 17, 0), ny(2026, 11, 28, 12, 0)):
         w = json.dumps(ingest.wants(now), default=str)
-        assert "AAPL" in w and "RY.TO" not in w                  # every IBKR work list is US-only
+        assert "AAPL" in w and "RY.TO" in w
 
 
 async def test_nasdaq_is_never_asked_for_canadian_listings(tmpdb):

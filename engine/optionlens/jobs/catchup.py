@@ -17,7 +17,8 @@ import numpy as np
 
 from ..analytics import bs, computed_iv
 from ..analytics import dividends as div
-from ..analytics.calendar import NY, is_trading_day, now_ny, prev_trading_day, year_fraction_to_expiry
+from ..analytics import markets
+from ..analytics.calendar import NY, NYSE, TradingCalendar, now_ny, year_fraction_to_expiry
 from ..config import get_settings
 from ..repo import bars as bars_repo
 from ..repo import dividends as dividends_repo
@@ -33,16 +34,16 @@ EXPIRIES = 6          # catch-up asks for the first N expiries ...
 MONEYNESS = 0.15      # ... with |strike / underlying close − 1| <= this
 
 
-def catchup_sessions(now: datetime | None = None, n: int = LOOKBACK_SESSIONS) -> list[date]:
-    """The last n trading sessions (ascending) whose closing-chain push window (eod_deadline) has ended."""
+def catchup_sessions(now: datetime | None = None, n: int = LOOKBACK_SESSIONS, cal: TradingCalendar = NYSE) -> list[date]:
+    """The last n trading sessions of `cal` (ascending) whose closing-chain push window (eod_deadline) has ended."""
     now = (now or now_ny()).astimezone(NY)
     d = now.date()
-    if not (is_trading_day(d) and eod_deadline(d) <= now):
-        d = prev_trading_day(d)
+    if not (cal.is_trading_day(d) and eod_deadline(d) <= now):
+        d = cal.prev_trading_day(d)
     out: list[date] = []
     while len(out) < n:
         out.append(d)
-        d = prev_trading_day(d)
+        d = cal.prev_trading_day(d)
     return sorted(out)
 
 
@@ -71,7 +72,7 @@ def reconstruct_rows(symbol: str, day: date, bars: Iterable[Mapping], spot: floa
     """option_eod rows of `day` from contract bars ({expiry, strike, right, close, volume}): last = close,
     IV by Black-Scholes inversion at the session close (None when no underlying close or the price is
     outside no-arbitrage bounds), greeks from that IV. Skips expired contracts and bars with volume 0."""
-    asof = session_close(day)
+    asof = session_close(day, markets.calendar_for(symbol))
     out = []
     for b in bars:
         expiry, strike, right, close = b["expiry"], float(b["strike"]), b["right"], b.get("close")
@@ -95,7 +96,7 @@ def store_reconstructed_bars(symbol: str, bars: Sequence[Mapping], source: str) 
     ignored}) of `symbol` as reconstructed option_eod rows, per session date (r: stored 13w bill rate,
     q: dividend_yield). A session that already has a real archive is left alone; in a reconstructed one
     the pushed contracts are replaced and the others kept (the bridge pushes contract by contract).
-    `source` is the provider of the bars (logged). Returns rows stored."""
+    `source` is the provider of the bars (logged). The rate is the one of the symbol's currency. Returns rows stored."""
     by_day: dict[date, list[Mapping]] = {}
     for b in bars:
         by_day.setdefault(b["date"], []).append(b)
@@ -104,11 +105,12 @@ def store_reconstructed_bars(symbol: str, bars: Sequence[Mapping], source: str) 
     hist = bars_repo.get_bars(symbol, min(by_day), max(by_day))
     closes = {d: float(c) for d, c in zip(hist["date"].astype(object).tolist(), hist["close"].tolist())
               if np.isfinite(c)}
-    default_r = get_settings().risk_free_rate
+    currency = markets.currency_of(symbol)
+    default_r = get_settings().fallback_rate(currency)
     stored = 0
     for day in sorted(by_day):
         spot = closes.get(day)
-        r = market_repo.rate_on(day)
+        r = market_repo.rate_on(day, currency)
         rows = reconstruct_rows(symbol, day, by_day[day], spot, default_r if r is None else r,
                                 dividend_yield(symbol, spot, day))
         stored += options_repo.write_reconstructed_eod(day, symbol, rows)

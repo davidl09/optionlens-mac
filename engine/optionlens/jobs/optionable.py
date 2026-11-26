@@ -6,7 +6,7 @@ sources' answers. One source's "none" is that source's answer, never the symbol'
   'not_listed' (it does not carry it), at least one 'no_options' (confirm_none);
 - otherwise unknown (NULL): e.g. Questrade lists none but the IBKR bridge has not answered yet.
 
-The sources serving a symbol: the IBKR bridge for US listings (chain_source.bridge_serves) when it is enabled and has
+The sources serving a symbol (US or Canadian alike): the IBKR bridge when it is enabled and has
 reported at least once (a bridge_status row: it is set up), and every enabled server-side source the user connected;
 the source answering always counts. Each source's answer is kept (chain_verdicts) until that source delivers a chain or
 the universe refresh asks again (symbols_repo.reprobe_not_optionable), and keeps that source from being asked for the
@@ -27,8 +27,7 @@ Verdict = Literal["no_options", "not_listed"]
 def serving(symbol: str) -> set[str]:
     """Source tags ('ibkr', 'questrade', ...) of the set-up chain sources that serve `symbol`."""
     out = {s.name for s in chain_source.server_sources() if s.connected()}
-    if (chain_source.BRIDGE in get_settings().chain_sources and chain_source.bridge_serves(symbol)
-            and (bridge_repo.get_status() or {}).get("client")):
+    if chain_source.BRIDGE in get_settings().chain_sources and (bridge_repo.get_status() or {}).get("client"):
         out.add(chain_source.BRIDGE_TAG)
     return out
 

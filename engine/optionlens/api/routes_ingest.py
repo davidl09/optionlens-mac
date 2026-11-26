@@ -350,6 +350,7 @@ class PositionIn(_In):
     right: Literal["C", "P"] | None = None
     trading_class: Annotated[str, Field(max_length=12)] | None = None
     con_id: int | None = None
+    exchange: Annotated[str, Field(max_length=16)] | None = None   # as TWS names it (a stock's listing venue: TSE)
 
 
 class AccountSummaryIn(_In):

@@ -73,8 +73,8 @@ def test_uncovered_session_wants_stats_and_chains_outside_the_live_hours(tmpdb, 
         metrics_repo.upsert_metrics(session - timedelta(days=7), sym, {"call_volume": v, "put_volume": v})
     monkeypatch.setattr(bridge_plan, "get_settings", lambda: type("S", (), {"chain_universe_size": 2})())
     us = bridge_plan.underlying_stats_want(now)
-    assert us == {"symbols": ["F", "TSLA", "NVDA", "AAPL", "MSFT"], "max_age_s": bridge_plan.FILL_MAX_AGE_S,
-                  "as_of_session": session}                            # watchlist, recently opened, most liquid
+    assert us == {"market": "US", "session_date": session, "symbols": ["F", "TSLA", "NVDA", "AAPL", "MSFT"],
+                  "max_age_s": bridge_plan.FILL_MAX_AGE_S, "as_of_session": session}                            # watchlist, recently opened, most liquid
     cu = bridge_plan.chain_universe_want(now)
     assert cu["symbols"] == ["F", "TSLA", "NVDA", "AAPL"] and cu["as_of_session"] == session
     assert cu["max_age_s"] == bridge_plan.FILL_MAX_AGE_S

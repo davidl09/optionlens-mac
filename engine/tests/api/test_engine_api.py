@@ -361,18 +361,26 @@ def test_index_history_is_wanted_and_becomes_the_index_daily_bars(client):
 
 def test_ingest_wants(client):
     w = client.get("/api/ingest/wants").json()
-    assert set(w) == {"iv_history", "hv_history", "history_symbols", "underlying_stats", "chain_universe",
+    assert set(w) == {"version", "iv_history", "hv_history", "history_symbols", "underlying_stats", "chain_universe",
                       "eod_chains", "option_bars", "index_symbols", "index_bars", "chains_on_demand_max_age_s",
                       "dividend_history"}
+    assert w["version"] == 2
     assert w["history_symbols"] >= len(w["iv_history"]) and "AAPL" in {x["symbol"] for x in w["hv_history"]}
     fill = {"as_of_session"}                                # present outside the live hours (after-hours fill)
-    assert set(w["chain_universe"]) - fill == {"symbols", "max_age_s", "expiries", "moneyness"}
-    assert set(w["underlying_stats"]) - fill == {"symbols", "max_age_s"} and isinstance(w["option_bars"], list)
+    # session-dependent work: one plan per market, each on its own calendar
+    for plans in (w["chain_universe"], w["underlying_stats"], w["eod_chains"]):
+        assert [p["market"] for p in plans] == ["US", "CA"]
+    for cu in w["chain_universe"]:
+        assert set(cu) - fill == {"market", "symbols", "max_age_s", "expiries", "moneyness"}
+    for us in w["underlying_stats"]:
+        assert set(us) - fill == {"market", "session_date", "symbols", "max_age_s"}
+    assert isinstance(w["option_bars"], list)
     assert w["chains_on_demand_max_age_s"] == 120 and set(w["index_symbols"]) == {"VIX", "VIX9D", "VIX3M", "VIX6M"}
     ivs = {x["symbol"]: x["from"] for x in w["iv_history"]}
     assert "AAPL" in ivs and ivs["AAPL"].endswith("-01-01")
-    e = w["eod_chains"]
+    e, ca = w["eod_chains"]
     assert {"session_date", "symbols", "not_before", "deadline"} <= set(e) and "SPX" in e["symbols"]
+    assert "SPX" not in ca["symbols"]                       # the indices are US symbols
 
 
 def test_history_wants_resume_from_the_last_backfilled_day_and_ignore_stats_points(client):

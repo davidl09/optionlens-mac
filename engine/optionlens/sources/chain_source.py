@@ -1,5 +1,6 @@
 """Option-chain sources. `settings.chain_sources` (OPTIONLENS_CHAIN_SOURCES) lists the enabled ones:
-- "ibkr-bridge": chains pushed by the app's IBKR bridge through the ingest API (rows tagged "ibkr");
+- "ibkr-bridge": chains pushed by the app's IBKR bridge through the ingest API (rows tagged "ibkr"), for every
+  market OptionLens follows (US listings; Canadian ones with their Montréal Exchange options, docs/INTEGRATION.md §6);
 - any other name: a server-side ChainSource from REGISTRY, which the scheduler sweeps itself while the source is
   available (rows tagged with its name, e.g. "questrade").
 No source is preferred: which chain wins is decided by quality and freshness alone (jobs/precedence.py).
@@ -8,18 +9,11 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
-from ..analytics import markets
 from ..config import get_settings
 from ..models import ChainSnapshot
 
 BRIDGE = "ibkr-bridge"
 BRIDGE_TAG = "ibkr"
-
-
-def bridge_serves(symbol: str) -> bool:
-    """Whether the IBKR bridge serves `symbol`: US listings only. Canadian listings (TSX / MX) come from Questrade:
-    IBKR would need Canadian market-data permissions and other contract definitions (docs/INTEGRATION.md §6)."""
-    return markets.market_of(symbol) is markets.US
 
 
 class NotListed(Exception):

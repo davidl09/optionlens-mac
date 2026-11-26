@@ -88,6 +88,41 @@ def test_ibkr_positions_ingest_masking_and_contract(client):
     assert mismatches(p, load_types().parse("Portfolio")) == []
 
 
+def test_ibkr_canadian_positions_are_valued_with_the_toronto_listing(client):
+    """IBKR names a Canadian contract by ticker + CAD (+ the venue for a stock); OptionLens values it with the
+    Canadian listing's own data, in CAD, under the Montréal Exchange code every chain source uses."""
+    from optionlens.repo import symbols
+    symbols.upsert_symbols([{"symbol": s, "kind": "stock"} for s in ("RY.TO", "ABC.VN")])
+    now = datetime.now(timezone.utc).isoformat()
+    quotes = [{"symbol": "RY.TO", "price": 121.0, "prev_close": 120.0, "ts": now},
+              {"symbol": "RY", "price": 86.0, "ts": now}]                # the NYSE listing: another price, in USD
+    assert client.post("/api/ingest/quotes", json={"source": "ibkr", "delayed": True, "quotes": quotes}).status_code == 200
+    pos = {"account": IBKR_ACCOUNT, "currency": "CAD", "qty": 100, "avg_cost": 100.0}
+    body = ibkr_body(positions=[
+        {**pos, "sec_type": "STK", "symbol": "RY", "exchange": "TSE"},
+        {**pos, "sec_type": "OPT", "symbol": "RY", "exchange": "CDE", "qty": -1, "avg_cost": 250.0, "multiplier": 100,
+         "expiry": "2026-12-18", "strike": 120, "right": "C", "trading_class": "RY"},
+        {**pos, "sec_type": "STK", "symbol": "ABC"},                      # no venue named: the listing OptionLens knows
+        {**pos, "sec_type": "STK", "symbol": "NOWHERE"},                  # no known Canadian listing: never guessed
+        {**pos, "sec_type": "STK", "symbol": "BRK B", "currency": "USD"}])
+    assert client.post("/api/ingest/positions", json=body).json()["stored"] == 5
+    p = client.get("/api/portfolio").json()
+    ry = find(p, "RY.TO")
+    assert ry["currency"] == "CAD" and ry["price"] == 121.0 and ry["price_source"] == "stored"   # not RY's 86 USD
+    assert ry["market_value"] == 12_100 and ry["unrealized_pnl"] == 2_100 and ry["day_pnl"] == 100
+    assert ry["linkable"] is True and ry["beta"] is None                 # beta-weighting is vs SPY: USD only
+    opt = find(p, "RY.TO261218C00120000")
+    assert opt["underlying"] == "RY.TO" and opt["avg_cost"] == pytest.approx(2.5) and opt["spot"] == 121.0
+    assert find(p, "ABC.VN")["underlying"] == "ABC.VN"
+    lost = find(p, "NOWHERE")
+    assert lost["currency"] == "CAD" and lost["price"] is None and lost["linkable"] is False
+    assert find(p, "BRK.B")["currency"] == "USD"
+    assert p["totals"]["by_currency"]["CAD"]["market_value"] == 12_100   # CAD on its own, never summed into USD
+    assert "RY.TO" in p["live"]["symbols"] and "RY.TO261218C00120000" in p["live"]["contracts"]
+    assert not [u for u in p["underlyings"] if u["underlying"] == "RY"]
+    assert mismatches(p, load_types().parse("Portfolio")) == []
+
+
 def test_ibkr_fx_converts_totals_with_a_labelled_rate(client):
     client.post("/api/ingest/positions", json=ibkr_body())
     usd = client.get("/api/portfolio").json()
@@ -165,7 +200,7 @@ def test_questrade_positions(client, qt):
     call = find(p, "XYZ261218C00110000")
     assert call["account"] == "Margin •••145" and call["qty"] == -2 and call["avg_cost"] == 2.1
     thi = find(p, "THI.TO")
-    assert thi["currency"] == "CAD" and thi["price_source"] == "broker" and thi["linkable"] is False
+    assert thi["currency"] == "CAD" and thi["price_source"] == "broker" and thi["linkable"] is True   # a TSX listing
     usd = p["totals"]["by_currency"]
     assert set(usd) == {"CAD", "USD"}                                     # never summed across currencies
     assert p["totals"]["converted"]["rates"][0]["source"].startswith("Questrade balances")

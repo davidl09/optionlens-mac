@@ -10,6 +10,9 @@ risk graphs per underlying. Read-only: no order, trade or account-changing call 
   than IBKR_STALE_S is shown as of its time, state `stale`.
 - Prices: the live value while some window keeps the contract live (the Portfolio page subscribes what it holds),
   else the fresher of the stored quote / chain and the broker's own price; FX only from the brokers' rates.
+  OptionLens' own data values a holding only when it is of a listing OptionLens follows in that listing's currency
+  (`_is_listed`: USD for US symbols, CAD for Canadian ones — never another listing's or currency's price); any
+  other holding has the broker's price or none.
 - Positions and balances live in memory only; account numbers are masked (portfolio/model.py)."""
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from ..analytics import bs
+from ..analytics import bs, markets
 from ..analytics.calendar import NY, now_ny, year_fraction_to_expiry
 from ..analytics.strategies import close_dt
 from ..config import get_settings
@@ -31,6 +34,7 @@ from ..portfolio import valuation as val
 from ..portfolio.model import BROKER_LABEL, BROKERS, Holding
 from ..portfolio.store import FILE_NAME, PortfolioSettings, Snapshots
 from ..repo import options as options_repo
+from ..repo import symbols as symbols_repo
 from ..sources import chain_source
 from . import context as ctx
 from . import symbol as symbol_service
@@ -168,7 +172,7 @@ def ingest_ibkr(body: Mapping[str, Any]) -> dict:
     if not wanted("ibkr"):
         _snaps.clear("ibkr")
         return {"stored": 0, "accounts": 0, "ignored": True}
-    snap = ibkr_map.snapshot(body, datetime.now(timezone.utc))
+    snap = ibkr_map.snapshot(body, datetime.now(timezone.utc), lambda s: symbols_repo.get_symbol(s) is not None)
     _snaps.ok(snap)
     return {"stored": len(snap.holdings), "accounts": len(snap.accounts), "ignored": False}
 
@@ -217,13 +221,14 @@ def held_underlyings() -> list[str]:
     return sorted(size, key=lambda u: (-size[u], u))
 
 
-def _is_listed_us(h: Holding) -> bool:
-    return h.currency == "USD" and h.kind in ("stock", "option")
+def _is_listed(h: Holding) -> bool:
+    """A stock or option of a listing OptionLens follows, held in that listing's currency (module doc "Prices")."""
+    return h.kind in ("stock", "option") and h.currency == markets.currency_of(h.underlying)
 
 
 def live_keys() -> tuple[list[str], list[str]]:
-    """(symbols, OSI codes) to keep live for the held USD stocks and options (plus SPY, the beta benchmark)."""
-    hs = [h for h in _held()[0] if _is_listed_us(h)]
+    """(symbols, OSI codes) to keep live for the held listed stocks and options (plus SPY, the beta benchmark)."""
+    hs = [h for h in _held()[0] if _is_listed(h)]
     symbols = sorted({h.underlying for h in hs} | {BENCHMARK})
     return symbols, sorted({h.osi for h in hs if h.osi})
 
@@ -288,14 +293,14 @@ class _Market:
 
     def rq(self, sym: str) -> tuple[float, float]:
         ca = self.chain(sym)
-        return (ca.r, ca.q) if ca is not None else (ctx.risk_free_rate(), 0.0)
+        return (ca.r, ca.q) if ca is not None else (ctx.rate_for(sym), 0.0)
 
     def stock(self, sym: str, broker: Holding | None = None) -> val.Mark:
         live = self.lq.get(sym)
         if _fresh_live(live, self.now) and _num(live.get("price")):
             return val.Mark(_num(live["price"]), "live", _ts(live["ts"]), _num(live.get("prev_close"))
                             or self._stored_prev(sym, broker), None, None, live.get("delayed"))
-        q = self.quote(sym) if broker is None or broker.currency == "USD" else None
+        q = self.quote(sym) if broker is None or _is_listed(broker) else None
         cands = []
         if q is not None:
             cands.append((_ts(q.get("ts")), _num(q.get("price")), "stored", q.get("delayed")))
@@ -305,7 +310,7 @@ class _Market:
         return val.Mark(price, source, ts, self._stored_prev(sym, broker), None, None, delayed)
 
     def _stored_prev(self, sym: str, broker: Holding | None) -> float | None:
-        q = self.quote(sym) if broker is None or broker.currency == "USD" else None
+        q = self.quote(sym) if broker is None or _is_listed(broker) else None
         return _num(q.get("prev_close")) if q else (broker.prev_close if broker else None)
 
     def underlying_price(self, sym: str, holdings: Sequence[Holding]) -> float | None:
@@ -319,7 +324,7 @@ class _Market:
     def option(self, h: Holding, spot: float | None) -> val.Mark:
         live = self.lo.get(h.osi or "")
         row = None
-        ca = self.chain(h.underlying) if h.currency == "USD" else None
+        ca = self.chain(h.underlying) if _is_listed(h) else None
         if ca is not None and h.osi:
             hit = np.nonzero(ca.osi == h.osi)[0]
             row = int(hit[0]) if len(hit) else None
@@ -402,20 +407,20 @@ def _rows(holdings: Sequence[Holding], mk: _Market) -> list[dict]:
     spots: dict[str, float | None] = {}
     rows = []
     for h in holdings:
-        r_, q_ = mk.rq(h.underlying) if _is_listed_us(h) else (ctx.risk_free_rate(), 0.0)
+        r_, q_ = mk.rq(h.underlying) if _is_listed(h) else (ctx.risk_free_rate(), 0.0)
         if h.kind == "option":
             if h.underlying not in spots:
-                spots[h.underlying] = mk.underlying_price(h.underlying, holdings) if h.currency == "USD" else None
+                spots[h.underlying] = mk.underlying_price(h.underlying, holdings) if _is_listed(h) else None
             mark = mk.option(h, spots[h.underlying])
         elif h.kind == "stock":
             mark = mk.stock(h.underlying, h)
         else:
             mark = val.Mark(h.broker_price, "broker" if h.broker_price is not None else None,
                             mk.fetched.get(h.broker))
-        beta = _beta_of(h.underlying) if _is_listed_us(h) else None
+        beta = _beta_of(h.underlying) if _is_listed(h) and h.currency == "USD" else None   # vs SPY: USD only
         row = val.position(h, mark, now=mk.now, r=r_, q=q_, beta=beta, spy_price=spy)
         row["id"] = f"{h.broker}:{h.account_id}:{h.symbol}"
-        row["linkable"] = _is_listed_us(h)
+        row["linkable"] = _is_listed(h)
         rows.append(row)
     return rows
 
@@ -482,8 +487,8 @@ def risk(underlying: str, live_snap: Mapping) -> dict:
     holdings = [h for h in _held()[0] if h.underlying == und]
     if not holdings:
         raise NotFound(f"no position on {und}")
-    if not all(_is_listed_us(h) for h in holdings):
-        raise BadRequest(f"{und}: risk graphs cover US-listed stocks and options only")
+    if not all(_is_listed(h) for h in holdings):
+        raise BadRequest(f"{und}: risk graphs cover US- and Canadian-listed stocks and options only")
     now = datetime.now(timezone.utc)
     fetched = {b: s.snapshot.fetched_at for b in BROKERS if (s := _snaps.get(b)).snapshot is not None}
     mk = _Market(live_snap, now, fetched)
@@ -494,7 +499,7 @@ def risk(underlying: str, live_snap: Mapping) -> dict:
     r, q = mk.rq(und)
     ca = mk.chain(und)
     out = risk_graph.graph(holdings, ivs, spot, now_ny(), r, q, hv30=ca.hv30 if ca is not None else None)
-    return {"underlying": und, "currency": "USD", "spot": spot,
+    return {"underlying": und, "currency": markets.currency_of(und), "spot": spot,
             "positions": [{"symbol": h.symbol, "account": h.account, "broker": h.broker, "kind": h.kind, "qty": h.qty,
                            "avg_cost": h.avg_cost, "osi": h.osi, "expiry": h.expiry, "right": h.right,
                            "strike": h.strike, "multiplier": h.multiplier} for h in holdings], **out}

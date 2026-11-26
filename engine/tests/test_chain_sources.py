@@ -254,7 +254,8 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
     assert bridge_plan.chain_universe(now) == ["F", "NVDA", "AAPL"]
     symbols_repo.reprobe_not_optionable(["TSLA", "NVDA"])                          # the universe refresh asks again
     live = bridge_plan.chain_universe_want(ny(2026, 11, 20, 19, 59))
-    assert live == {"symbols": ["F", "TSLA", "NVDA", "AAPL"], "max_age_s": 3600, "expiries": 6, "moneyness": 0.20}
+    assert live == {"market": "US", "symbols": ["F", "TSLA", "NVDA", "AAPL"], "max_age_s": 3600, "expiries": 6,
+                    "moneyness": 0.20}
     # after the window (20:30 ET), before it (08:59 ET) and on Saturday: only an after-hours fill of the current
     # session (none of these symbols has a chain fetched since its open)
     cu = bridge_plan.chain_universe_want(now)
@@ -278,7 +279,7 @@ def test_chain_universe_and_wants(tmpdb, payload, monkeypatch):
     for s in ("F", "TSLA", "NVDA", "AAPL"):
         bars_repo.upsert_bars([Bar(s, d, None, None, None, 10.0, 1) for d in (date(2026, 11, 18), date(2026, 11, 19), FRI)])
     monkeypatch.setattr(catchup, "LOOKBACK_SESSIONS", 3)
-    monkeypatch.setattr(catchup.catchup_sessions, "__defaults__", (None, 3))
+    monkeypatch.setattr(catchup.catchup_sessions, "__defaults__", (None, 3, catchup.NYSE))
     wants = bridge_plan.option_bars_want(now)
     want = {w["symbol"]: w for w in wants}
     assert set(want) == {"F", "TSLA", "NVDA", "AAPL"}

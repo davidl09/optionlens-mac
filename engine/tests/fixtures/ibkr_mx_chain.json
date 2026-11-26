@@ -1,0 +1,18 @@
+{
+  "_doc": "One Montreal Exchange chain as both sides of the IBKR bridge see it (shared by electron/bridge/canada.test.ts and engine/tests/test_bridge_canada.py): the TWS contracts (underlying on SMART with primary exchange TSE, options on CDE, CAD), the contract rows the bridge posts for them to POST /api/ingest/chain under the canonical symbol, and the codes the engine stores them under: the same ones as Questrade's MX chain (sources/osi.py).",
+  "symbol": "RY.TO",
+  "underlying": { "symbol": "RY", "secType": "STK", "exchange": "SMART", "primaryExchange": "TSE", "currency": "CAD", "conId": 4458964 },
+  "contracts": [
+    { "conId": 700001, "symbol": "RY", "secType": "OPT", "exchange": "CDE", "currency": "CAD", "lastTradeDateOrContractMonth": "20261218", "strike": 120, "right": "C", "tradingClass": "RY", "multiplier": "100" },
+    { "conId": 700002, "symbol": "RY", "secType": "OPT", "exchange": "CDE", "currency": "CAD", "lastTradeDateOrContractMonth": "20261218", "strike": 120, "right": "P", "tradingClass": "RY", "multiplier": "100" },
+    { "conId": 700003, "symbol": "RY", "secType": "OPT", "exchange": "CDE", "currency": "CAD", "lastTradeDateOrContractMonth": "20261218", "strike": 122.5, "right": "C", "tradingClass": "RY", "multiplier": "100" },
+    { "conId": 700004, "symbol": "RY", "secType": "OPT", "exchange": "CDE", "currency": "CAD", "lastTradeDateOrContractMonth": "20270115", "strike": 122.5, "right": "P", "tradingClass": "RY", "multiplier": "100" }
+  ],
+  "posted": [
+    { "expiry": "2026-12-18", "strike": 120, "right": "C" },
+    { "expiry": "2026-12-18", "strike": 120, "right": "P" },
+    { "expiry": "2026-12-18", "strike": 122.5, "right": "C" },
+    { "expiry": "2027-01-15", "strike": 122.5, "right": "P" }
+  ],
+  "osi": ["RY.TO261218C00120000", "RY.TO261218P00120000", "RY.TO261218C00122500", "RY.TO270115P00122500"]
+}

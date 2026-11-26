@@ -34,7 +34,6 @@ from ..models import IntradayBar
 from . import background as bg
 from .bars import MinuteBars
 from ..analytics.markets import MARKETS, market_of
-from ..sources.chain_source import bridge_serves
 from .session import Session, next_live_start, session_at
 from .subscriptions import EMPTY, Registry, Wanted, diff, for_sessions
 
@@ -298,7 +297,7 @@ class LiveHub:
 
     def bridge_wants(self) -> dict:
         """What the IBKR bridge should snapshot now: the visible symbols while it is the live fallback, else none."""
-        syms = sorted(s for s in for_sessions(self.registry.union(), self.sessions).symbols if bridge_serves(s)) \
+        syms = sorted(for_sessions(self.registry.union(), self.sessions).symbols) \
             if self.active == "ibkr" else []
         return {"symbols": syms[:MAX_BRIDGE_SYMBOLS], "interval_s": BRIDGE_INTERVAL_S}
 

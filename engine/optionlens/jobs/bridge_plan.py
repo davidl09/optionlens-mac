@@ -1,6 +1,10 @@
 """What the server wants a data client (the IBKR bridge) to fetch: the parts of GET /api/ingest/wants
 (docs/INTEGRATION.md §6) that depend on stored data. Plain values out; the API layer serializes.
 
+The bridge serves every market OptionLens follows (analytics/markets.py). Work that depends on the trading session
+(underlying stats, the chain universe, closing chains, option-bar catch-up) is planned per market, each with its own
+calendar: on a US-only holiday the Canadian plans run a live session while the US ones are an after-hours fill.
+
 - chain_universe: watchlists + symbols opened recently + the most liquid N by stored option volume
   (N = settings.chain_universe_size), wanted from 09:00 to 20:00 ET on trading days. Reports that need
   full chains cover only these symbols.
@@ -26,7 +30,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
-from ..analytics.calendar import NY, OPEN, is_trading_day, now_ny
+from ..analytics import markets
+from ..analytics.calendar import NY, OPEN, now_ny
 from ..config import get_settings
 from ..repo import bars as bars_repo
 from ..repo import metrics as metrics_repo
@@ -44,7 +49,7 @@ CHAIN_MAX_AGE_S = 3600
 CHAIN_EXPIRIES = 6
 CHAIN_MONEYNESS = 0.20
 STATS_MAX_AGE_S = 1800
-CHAIN_HOURS = (time(9, 0), time(20, 0))   # ET, trading days: pre-market until the closing-chain deadline
+CHAIN_HOURS = (time(9, 0), time(20, 0))   # ET, the market's trading days: pre-market until the closing-chain deadline
 MAX_OFFERS = 3
 REOFFER_AFTER = timedelta(hours=6)
 FILL_MAX_AGE_S = 6 * 3600       # an after-hours fill is pushed once; a symbol IBKR sent nothing for waits this long
@@ -55,9 +60,9 @@ def _unique(*groups) -> list[str]:
     return list(dict.fromkeys(s for g in groups for s in g))
 
 
-def bridge_symbols(symbols) -> list[str]:
-    """Of `symbols`, those the IBKR bridge serves (chain_source.bridge_serves: US listings)."""
-    return [s for s in symbols if chain_source.bridge_serves(s)]
+def of_market(market: markets.Market, symbols) -> list[str]:
+    """Of `symbols`, those of `market` (same order)."""
+    return [s for s in symbols if markets.market_of(s) is market]
 
 
 def _user_first(now: datetime) -> list[str]:
@@ -66,13 +71,14 @@ def _user_first(now: datetime) -> list[str]:
 
 
 def chain_universe(now: datetime | None = None) -> list[str]:
-    """The bridge's chain universe (US listings, bridge_symbols): watchlist symbols, then symbols opened in the last RECENT_VIEW_DAYS, then the top
+    """The bridge's chain universe (every market): watchlist symbols, then symbols opened in the last
+    RECENT_VIEW_DAYS, then the top
     settings.chain_universe_size symbols by mean option volume of their last 5 stored sessions; without the
     symbols the bridge itself answered list no options (jobs/optionable.py; another source's answer does not count;
     opening one still asks the bridge on demand)."""
     now = now or now_ny()
     n = getattr(get_settings(), "chain_universe_size", 150)
-    syms = bridge_symbols(_unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else []))
+    syms = _unique(_user_first(now), metrics_repo.top_by_option_volume(n) if n else [])
     none = optionable.answered_none(chain_source.BRIDGE_TAG, syms)
     return [s for s in syms if s not in none]
 
@@ -106,62 +112,74 @@ def for_bridge(symbols: list[str]) -> list[str]:
     return [s for s in symbols if s not in covered]
 
 
-def chain_universe_want(now: datetime | None = None) -> dict:
-    """The chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on trading days. Outside those hours quotes
-    do not move, so only an after-hours fill (`as_of_session`): the chain-universe symbols without a chain
-    fetched since the open of the current session (session_date), once each (FILL_MAX_AGE_S). Both without the
-    symbols a healthy server-side source covers (for_bridge)."""
+def chain_universe_want(now: datetime | None = None, market: markets.Market = markets.US) -> dict:
+    """`market`'s part of the chain universe from CHAIN_HOURS[0] to CHAIN_HOURS[1] ET on its trading days. Outside
+    those hours quotes do not move, so only an after-hours fill (`as_of_session`): the symbols without a chain
+    fetched since the open of the market's current session (session_date), once each (FILL_MAX_AGE_S). Both without
+    the symbols a healthy server-side source covers (for_bridge)."""
     now = (now or now_ny()).astimezone(NY)
-    shape = {"expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
-    if is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]:
-        return {"symbols": for_bridge(chain_universe(now)), "max_age_s": CHAIN_MAX_AGE_S, **shape}
-    day = session_date(now)
-    syms = for_bridge(chain_universe(now))
+    cal = market.calendar
+    shape = {"market": market.code, "expiries": CHAIN_EXPIRIES, "moneyness": CHAIN_MONEYNESS}
+    syms = for_bridge(of_market(market, chain_universe(now)))
+    if cal.is_trading_day(now.date()) and CHAIN_HOURS[0] <= now.time() < CHAIN_HOURS[1]:
+        return {"symbols": syms, "max_age_s": CHAIN_MAX_AGE_S, **shape}
+    day = session_date(now, cal)
     have = options_repo.fetched_since(datetime.combine(day, OPEN, NY), syms)
     return {"symbols": [s for s in syms if s not in have], "max_age_s": FILL_MAX_AGE_S, **shape, "as_of_session": day}
 
 
-def underlying_stats_want(now: datetime | None = None) -> dict:
-    """The universe while today's session runs (open until its eod_deadline). Otherwise an after-hours fill
-    (`as_of_session` = session_date) when the session is uncovered — more than STATS_FILL_MIN_MISSING of the
-    universe has no metrics row for it: the symbols without one, in `prioritized` order."""
+def underlying_stats_want(now: datetime | None = None, market: markets.Market = markets.US) -> dict:
+    """`market`'s universe while its session of today runs (open until its eod_deadline), `session_date` = today.
+    Otherwise an after-hours fill (`as_of_session` = `session_date` = the market's session_date) when the session is
+    uncovered — more than STATS_FILL_MIN_MISSING of that universe has no metrics row for it: the symbols without
+    one, in `prioritized` order."""
     now = (now or now_ny()).astimezone(NY)
+    cal = market.calendar
     d = now.date()
-    universe = bridge_symbols(symbols_repo.universe_symbols())
-    if is_trading_day(d) and datetime.combine(d, OPEN, NY) <= now < eod_deadline(d):
-        return {"symbols": universe, "max_age_s": STATS_MAX_AGE_S}
-    day = session_date(now)
+    universe = of_market(market, symbols_repo.universe_symbols())
+    if cal.is_trading_day(d) and datetime.combine(d, OPEN, NY) <= now < eod_deadline(d):
+        return {"market": market.code, "session_date": d, "symbols": universe, "max_age_s": STATS_MAX_AGE_S}
+    day = session_date(now, cal)
     have = metrics_repo.symbols_on(day)
     missing = [s for s in universe if s not in have]
     uncovered = len(missing) > STATS_FILL_MIN_MISSING * len(universe)
-    return {"symbols": prioritized(missing, now) if uncovered else [], "max_age_s": FILL_MAX_AGE_S, "as_of_session": day}
+    return {"market": market.code, "session_date": day, "symbols": prioritized(missing, now) if uncovered else [],
+            "max_age_s": FILL_MAX_AGE_S, "as_of_session": day}
 
 
-def eod_chains_want(now: datetime | None = None) -> dict:
-    """Closing chains of the current session (chain universe + indices) without a real-time closing archive yet
-    (a closing chain of IBKR's could still win, jobs/precedence.py) and not covered by a healthy server-side
-    source (for_bridge), wanted from final_since (close + 20 min) until eod_deadline (20:00 ET)."""
+def eod_chains_want(now: datetime | None = None, market: markets.Market = markets.US) -> dict:
+    """Closing chains of `market`'s current session (its chain-universe symbols; US: + the indices) without a
+    real-time closing archive yet (a closing chain of IBKR's could still win, jobs/precedence.py) and not covered by
+    a healthy server-side source (for_bridge), wanted from the market's final_since (its close + 20 min) until
+    eod_deadline (20:00 ET)."""
     now = now or now_ny()
-    day = session_date(now)
+    cal = market.calendar
+    day = session_date(now, cal)
     have = options_repo.eod_quality(day)
 
     def settled(s: str) -> bool:
         a = have.get(s)
         return a is not None and a["delayed"] is False
-    return {"session_date": day,
-            "symbols": for_bridge([s for s in _unique(chain_universe(now), EOD_INDICES) if not settled(s)]),
-            "not_before": final_since(day), "deadline": eod_deadline(day)}
+    wanted = of_market(market, _unique(chain_universe(now), EOD_INDICES))
+    return {"market": market.code, "session_date": day,
+            "symbols": for_bridge([s for s in wanted if not settled(s)]),
+            "not_before": final_since(day, cal), "deadline": eod_deadline(day)}
 
 
 def option_bars_want(now: datetime | None = None) -> list[dict]:
     """[{symbol, sessions, expiries, moneyness}] for chain-universe symbols whose recent sessions
-    (catchup.catchup_sessions) have no archive and whose underlying close for them is stored (needed
-    for IV). A (session, symbol) the bridge accepted (record_offers) is re-offered only REOFFER_AFTER
+    (catchup.catchup_sessions of the symbol's market) have no archive and whose underlying close for them is stored
+    (needed for IV). A (session, symbol) the bridge accepted (record_offers) is re-offered only REOFFER_AFTER
     later, and not after MAX_OFFERS accepted offers (a session the bridge has no bars for is not asked
     for forever). Reading the want records nothing."""
     now = now or now_ny()
-    syms = [s for s in chain_universe(now) if s not in EOD_INDICES]
-    sessions = catchup.catchup_sessions(now)
+    out = []
+    for market, syms in markets.by_market(s for s in chain_universe(now) if s not in EOD_INDICES).items():
+        out += _option_bars_want(now, syms, catchup.catchup_sessions(now, cal=market.calendar))
+    return out
+
+
+def _option_bars_want(now: datetime, syms: list[str], sessions: list[date]) -> list[dict]:
     missing = catchup.missing_eod(syms, sessions)
     if not missing:
         return []

@@ -2,6 +2,8 @@
 same pipeline as the server's own collectors, and `wants` — what the server would like it to fetch.
 
 Inputs are validated plain values (the API layer parses JSON); every write is an idempotent upsert.
+Every session rule here (closing snapshots, the session of stats, history wants) uses the calendar of the symbol's
+own market (analytics.markets): the bridge serves US and Canadian listings alike.
 """
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from typing import Any
 
 from ..analytics import computed_iv, markets
 from ..analytics import dividends as divs_a
-from ..analytics.calendar import NY, OPEN, last_completed_session, now_ny
+from ..analytics.calendar import NY, OPEN, TradingCalendar, last_completed_session, now_ny
 from ..analytics.chain import ChainArrays
 from ..jobs import bridge_plan, catchup, chains, hooks, optionable
 from ..jobs._util import eod_deadline, session_close, session_date
@@ -101,12 +103,12 @@ def register_hooks() -> None:
         hooks.chain_preparers.append(complete_chain)
 
 
-def _check_final(day: date | None, fetched_at: datetime) -> date:
-    """The session a closing snapshot belongs to: `day` must be given, be the session of fetched_at,
-    and fetched_at must be at/after that session's close."""
+def _check_final(day: date | None, fetched_at: datetime, cal: TradingCalendar) -> date:
+    """The session a closing snapshot belongs to: `day` must be given, be the session of fetched_at in the symbol's
+    market (`cal`), and fetched_at must be at/after that session's close."""
     if day is None:
         raise BadRequest("session_date is required when final is true")
-    if session_date(fetched_at) != day or fetched_at < session_close(day):
+    if session_date(fetched_at, cal) != day or fetched_at < session_close(day, cal):
         raise BadRequest(f"fetched_at {fetched_at.isoformat()} is not after the close of session {day}")
     return day
 
@@ -120,7 +122,8 @@ def chain(body: dict, now: datetime | None = None) -> dict:
     fetched, source = body["fetched_at"], body["source"]
     if fetched > now + CLOCK_SKEW:
         raise BadRequest(f"fetched_at {fetched.isoformat()} is in the future")
-    day = _check_final(body.get("session_date"), fetched) if body.get("final") else None
+    cal = markets.calendar_for(sym)
+    day = _check_final(body.get("session_date"), fetched, cal) if body.get("final") else None
     quote = _quote(sym, body["underlying"], fetched, body["delayed"], day is not None)
     listed = body.get("contracts_listed_at") if body.get("contracts_from_cache") else None
     if body.get("contracts_from_cache") and listed is None:
@@ -131,7 +134,7 @@ def chain(body: dict, now: datetime | None = None) -> dict:
                        reference_quote=bool(body["underlying"].get("reference")))
     if day is not None:
         ctx.invalidate()
-    _sweep_done(session_date(fetched), [sym])
+    _sweep_done(session_date(fetched, cal), [sym])
     bridge_repo.record_push(now)
     return {"stored": len(snap.contracts), "symbol": sym}
 
@@ -196,14 +199,19 @@ def quotes(body: dict, now: datetime | None = None) -> dict:
 
 def underlying_stats(body: dict, now: datetime | None = None) -> dict:
     """Per-underlying option stats of a session -> that session's metrics rows (jobs.chains.
-    store_underlying_stats: chain-derived values win; iv30 also feeds the IV history). `session_date` must be
-    the session of `ts`; stats collected after that session's stats window (eod_deadline: evening, weekend,
+    store_underlying_stats: chain-derived values win; iv30 also feeds the IV history). One push holds symbols of
+    one market (400 otherwise: markets have different sessions), and `session_date` must be that market's
+    session of `ts`; stats collected after that session's stats window (eod_deadline: evening, weekend,
     next pre-market) are an after-hours fill."""
     day, ts = body["session_date"], body["ts"]
     if ts > (now or datetime.now(timezone.utc)) + CLOCK_SKEW:
         raise BadRequest(f"ts {ts.isoformat()} is in the future")
-    if session_date(ts) != day:
-        raise BadRequest(f"stats collected at {ts.isoformat()} are not of session {day} (they are of {session_date(ts)})")
+    found = list(markets.by_market(st["symbol"] for st in body["stats"]))
+    if len(found) > 1:
+        raise BadRequest("stats of one push must be of one market (" + ", ".join(m.code for m in found) + " sent)")
+    of_ts = session_date(ts, found[0].calendar if found else markets.US.calendar)
+    if of_ts != day:
+        raise BadRequest(f"stats collected at {ts.isoformat()} are not of session {day} (they are of {of_ts})")
     stats = [{**st, "delayed": body["delayed"]} for st in body["stats"]]
     n = chains.store_underlying_stats(day, stats, body["source"], after_hours=ts >= eod_deadline(day))
     _sweep_done(body["session_date"], [st["symbol"] for st in stats])
@@ -260,30 +268,40 @@ def heartbeat(body: dict, now: datetime | None = None) -> dict:
 
 # ----------------------------------------------------------------------------- wants
 def wants(now: datetime | None = None) -> dict:
-    """GET /api/ingest/wants: IV and HV history for watchlist + index + universe symbols (history_want;
-    `history_symbols` = how many symbols that is, so the client can show progress over all of them), plus the plans of jobs.bridge_plan (underlying stats, chain universe,
-    closing chains, option-bar catch-up), the VIX family (quotes), missing index history (index_bars_want) and the
-    on-demand chain freshness bound."""
+    """GET /api/ingest/wants (WANTS_VERSION): IV and HV history for watchlist + index + universe symbols of every
+    market (history_want, each up to its own market's last completed session;
+    `history_symbols` = how many symbols that is, so the client can show progress over all of them), plus the plans
+    of jobs.bridge_plan — underlying stats, chain universe and closing chains as one plan per market (each on its
+    market's calendar), option-bar catch-up —, the VIX family (quotes), missing index history (index_bars_want) and
+    the on-demand chain freshness bound."""
     now = (now or now_ny()).astimezone(NY)
-    last = last_completed_session(now)
-    syms = bridge_plan.bridge_symbols(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
-                                                    *symbols_repo.universe_symbols()]))
+    by_market = markets.by_market(dict.fromkeys([*user_repo.watchlist_symbols(), *bridge_plan.EOD_INDICES,
+                                                 *symbols_repo.universe_symbols()]))
     start = date(now.year - IV_HISTORY_YEARS, 1, 1)
+
+    def history(kind: str) -> list[dict]:
+        return [x for m, syms in by_market.items()
+                for x in history_want(kind, syms, start, m.calendar.last_completed_session(now))]
+    plans = list(markets.MARKETS.values())
     return {
-        "iv_history": history_want("iv30", syms, start, last),
-        "hv_history": history_want("hv30", syms, start, last),
-        "history_symbols": len(syms),
-        "underlying_stats": bridge_plan.underlying_stats_want(now),
-        "chain_universe": bridge_plan.chain_universe_want(now),
-        "eod_chains": bridge_plan.eod_chains_want(now),
+        "version": WANTS_VERSION,
+        "iv_history": history("iv30"),
+        "hv_history": history("hv30"),
+        "history_symbols": sum(len(syms) for syms in by_market.values()),
+        "underlying_stats": [bridge_plan.underlying_stats_want(now, m) for m in plans],
+        "chain_universe": [bridge_plan.chain_universe_want(now, m) for m in plans],
+        "eod_chains": [bridge_plan.eod_chains_want(now, m) for m in plans],
         "option_bars": bridge_plan.option_bars_want(now),
         "index_symbols": list(VIX_FAMILY),
-        "index_bars": index_bars_want(now.date(), last),
+        "index_bars": index_bars_want(now.date(), last_completed_session(now)),
         "dividend_history": dividend_history_want(now),
         "chains_on_demand_max_age_s": int(ctx.REFRESH_MIN_INTERVAL_S),
     }
 
 
+# The shape of GET /api/ingest/wants (docs/INTEGRATION.md §6). 2: `underlying_stats`, `chain_universe` and
+# `eod_chains` are lists of per-market plans (each with `market`; stats plans carry their `session_date`).
+WANTS_VERSION = 2
 HISTORY_MIN_SPAN_DAYS = 30   # a series spanning less was not backfilled (a few single-day values)
 
 
@@ -309,13 +327,13 @@ DIVIDEND_OVERLAP_DAYS = 10    # ... from this many days before the last close it
 
 
 def dividend_history_want(now: datetime) -> list[dict]:
-    """[{symbol, from}] the bridge should fetch daily adjusted + raw closes for (dividends of every US listing,
-    docs/INTEGRATION.md §6 "Dividends"): watchlist and universe stocks / ETFs never fetched (from
+    """[{symbol, from}] the bridge should fetch daily adjusted + raw closes for (dividends of every listing, US or
+    Canadian, docs/INTEGRATION.md §6 "Dividends"): watchlist and universe stocks / ETFs never fetched (from
     DIVIDEND_HISTORY_YEARS back) or last fetched DIVIDEND_REFRESH_DAYS ago (from DIVIDEND_OVERLAP_DAYS before the
     last close covered); watchlist symbols first."""
     rows = {r["symbol"]: r for r in symbols_repo.list_symbols()}
-    syms = [s for s in bridge_plan.bridge_symbols(dict.fromkeys([*user_repo.watchlist_symbols(),
-                                                                 *symbols_repo.universe_symbols(include_unoptionable=True)]))
+    syms = [s for s in dict.fromkeys([*user_repo.watchlist_symbols(),
+                                      *symbols_repo.universe_symbols(include_unoptionable=True)])
             if s in rows and rows[s]["kind"] in ("stock", "etf")]
     done = div_repo.history_fetches(syms)
     start = date(now.year - DIVIDEND_HISTORY_YEARS, now.month, 1)
