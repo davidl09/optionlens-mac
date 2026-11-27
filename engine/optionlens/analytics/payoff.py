@@ -27,7 +27,7 @@ from .calendar import NY, year_fraction_to_expiry
 from .event_vol import event_ahead
 from .strategies import GREEKS, Leg, LegVol, close_dt, leg_greeks, leg_sigma, net_cost, value_at
 
-SLOPE_EPS = 1e-6       # $ per $ of underlying: below this the far-right curve is flat
+SLOPE_EPS = 1e-6       # net shares on the upside below this: the far-right curve is flat
 TABLE_ROWS = 15
 
 
@@ -39,6 +39,11 @@ def _sigma_at(l: Leg, at: datetime | None, shift: float, vol: LegVol | None) -> 
     if l.kind != "option" or l.iv is None or at is None or close_dt(l.expiry) <= at:
         return None
     return float(leg_sigma(l, at, shift, vol))
+
+
+def upside_shares(legs: Sequence[Leg]) -> float:
+    """Shares the position is net long (+) or short (−) as the underlying rises without bound: calls × 100 + stock."""
+    return float(sum(l.qty * l.multiplier for l in legs if l.kind == "stock" or l.right == "C"))
 
 
 def _breakevens(x: np.ndarray, y: np.ndarray) -> list[float]:
@@ -85,9 +90,12 @@ def calculate(legs: Sequence[Leg], spot: float, now: datetime, r: float, q: floa
     far = max(hi, spot, strikes.max() if len(strikes) else 0.0) * 5.0
     ext = np.unique(np.concatenate([[0.0], dense, strikes, [far]]))
     y_ext = pnl_exp(ext)
-    slope = (pnl_exp(np.array([far * 1.1]))[0] - pnl_exp(np.array([far]))[0]) / (0.1 * far)
-    max_profit = None if slope > SLOPE_EPS else float(y_ext.max())
-    max_loss = None if slope < -SLOPE_EPS else float(-y_ext.min())
+    # Unlimited on the upside exactly when the legs are net long or short shares there: calls and stock (puts are
+    # worthless far up). Counted in shares, not read off the curve's far slope: a later-expiry call is valued at
+    # S·e^(−qT), so e.g. a synthetic long against a short call sloped −(1 − e^(−qT)) and read as an unlimited loss.
+    net = upside_shares(legs)
+    max_profit = None if net > SLOPE_EPS else float(y_ext.max())
+    max_loss = None if net < -SLOPE_EPS else float(-y_ext.min())
 
     pop = ev_iv = ev_hv = ev_hv_reason = None
     if exp_at is not None:

@@ -380,7 +380,10 @@ async def test_earnings_backfill_ca_is_resumable(ca_db, monkeypatch):
 
 
 # ----------------------------------------------------------------------------- pages / calculator
-def test_next_missing_texts(ca_db):
+def test_next_missing_texts(ca_db, monkeypatch):
+    # "upcoming" is judged against the clock: pinned to the fixture's day (AAPL's event of 11-27 is past from then on)
+    monkeypatch.setattr(symbol_earnings, "now_ny", lambda: ny(2026, 11, 26, 6, 0))
+    monkeypatch.setattr(ctx, "now_ny", lambda: ny(2026, 11, 26, 6, 0))
     ctx.invalidate()
     assert symbol_earnings.next_missing("AAPL") is None
     assert "in the Nasdaq calendar" in symbol_earnings.next_missing("MSFT")

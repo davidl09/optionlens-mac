@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -32,6 +32,19 @@ def test_straddle_breakevens_and_unlimited_profit():
     short = payoff.calculate([Leg("option", 1, "C", 100, date(2026, 1, 9), 1.0, 0.2)], 100.0, NOW, R, Q)
     assert short["prices"][0] == pytest.approx(80.0) and short["prices"][-1] == pytest.approx(120.0)
     assert out["pnl_today"] == out["pnl_eval"]
+
+
+def test_synthetic_long_against_a_short_call_has_a_capped_loss():
+    """+C / −P at a later expiry with a short call and a long put expiring first: net flat on the upside. With a
+    dividend yield the later call is worth S·e^(−qT), a slightly negative far slope that must not read as unlimited."""
+    near, far = NOW.date() + timedelta(days=1), NOW.date() + timedelta(days=12)
+    legs = [Leg("option", 1, "C", 100, far, 3.0, 0.22), Leg("option", -1, "P", 100, far, 2.9, 0.21),
+            Leg("option", -1, "C", 102, near, 0.1, 0.13), Leg("option", 1, "P", 98, near, 0.15, 0.13)]
+    out = payoff.calculate(legs, 100.0, NOW, 0.04, 0.012)
+    assert out["max_loss"] is not None and out["max_profit"] is not None
+    assert out["max_loss"] == pytest.approx(-min(out["pnl_expiry"]), rel=0.05)      # the floor the long put gives
+    assert payoff.upside_shares(legs) == 0 and payoff.upside_shares(legs[:1]) == 100
+    assert payoff.calculate(legs[:3], 100.0, NOW, 0.04, 0.012)["max_loss"] is not None   # downside ends at zero
 
 
 def test_naked_short_call_unlimited_loss():
